@@ -260,3 +260,128 @@ async def cmd_stats(message: Message) -> None:
         # ✅ M2: 不向用户显示详细异常信息，防止信息泄露
         await message.answer("❌ 获取统计信息失败，请联系管理员")
 
+
+@router.message(Command("whitelist_add"))
+async def cmd_whitelist_add(message: Message) -> None:
+    """添加群组到白名单（仅超级管理员）
+
+    用法: /whitelist_add <chat_id> [群组名称]
+    示例: /whitelist_add -1001234567890 测试群组
+    """
+    # 检查是否是超级管理员
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("❌ 只有超级管理员可以使用此命令")
+        return
+
+    try:
+        # 解析参数
+        args = message.text.split(maxsplit=2)
+        if len(args) < 2:
+            await message.answer(
+                "❌ 用法错误\n\n"
+                "<b>用法</b>: /whitelist_add &lt;chat_id&gt; [群组名称]\n"
+                "<b>示例</b>: /whitelist_add -1001234567890 测试群组"
+            )
+            return
+
+        chat_id = int(args[1])
+        title = args[2] if len(args) > 2 else None
+
+        # 获取或创建群组记录
+        group = await GroupRepository.get_or_create(chat_id, title)
+
+        if group.is_whitelisted:
+            await message.answer(f"ℹ️ 群组 <b>{group.title or chat_id}</b> 已在白名单中")
+            return
+
+        # 添加到白名单
+        await GroupRepository.update_whitelist(chat_id, True)
+
+        logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 添加到白名单")
+        await message.answer(f"✅ 已将群组 <b>{group.title or chat_id}</b> 添加到白名单")
+
+    except ValueError:
+        await message.answer("❌ chat_id 格式错误，必须是数字")
+    except Exception as e:
+        logger.error(f"添加白名单失败: {e}")
+        await message.answer("❌ 添加白名单失败，请重试")
+
+
+@router.message(Command("whitelist_remove"))
+async def cmd_whitelist_remove(message: Message) -> None:
+    """从白名单移除群组（仅超级管理员）
+
+    用法: /whitelist_remove <chat_id>
+    示例: /whitelist_remove -1001234567890
+    """
+    # 检查是否是超级管理员
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("❌ 只有超级管理员可以使用此命令")
+        return
+
+    try:
+        # 解析参数
+        args = message.text.split()
+        if len(args) != 2:
+            await message.answer(
+                "❌ 用法错误\n\n"
+                "<b>用法</b>: /whitelist_remove &lt;chat_id&gt;\n"
+                "<b>示例</b>: /whitelist_remove -1001234567890"
+            )
+            return
+
+        chat_id = int(args[1])
+
+        # 检查群组是否存在
+        group = await GroupRepository.get_by_id(chat_id)
+        if not group:
+            await message.answer(f"❌ 未找到群组 {chat_id}")
+            return
+
+        if not group.is_whitelisted:
+            await message.answer(f"ℹ️ 群组 <b>{group.title or chat_id}</b> 不在白名单中")
+            return
+
+        # 从白名单移除
+        await GroupRepository.update_whitelist(chat_id, False)
+
+        logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
+        await message.answer(f"✅ 已将群组 <b>{group.title or chat_id}</b> 从白名单移除")
+
+    except ValueError:
+        await message.answer("❌ chat_id 格式错误，必须是数字")
+    except Exception as e:
+        logger.error(f"移除白名单失败: {e}")
+        await message.answer("❌ 移除白名单失败，请重试")
+
+
+@router.message(Command("whitelist_list"))
+async def cmd_whitelist_list(message: Message) -> None:
+    """列出所有白名单群组（仅超级管理员）"""
+    # 检查是否是超级管理员
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("❌ 只有超级管理员可以使用此命令")
+        return
+
+    try:
+        # 获取所有白名单群组
+        groups = await GroupRepository.get_whitelisted_groups()
+
+        if not groups:
+            await message.answer("📋 当前没有白名单群组")
+            return
+
+        text = f"📋 <b>白名单群组列表</b> (共 {len(groups)} 个)\n\n"
+
+        for i, group in enumerate(groups, 1):
+            text += f"{i}. <b>{group.title or '未知群组'}</b>\n"
+            text += f"   ID: <code>{group.id}</code>\n"
+            if i < len(groups):
+                text += "\n"
+
+        await message.answer(text)
+
+    except Exception as e:
+        logger.error(f"获取白名单列表失败: {e}")
+        await message.answer("❌ 获取白名单列表失败，请重试")
+

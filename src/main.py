@@ -25,11 +25,17 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     # 注册路由器
-    from src.bot.handlers import verification, admin, moderation, antispam
-    dp.include_router(admin.router)  # 管理命令优先级最高
+    from src.bot.handlers import verification, admin, moderation, antispam, events
+    dp.include_router(events.router)  # 系统事件（最高优先级）
+    dp.include_router(admin.router)  # 管理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
+
+    # ✅ 注册白名单中间件（在速率限制之前）
+    from src.bot.middlewares import WhitelistMiddleware
+    dp.message.middleware(WhitelistMiddleware())
+    dp.callback_query.middleware(WhitelistMiddleware())
 
     # ✅ 注册速率限制中间件（防止 DoS 攻击）
     from src.bot.middlewares import ThrottleMiddleware
