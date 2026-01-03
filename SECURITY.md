@@ -68,7 +68,7 @@
 - ✅ 最小权限原则
 
 ### 依赖安全
-- ✅ 版本锁定（requirements.txt）
+- ✅ 版本管理（pyproject.toml）
 - ✅ 定期安全扫描（Bandit, Safety）
 - ✅ GitHub Dependabot 自动更新
 

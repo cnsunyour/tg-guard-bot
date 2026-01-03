@@ -535,14 +535,18 @@ USER appuser
 
 **文件**: `pyproject.toml`
 
-**修复**:
-```bash
-# 生成锁定文件
-pip freeze > requirements.txt
-
-# 或使用 poetry
-poetry lock
+**修复**: ✅ 已解决
+```toml
+# pyproject.toml 中使用版本范围
+[project]
+dependencies = [
+    "aiogram>=3.6.0,<4.0.0",
+    "sqlalchemy>=2.0.0,<3.0.0",
+    # ...
+]
 ```
+
+**说明**: 现代 Python 项目使用 `pyproject.toml` 管理依赖，无需 `requirements.txt`。版本范围在 `pyproject.toml` 中定义，`pip install -e .` 会自动锁定版本。
 
 ### L3-L7. 其他低危问题
 

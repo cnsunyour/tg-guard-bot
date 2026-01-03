@@ -62,13 +62,9 @@ install-dev:
 install-all:
 	pip install -e ".[all]"
 
-deps-lock:
-	pip freeze > requirements.txt
-
 deps-update:
 	pip install --upgrade pip setuptools wheel
 	pip install --upgrade -e ".[all]"
-	$(MAKE) deps-lock
 
 # ============================================================================
 # 测试

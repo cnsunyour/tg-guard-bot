@@ -552,15 +552,15 @@ async def cmd_kick(message: Message, bot: Bot):
 
 ---
 
-### 22. 依赖清理
+### 22. 依赖清理 ✅ 已解决
 
-**文件**: `requirements.txt`
+**文件**: ~~`requirements.txt`~~ → `pyproject.toml`
 
 **问题**:
 - `python-dotenv` 重复
 - `httpx` 似乎未使用
 
-**修复**: 审计依赖，移除未使用的包
+**修复**: ✅ 已迁移到 `pyproject.toml` 统一管理依赖，移除了 `requirements.txt`
 
 ---
 

@@ -453,7 +453,6 @@ A: 编辑 `pyproject.toml` 的 `dependencies` 或 `[project.optional-dependencie
 
 ```bash
 pip install -e ".[dev]"
-make deps-lock  # 更新 requirements.txt
 ```
 
 ### Q: 测试失败怎么办？
