@@ -68,9 +68,6 @@ bandit-report.json
 safety-report.json
 trivy-results.sarif
 
-# Docker
-.dockerignore
-
 # 测试
 .pytest_cache/
 .coverage

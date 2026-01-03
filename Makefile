@@ -22,10 +22,11 @@ help:
 	@echo "  make check           - 运行所有检查（格式化 + lint + 测试）"
 	@echo "  make security        - 运行安全扫描（bandit + safety）"
 	@echo ""
-	@echo "🐳 开发环境:"
-	@echo "  make dev-up          - 启动开发环境"
+	@echo "🐳 开发环境（支持热更新）:"
+	@echo "  make dev-up          - 启动开发环境（自动监控文件变化）"
 	@echo "  make dev-down        - 停止开发环境"
 	@echo "  make dev-logs        - 查看开发环境日志"
+	@echo "  make dev-restart     - 重启开发环境"
 	@echo ""
 	@echo "🚀 生产环境:"
 	@echo "  make prod-build      - 构建生产环境镜像"
@@ -123,18 +124,25 @@ security:
 ci: format-check lint security test
 	@echo "✅ CI 检查通过"
 
-# 开发环境
+# 开发环境（支持热更新）
 dev-up:
 	docker-compose up -d
-	@echo "✅ 开发环境已启动"
-	@echo "查看日志: make dev-logs"
+	@echo "✅ 开发环境已启动（支持热更新）"
+	@echo "📝 修改 src/ 目录下的代码会自动重启 bot"
+	@echo "🔍 查看日志: make dev-logs"
+	@echo "🔗 数据库: localhost:5432 (postgres/postgres)"
+	@echo "🔗 Redis:   localhost:6379"
 
 dev-down:
 	docker-compose down
 	@echo "✅ 开发环境已停止"
 
+dev-restart:
+	docker-compose restart bot
+	@echo "✅ Bot 已重启"
+
 dev-logs:
-	docker-compose logs -f
+	docker-compose logs -f bot
 
 # 生产环境
 prod-build:

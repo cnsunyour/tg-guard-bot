@@ -1,0 +1,40 @@
+# Docker Compose 开发环境覆盖配置
+# 此文件会自动与 docker-compose.yml 合并，仅在开发环境中使用
+# 生产环境使用: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  bot:
+    # 开发环境：挂载源代码以支持热重载
+    volumes:
+      - ./src:/app/src:ro           # 只读挂载源代码
+      - ./scripts:/app/scripts:ro   # 只读挂载脚本
+      - ./data/models:/app/data/models
+      - ./logs:/app/logs
+
+    # 开发环境：使用 watchfiles 监控文件变化并自动重启
+    command: >
+      sh -c "
+        echo '🔥 开发模式：已启用热重载' &&
+        pip install -e '.[dev]' > /dev/null 2>&1 &&
+        watchfiles
+          --filter python
+          'python -m src.main'
+          src/
+      "
+
+    # 开发环境：启用调试日志
+    environment:
+      - LOG_LEVEL=DEBUG
+      - DEBUG=true
+
+    # 开发环境：允许失败时不重启（方便调试）
+    restart: "no"
+
+  # 开发环境：暴露数据库和 Redis 端口用于本地调试
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

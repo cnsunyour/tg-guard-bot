@@ -68,6 +68,52 @@ pip install -e ".[dev]"
 pip install -e ".[all]"
 ```
 
+### 🔥 热更新开发
+
+开发环境默认启用热更新功能，修改代码后会自动重启 bot，无需手动重启。
+
+**启动开发环境**：
+
+```bash
+# 启动（自动启用热更新）
+make dev-up
+
+# 查看日志（实时监控）
+make dev-logs
+```
+
+**工作原理**：
+
+1. ✅ `docker-compose.override.yml` 自动挂载 `src/` 目录
+2. ✅ `watchfiles` 监控 Python 文件变化
+3. ✅ 检测到变化后自动重启 bot 进程
+4. ✅ 数据库和 Redis 端口映射到本地（调试方便）
+
+**热更新范围**：
+
+- ✅ 监控目录：`src/`（所有 Python 文件）
+- ✅ 自动重启：修改后 1-2 秒生效
+- ❌ 不监控：`data/`, `logs/`, `tests/`
+
+**手动重启**（如需要）：
+
+```bash
+# 重启 bot 容器
+make dev-restart
+
+# 完全重启开发环境
+make dev-down && make dev-up
+```
+
+**本地调试连接**：
+
+开发环境会暴露以下端口到本地：
+
+- 📊 PostgreSQL: `localhost:5432`（用户名：postgres，密码：见 .env）
+- 🔴 Redis: `localhost:6379`（密码：见 .env）
+
+可以使用 DBeaver、TablePlus 等工具连接调试。
+
 ---
 
 ## 📝 代码规范
