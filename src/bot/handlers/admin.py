@@ -1,0 +1,262 @@
+"""管理员配置命令处理器"""
+
+from aiogram import Router, F
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.filters import Command
+from loguru import logger
+
+from src.repositories.group_repo import GroupRepository
+from src.core.config import settings
+from src.core.health import get_health_checker
+
+router = Router(name="admin")
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message) -> None:
+    """处理 /start 命令"""
+    await message.answer(
+        "🤖 <b>Telegram Guard Bot</b>\n\n"
+        "我是一个群管理机器人，支持以下功能：\n\n"
+        "🔐 <b>入群验证</b>\n"
+        "• /setverify - 设置验证方式\n"
+        "• /verifyconfig - 查看验证配置\n\n"
+        "👮 <b>群管理</b>\n"
+        "• /kick - 踢出成员\n"
+        "• /mute - 禁言成员\n"
+        "• /ban - 封禁成员\n"
+        "• /warn - 警告成员\n\n"
+        "🛡️ <b>反垃圾</b>\n"
+        "• /antispam - 配置反垃圾\n\n"
+        "💡 <b>提示</b>：将我添加到群组并设为管理员即可使用所有功能"
+    )
+
+
+@router.message(Command("setverify"))
+async def cmd_set_verify(message: Message) -> None:
+    """设置验证方式"""
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查是否是管理员
+    if message.from_user.id not in settings.admin_ids:
+        member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status not in ["creator", "administrator"]:
+            await message.answer("❌ 只有管理员可以使用此命令")
+            return
+
+    # 显示验证方式选择
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔘 按钮验证", callback_data=f"setverify:{message.chat.id}:button"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔢 数学验证", callback_data=f"setverify:{message.chat.id}:math"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎯 滑块验证", callback_data=f"setverify:{message.chat.id}:slider"
+                )
+            ],
+        ]
+    )
+
+    await message.answer("请选择验证方式：", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("setverify:"))
+async def on_setverify_callback(callback: CallbackQuery) -> None:
+    """处理验证方式设置回调"""
+    try:
+        _, chat_id_str, verify_type = callback.data.split(":")
+        chat_id = int(chat_id_str)
+
+        # ✅ 权限验证
+        if callback.from_user.id not in settings.admin_ids:
+            try:
+                member = await callback.bot.get_chat_member(
+                    chat_id,
+                    callback.from_user.id
+                )
+                if member.status not in ["creator", "administrator"]:
+                    await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                    logger.warning(
+                        f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 设置但无权限"
+                    )
+                    return
+            except Exception as e:
+                logger.error(f"权限检查失败: {e}")
+                await callback.answer("❌ 权限验证失败", show_alert=True)
+                return
+
+        # ✅ 参数白名单验证
+        if verify_type not in ["button", "math", "slider"]:
+            await callback.answer("❌ 无效的验证类型", show_alert=True)
+            logger.warning(f"无效的验证类型: {verify_type}")
+            return
+
+        # 更新验证方式
+        await GroupRepository.update_verification_type(chat_id, verify_type)
+
+        verify_type_names = {"button": "按钮验证", "math": "数学验证", "slider": "滑块验证"}
+
+        await callback.message.edit_text(
+            f"✅ 验证方式已设置为：{verify_type_names.get(verify_type, verify_type)}"
+        )
+        await callback.answer("设置成功")
+
+        logger.info(f"群组 {chat_id} 的验证方式已更新为 {verify_type}")
+
+    except Exception as e:
+        logger.error(f"设置验证方式失败: {e}")
+        await callback.answer("❌ 设置失败，请重试", show_alert=True)
+
+
+@router.message(Command("verifyconfig"))
+async def cmd_verify_config(message: Message) -> None:
+    """查看验证配置"""
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    try:
+        # 获取群组配置
+        group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+
+        verify_type_names = {"button": "按钮验证", "math": "数学验证", "slider": "滑块验证"}
+
+        config_text = (
+            f"<b>📋 当前验证配置</b>\n\n"
+            f"验证方式: {verify_type_names.get(group.verification_type, group.verification_type)}\n"
+            f"验证超时: {group.verification_timeout} 秒\n"
+            f"反垃圾: {'已启用' if group.antispam_enabled else '已禁用'}\n"
+            f"反垃圾级别: {group.antispam_level}/3"
+        )
+
+        await message.answer(config_text)
+
+    except Exception as e:
+        logger.error(f"查看验证配置失败: {e}")
+        await message.answer("❌ 获取配置失败，请重试")
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    """帮助命令"""
+    await cmd_start(message)
+
+
+@router.message(Command("health"))
+async def cmd_health(message: Message) -> None:
+    """健康检查命令（仅超级管理员）"""
+    # 检查是否是超级管理员
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("❌ 只有超级管理员可以使用此命令")
+        return
+
+    try:
+        health_checker = get_health_checker()
+        report = await health_checker.full_check()
+
+        # 构建报告文本
+        status_emoji = "✅" if report["healthy"] else "❌"
+
+        text = f"{status_emoji} <b>系统健康状态</b>\n\n"
+
+        # 运行时间
+        text += f"⏱️ <b>运行时间</b>: {report['uptime']['formatted']}\n"
+        text += f"🔄 <b>检查次数</b>: {report['check_count']}\n\n"
+
+        # 数据库状态
+        db = report["database"]
+        db_emoji = "✅" if db["healthy"] else "❌"
+        text += f"{db_emoji} <b>数据库</b>: {db['latency_ms']:.2f}ms\n"
+        if db["error"]:
+            text += f"   错误: {db['error']}\n"
+
+        # Redis 状态
+        redis = report["redis"]
+        redis_emoji = "✅" if redis["healthy"] else "❌"
+        text += f"{redis_emoji} <b>Redis</b>: {redis['latency_ms']:.2f}ms\n"
+        if redis["error"]:
+            text += f"   错误: {redis['error']}\n"
+
+        # 系统资源
+        if "system" in report and report["system"]:
+            sys = report["system"]
+            text += f"\n💻 <b>系统资源</b>\n"
+            text += f"• CPU: {sys['cpu']['percent']:.1f}% ({sys['cpu']['count']} 核)\n"
+            text += (
+                f"• 内存: {sys['memory']['used_mb']:.0f}/{sys['memory']['total_mb']:.0f} MB "
+                f"({sys['memory']['percent']:.1f}%)\n"
+            )
+            text += (
+                f"• 磁盘: {sys['disk']['used_gb']:.1f}/{sys['disk']['total_gb']:.1f} GB "
+                f"({sys['disk']['percent']:.1f}%)\n"
+            )
+
+        await message.answer(text)
+
+    except Exception as e:
+        logger.error(f"健康检查失败: {e}")
+        # ✅ M2: 不向用户显示详细异常信息，防止信息泄露
+        await message.answer("❌ 健康检查失败，请联系管理员")
+
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message) -> None:
+    """统计信息命令（仅超级管理员）"""
+    # 检查是否是超级管理员
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("❌ 只有超级管理员可以使用此命令")
+        return
+
+    try:
+        from src.repositories.spam_repo import SpamRepository
+        from src.repositories.user_repo import UserRepository
+        from src.services.spam_detector import get_detector
+
+        # 获取反垃圾统计
+        detector = get_detector()
+        spam_stats = await detector.get_statistics()
+
+        # 获取警告统计（简单示例）
+        # total_warnings = await UserRepository.count_all_warnings()  # 需要实现此方法
+
+        text = "📊 <b>系统统计</b>\n\n"
+
+        # 反垃圾统计
+        text += "🛡️ <b>反垃圾系统</b>\n"
+        text += f"• 总样本数: {spam_stats.get('total_samples', 0)}\n"
+        text += f"• 垃圾样本: {spam_stats.get('spam_samples', 0)}\n"
+        text += f"• 正常样本: {spam_stats.get('normal_samples', 0)}\n"
+        text += (
+            f"• ML 分类器: {'✅ 已训练' if spam_stats.get('classifier_trained') else '❌ 未训练'}\n"
+        )
+        text += (
+            f"• Embedding: {'✅ 已初始化' if spam_stats.get('embedder_initialized') else '❌ 未初始化'}\n"
+        )
+
+        # 系统信息
+        health_checker = get_health_checker()
+        uptime = health_checker.get_uptime()
+
+        text += f"\n⏱️ <b>系统信息</b>\n"
+        text += f"• 运行时间: {uptime['formatted']}\n"
+        text += f"• 启动时间: {uptime['started_at']}\n"
+
+        await message.answer(text)
+
+    except Exception as e:
+        logger.error(f"获取统计信息失败: {e}")
+        # ✅ M2: 不向用户显示详细异常信息，防止信息泄露
+        await message.answer("❌ 获取统计信息失败，请联系管理员")
+

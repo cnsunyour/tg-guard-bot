@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 设置为 true 以启用 OCR 功能（需要 4GB+ RAM）
+        ENABLE_OCR: ${ENABLE_OCR:-false}
+    container_name: tg-guard-bot
+    restart: unless-stopped
+    # ✅ L1: 确保容器以非 root 用户运行
+    user: "1000:1000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./data/models:/app/data/models
+      - ./logs:/app/logs
+    networks:
+      - tg-guard-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tg-guard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      # ⚠️ 生产环境必须设置强密码！使用 .env 文件配置
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Database password must be set in .env file}
+      POSTGRES_DB: ${DB_NAME:-tg_guard}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # ✅ 安全：已移除端口映射，仅允许 Docker 网络内访问
+    # 如需本地调试，可临时取消下面两行注释：
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tg-guard-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: tg-guard-redis
+    restart: unless-stopped
+    # ⚠️ 生产环境必须设置强密码！使用 .env 文件配置
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?Redis password must be set in .env file}
+    volumes:
+      - redisdata:/data
+    # ✅ 安全：已移除端口映射，仅允许 Docker 网络内访问
+    # 如需本地调试，可临时取消下面两行注释：
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+    networks:
+      - tg-guard-network
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  tg-guard-network:
+    driver: bridge

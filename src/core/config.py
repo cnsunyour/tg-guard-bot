@@ -1,0 +1,82 @@
+"""核心配置模块，使用 Pydantic Settings 管理环境变量"""
+
+from typing import Optional
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """应用配置"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Telegram Bot 配置
+    bot_token: str = Field(..., description="Telegram Bot Token")
+    admin_ids: list[int] = Field(default_factory=list, description="管理员 ID 列表")
+
+    # 数据库配置
+    db_host: str = Field(default="localhost", description="数据库主机")
+    db_port: int = Field(default=5432, description="数据库端口")
+    db_user: str = Field(default="postgres", description="数据库用户名")
+    db_password: str = Field(default="postgres", description="数据库密码")
+    db_name: str = Field(default="tg_guard", description="数据库名称")
+
+    # Redis 配置
+    redis_host: str = Field(default="localhost", description="Redis 主机")
+    redis_port: int = Field(default=6379, description="Redis 端口")
+    redis_db: int = Field(default=0, description="Redis 数据库")
+    redis_password: Optional[str] = Field(default=None, description="Redis 密码")
+
+    # 应用配置
+    log_level: str = Field(default="INFO", description="日志级别")
+    debug: bool = Field(default=False, description="调试模式")
+
+    # 反垃圾配置
+    spam_threshold_rule: float = Field(default=0.8, description="规则引擎阈值")
+    spam_threshold_ml: float = Field(default=0.7, description="ML 分类器阈值")
+    spam_threshold_embedding: float = Field(default=0.75, description="Embedding 阈值")
+
+    # 验证配置
+    verification_timeout: int = Field(default=60, description="验证超时时间(秒)")
+    max_warnings: int = Field(default=3, description="最大警告次数")
+
+    # AI 模型路径
+    ml_model_path: str = Field(
+        default="data/models/spam_classifier.pkl", description="ML 模型路径"
+    )
+    embedding_model_name: str = Field(
+        default="BAAI/bge-small-zh-v1.5", description="Embedding 模型名称"
+    )
+    model_signature_key: str = Field(
+        default="CHANGE_ME_TO_RANDOM_SECRET_KEY",
+        description="模型文件签名密钥（安全：防止模型文件被篡改）"
+    )
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def parse_admin_ids(cls, v: str | list[int]) -> list[int]:
+        """解析管理员 ID 列表"""
+        if isinstance(v, str):
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
+
+    @property
+    def database_url(self) -> str:
+        """生成数据库 URL"""
+        return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+    @property
+    def redis_url(self) -> str:
+        """生成 Redis URL"""
+        if self.redis_password:
+            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+
+# 全局配置实例
+settings = Settings()
