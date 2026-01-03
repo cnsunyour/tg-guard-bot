@@ -884,6 +884,51 @@ Homepage = "..."
 
 ---
 
+#### ✅ OCR 系统依赖兼容性修复
+
+**修复日期**: 2025-01-03
+**影响范围**: OCR 功能 Docker 镜像构建
+
+**问题描述**:
+- `make prod-build-ocr` 构建失败
+- 错误：`Package 'libgl1-mesa-glx' has no installation candidate`
+- 原因：Debian Trixie（Python 3.12-slim 基础镜像使用的版本）中相关包已更新
+
+**修复内容**:
+更新 Dockerfile 中 OCR 系统依赖以兼容 Debian Trixie：
+
+**修复前**:
+```dockerfile
+RUN if [ "$ENABLE_OCR" = "true" ]; then \
+    apt-get install -y \
+        libgl1-mesa-glx \      # ❌ 已废弃
+        libgthread-2.0-0 \     # ❌ 已整合
+        ...
+```
+
+**修复后**:
+```dockerfile
+RUN if [ "$ENABLE_OCR" = "true" ]; then \
+    apt-get install -y \
+        libgl1 \               # ✅ 新包名
+        # libgthread 已整合到 libglib2.0-0
+        ...
+```
+
+**变更详情**:
+- `libgl1-mesa-glx` → `libgl1`（Debian Trixie 中的新包名）
+- 移除 `libgthread-2.0-0`（已整合到 `libglib2.0-0` 中）
+
+**影响**:
+- ✅ OCR 镜像构建成功
+- ✅ PaddleOCR 依赖正确安装（PaddleOCR 3.3.2 + PaddlePaddle 3.2.2）
+- ✅ 兼容 Debian Trixie 系统
+- ✅ 图片 OCR 功能可用
+
+**相关提交**: c2b21e0
+
+---
+
 ### 可选优化（非必需）
 - P2 级别问题：代码质量改进（类型注解、事务管理等）
 
