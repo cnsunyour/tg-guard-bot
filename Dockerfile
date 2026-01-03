@@ -27,8 +27,7 @@ RUN if [ "$ENABLE_OCR" = "true" ]; then \
         libsm6 \
         libxext6 \
         libxrender-dev \
-        libgl1-mesa-glx \
-        libgthread-2.0-0 \
+        libgl1 \
     && rm -rf /var/lib/apt/lists/*; \
     fi
 
