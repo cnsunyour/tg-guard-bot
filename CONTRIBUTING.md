@@ -16,7 +16,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/yourusername/tg-guard-bot.git
+git clone https://github.com/cnsunyour/tg-guard-bot.git
 cd tg-guard-bot
 
 # 2. 安装开发依赖

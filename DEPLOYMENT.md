@@ -57,7 +57,7 @@ sudo apt install -y git
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/tg-guard-bot.git
+git clone https://github.com/cnsunyour/tg-guard-bot.git
 cd tg-guard-bot
 
 # 或者上传代码到服务器
@@ -505,7 +505,7 @@ await dp.start_polling(
 遇到问题？
 
 1. 查看[故障排查](#-故障排查)章节
-2. 搜索 [GitHub Issues](https://github.com/yourusername/tg-guard-bot/issues)
+2. 搜索 [GitHub Issues](https://github.com/cnsunyour/tg-guard-bot/issues)
 3. 提交新的 Issue（包含日志和错误信息）
 4. 加入技术交流群（如果有）
 

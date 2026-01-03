@@ -59,7 +59,7 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/yourusername/tg-guard-bot.git
+git clone https://github.com/cnsunyour/tg-guard-bot.git
 cd tg-guard-bot
 ```
 
@@ -300,7 +300,7 @@ tg-guard-bot/
 
 ## 📞 联系方式
 
-- 提交 Issue: [GitHub Issues](https://github.com/yourusername/tg-guard-bot/issues)
+- 提交 Issue: [GitHub Issues](https://github.com/cnsunyour/tg-guard-bot/issues)
 - 技术交流: [Telegram 群组]（可选）
 
 ---

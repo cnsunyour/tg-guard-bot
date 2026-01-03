@@ -64,10 +64,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/tg-guard-bot"
-Repository = "https://github.com/yourusername/tg-guard-bot"
-Issues = "https://github.com/yourusername/tg-guard-bot/issues"
-Documentation = "https://github.com/yourusername/tg-guard-bot/blob/main/README.md"
+Homepage = "https://github.com/cnsunyour/tg-guard-bot"
+Repository = "https://github.com/cnsunyour/tg-guard-bot"
+Issues = "https://github.com/cnsunyour/tg-guard-bot/issues"
+Documentation = "https://github.com/cnsunyour/tg-guard-bot/blob/main/README.md"
 
 [project.optional-dependencies]
 dev = [
