@@ -94,3 +94,4 @@ dmypy.json
 
 # Alembic
 alembic/versions/*.pyc
+coverage.xml
