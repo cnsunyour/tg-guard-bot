@@ -789,6 +789,101 @@ docker-compose logs -f bot | head -50
 **P1 (重要)**: 8/8 ✅
 **总计**: 13/13 ✅ **100% 完成**
 
+### 其他修复和优化
+
+#### ✅ 配置管理优化：pyproject.toml 结构修复
+
+**修复日期**: 2025-01-03
+**影响范围**: 项目构建和依赖管理
+
+**问题描述**:
+- Docker 生产环境构建失败，错误: `project.urls.dependencies must be string`
+- `dependencies` 数组被错误地放在 `[project.urls]` 部分之后
+- TOML 解析器将其解析为 `project.urls.dependencies` 而非 `project.dependencies`
+
+**修复内容**:
+将 `dependencies` 数组从 `[project.urls]` 之后移至 `[project]` 部分内，确保正确的 TOML 层级结构。
+
+**修复前**:
+```toml
+[project]
+name = "tg-guard-bot"
+...
+
+[project.urls]
+Homepage = "..."
+
+dependencies = [  # ❌ 错误位置
+    "aiogram>=3.6.0",
+    ...
+]
+```
+
+**修复后**:
+```toml
+[project]
+name = "tg-guard-bot"
+...
+dependencies = [  # ✅ 正确位置
+    "aiogram>=3.6.0",
+    ...
+]
+
+[project.urls]
+Homepage = "..."
+```
+
+**影响**:
+- ✅ Docker 生产环境构建成功
+- ✅ 依赖正确解析和安装
+- ✅ 遵循 PEP 518/621 标准
+
+**相关提交**: 902781b
+
+---
+
+#### ✅ Docker Compose 现代化
+
+**修复日期**: 2025-01-03
+**影响范围**: Docker 部署配置
+
+**修复内容**:
+移除 Docker Compose 配置文件中已废弃的 `version` 字段（Docker Compose v2 不再需要）
+
+**修复文件**:
+- `docker-compose.yml`
+- `docker-compose.prod.yml`
+
+**影响**:
+- ✅ 遵循 Docker Compose 现代标准
+- ✅ 消除废弃警告
+- ✅ 提升配置文件可维护性
+
+**相关提交**: bd330dd
+
+---
+
+#### ✅ 依赖管理现代化
+
+**修复日期**: 2025-01-03
+**影响范围**: 依赖管理和开发流程
+
+**修复内容**:
+1. 删除冗余的 `requirements.txt`（已由 `pyproject.toml` 统一管理）
+2. 增强 `pyproject.toml` 工具配置（Black、isort、Ruff、mypy、pytest、coverage、bandit）
+3. 创建 `CONTRIBUTING.md` 开发者指南
+4. 增强 `Makefile` 开发命令
+
+**影响**:
+- ✅ 统一配置文件，减少维护成本
+- ✅ 改善开发者体验
+- ✅ 标准化代码质量流程
+- ✅ 遵循 Python 社区最佳实践
+
+**相关提交**: 8b245e3, cca9540, b0cf1e7
+
+---
+
 ### 可选优化（非必需）
 - P2 级别问题：代码质量改进（类型注解、事务管理等）
 
