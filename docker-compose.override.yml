@@ -4,6 +4,9 @@
 
 services:
   bot:
+    # 开发环境：使用 root 用户运行（允许安装依赖）
+    user: "root"
+
     # 开发环境：挂载源代码以支持热重载
     volumes:
       - ./src:/app/src:ro           # 只读挂载源代码
@@ -12,20 +15,22 @@ services:
       - ./logs:/app/logs
 
     # 开发环境：使用 watchfiles 监控文件变化并自动重启
-    command: >
-      sh -c "
-        echo '🔥 开发模式：已启用热重载' &&
-        pip install -e '.[dev]' > /dev/null 2>&1 &&
-        watchfiles
-          --filter python
-          'python -m src.main'
-          src/
-      "
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo '🔥 开发模式：已启用热重载'
+        echo '📦 安装开发依赖...'
+        pip install --no-cache-dir watchfiles && \
+        echo '✅ watchfiles 安装完成' && \
+        echo '🚀 启动 bot（监控 src/ 目录）' && \
+        exec watchfiles --filter python 'python -m src.main' src/
 
     # 开发环境：启用调试日志
     environment:
       - LOG_LEVEL=DEBUG
       - DEBUG=true
+      - PYTHONUNBUFFERED=1  # 实时显示输出
 
     # 开发环境：允许失败时不重启（方便调试）
     restart: "no"
