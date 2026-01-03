@@ -1,15 +1,33 @@
-.PHONY: help build up down restart logs clean backup restore migrate test
+.PHONY: help build up down restart logs clean backup restore migrate test lint format check security install
 
 # 默认目标
 help:
 	@echo "Telegram Guard Bot - 管理命令"
 	@echo ""
-	@echo "开发环境:"
+	@echo "📦 安装和依赖:"
+	@echo "  make install         - 安装生产依赖"
+	@echo "  make install-dev     - 安装开发依赖"
+	@echo "  make install-all     - 安装所有依赖（包括 OCR）"
+	@echo ""
+	@echo "🧪 测试:"
+	@echo "  make test            - 运行所有测试"
+	@echo "  make test-cov        - 运行测试并生成覆盖率报告"
+	@echo "  make test-unit       - 仅运行单元测试"
+	@echo "  make test-integration - 仅运行集成测试"
+	@echo ""
+	@echo "✨ 代码质量:"
+	@echo "  make lint            - 运行代码检查（ruff + mypy）"
+	@echo "  make format          - 格式化代码（black + isort）"
+	@echo "  make format-check    - 检查代码格式"
+	@echo "  make check           - 运行所有检查（格式化 + lint + 测试）"
+	@echo "  make security        - 运行安全扫描（bandit + safety）"
+	@echo ""
+	@echo "🐳 开发环境:"
 	@echo "  make dev-up          - 启动开发环境"
 	@echo "  make dev-down        - 停止开发环境"
 	@echo "  make dev-logs        - 查看开发环境日志"
 	@echo ""
-	@echo "生产环境:"
+	@echo "🚀 生产环境:"
 	@echo "  make prod-build      - 构建生产环境镜像"
 	@echo "  make prod-build-ocr  - 构建生产环境镜像（启用 OCR）"
 	@echo "  make prod-up         - 启动生产环境"
@@ -17,20 +35,97 @@ help:
 	@echo "  make prod-restart    - 重启生产环境"
 	@echo "  make prod-logs       - 查看生产环境日志"
 	@echo ""
-	@echo "数据库:"
+	@echo "🗄️  数据库:"
 	@echo "  make db-migrate      - 运行数据库迁移"
 	@echo "  make db-backup       - 备份数据库"
 	@echo "  make db-restore      - 恢复数据库"
 	@echo "  make db-shell        - 进入数据库 Shell"
 	@echo ""
-	@echo "模型训练:"
+	@echo "🤖 模型训练:"
 	@echo "  make train-samples   - 添加示例训练数据"
 	@echo "  make train-model     - 训练反垃圾模型"
 	@echo ""
-	@echo "维护:"
+	@echo "🧹 维护:"
 	@echo "  make clean           - 清理临时文件"
 	@echo "  make clean-all       - 清理所有数据（包括数据库）"
 	@echo "  make status          - 查看服务状态"
+
+# ============================================================================
+# 安装和依赖管理
+# ============================================================================
+install:
+	pip install -e .
+
+install-dev:
+	pip install -e ".[dev]"
+
+install-all:
+	pip install -e ".[all]"
+
+deps-lock:
+	pip freeze > requirements.txt
+
+deps-update:
+	pip install --upgrade pip setuptools wheel
+	pip install --upgrade -e ".[all]"
+	$(MAKE) deps-lock
+
+# ============================================================================
+# 测试
+# ============================================================================
+test:
+	pytest
+
+test-cov:
+	pytest --cov --cov-report=html --cov-report=term
+
+test-unit:
+	pytest -m unit
+
+test-integration:
+	pytest -m integration
+
+test-watch:
+	pytest-watch
+
+# ============================================================================
+# 代码质量
+# ============================================================================
+lint:
+	@echo "🔍 运行 Ruff..."
+	ruff check src tests
+	@echo "🔍 运行 mypy..."
+	mypy src
+
+format:
+	@echo "✨ 运行 isort..."
+	isort src tests
+	@echo "✨ 运行 Black..."
+	black src tests
+
+format-check:
+	@echo "🔍 检查 isort..."
+	isort --check-only src tests
+	@echo "🔍 检查 Black..."
+	black --check src tests
+
+check: format-check lint test
+	@echo "✅ 所有检查通过"
+
+# ============================================================================
+# 安全扫描
+# ============================================================================
+security:
+	@echo "🔒 运行 Bandit 安全扫描..."
+	bandit -c pyproject.toml -r src
+	@echo "🔒 检查依赖漏洞..."
+	safety check
+
+# ============================================================================
+# CI/CD
+# ============================================================================
+ci: format-check lint security test
+	@echo "✅ CI 检查通过"
 
 # 开发环境
 dev-up:

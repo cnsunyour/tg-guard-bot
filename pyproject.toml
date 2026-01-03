@@ -1,10 +1,41 @@
+# ============================================================================
+# 项目元数据
+# ============================================================================
 [project]
 name = "tg-guard-bot"
 version = "0.1.0"
 description = "Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾"
 authors = [{name = "tg-guard-bot"}]
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.12"
+keywords = [
+    "telegram",
+    "bot",
+    "group-management",
+    "spam-detection",
+    "machine-learning",
+    "anti-spam",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: AsyncIO",
+    "Topic :: Communications :: Chat",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/tg-guard-bot"
+Repository = "https://github.com/yourusername/tg-guard-bot"
+Issues = "https://github.com/yourusername/tg-guard-bot/issues"
+Documentation = "https://github.com/yourusername/tg-guard-bot/blob/main/README.md"
+
+# ============================================================================
+# 项目依赖
+# ============================================================================
 dependencies = [
     # Telegram Bot 框架
     "aiogram>=3.6.0,<4.0.0",
@@ -24,10 +55,6 @@ dependencies = [
     "fastembed>=0.3.0",
     "numpy>=1.26.0",
 
-    # 图片 OCR (可选，需要更多内存)
-    # "paddleocr>=2.7.0",
-    # "paddlepaddle>=2.6.0",
-
     # 配置管理
     "python-dotenv>=1.0.0",
     "pydantic>=2.5.0",
@@ -44,15 +71,24 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    # 测试
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+
+    # 代码格式化和检查
     "black>=24.0.0",
     "ruff>=0.1.0",
+    "isort>=5.13.0",
+
+    # 类型检查
     "mypy>=1.8.0",
-    # ✅ L4: 安全扫描工具
-    "bandit>=1.7.0",      # Python 安全扫描
-    "safety>=3.0.0",      # 依赖漏洞检查
+    "types-redis>=4.6.0",
+
+    # 安全扫描
+    "bandit[toml]>=1.7.0",
+    "safety>=3.0.0",
 ]
 
 ocr = [
@@ -60,24 +96,196 @@ ocr = [
     "paddlepaddle>=2.6.0",
 ]
 
+all = [
+    "tg-guard-bot[dev,ocr]",
+]
+
+# ============================================================================
+# 构建系统
+# ============================================================================
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# ============================================================================
+# Black - 代码格式化
+# ============================================================================
 [tool.black]
 line-length = 100
 target-version = ['py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # 默认排除
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+  # 项目特定排除
+  | migrations
+  | __pycache__
+)/
+'''
 
+# ============================================================================
+# isort - 导入排序
+# ============================================================================
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["src"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+skip_glob = ["migrations/*", "venv/*", ".venv/*"]
+
+# ============================================================================
+# Ruff - 快速 Python Linter
+# ============================================================================
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+src = ["src", "tests"]
 
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "PTH",    # flake8-use-pathlib
+    "RUF",    # Ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by black)
+    "B008",   # do not perform function calls in argument defaults
+    "B904",   # raise without from inside except
+    "UP007",  # Use X | Y for type annotations (not compatible with Python 3.9)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Ignore unused imports in __init__.py
+"tests/*" = ["ARG"]       # Ignore unused arguments in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+# ============================================================================
+# mypy - 静态类型检查
+# ============================================================================
 [tool.mypy]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
 disallow_untyped_defs = true
+disallow_any_unimported = false
+no_implicit_optional = true
+strict_equality = true
+warn_unreachable = true
 
+# 第三方库类型提示
+[[tool.mypy.overrides]]
+module = [
+    "aiogram.*",
+    "jieba.*",
+    "fastembed.*",
+    "onnxruntime.*",
+    "sklearn.*",
+    "paddleocr.*",
+]
+ignore_missing_imports = true
+
+# ============================================================================
+# pytest - 测试配置
+# ============================================================================
 [tool.pytest.ini_options]
+minversion = "7.0"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",                    # 显示所有测试结果摘要
+    "--strict-markers",       # 严格标记模式
+    "--strict-config",        # 严格配置模式
+    "--cov=src",              # 代码覆盖率
+    "--cov-branch",           # 分支覆盖率
+    "--cov-report=term-missing:skip-covered",  # 显示缺失覆盖的代码
+    "--cov-report=html",      # HTML 覆盖率报告
+    "--cov-report=xml",       # XML 覆盖率报告 (CI)
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+# ============================================================================
+# coverage - 代码覆盖率
+# ============================================================================
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "tests/*",
+    "*/migrations/*",
+    "*/__pycache__/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+    "@abc.abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+# ============================================================================
+# bandit - 安全扫描
+# ============================================================================
+[tool.bandit]
+targets = ["src"]
+exclude_dirs = ["/tests", "/migrations"]
+skips = [
+    "B101",  # assert_used - assert 在测试中是合理的
+    "B601",  # paramiko_calls - 我们不使用 paramiko
+]
+severity = "medium"
+
+# ============================================================================
+# setuptools - 包配置
+# ============================================================================
+[tool.setuptools]
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
