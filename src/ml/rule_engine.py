@@ -209,6 +209,10 @@ class RuleEngine:
             "details": {},
         }
 
+        # 处理空值
+        if not text:
+            return result
+
         # 检查关键词
         is_blacklist, keyword = self.check_keywords(text)
         if is_blacklist:

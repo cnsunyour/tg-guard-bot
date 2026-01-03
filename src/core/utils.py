@@ -59,3 +59,62 @@ def mask_text(text: Optional[str], show_length: int = 10) -> str:
 
     return f"{text_str[:show_length]}...*** (length: {len(text_str)})"
 
+
+def parse_time_to_seconds(time_str: str) -> Optional[int]:
+    """解析时间字符串为秒数
+
+    Args:
+        time_str: 时间字符串，支持格式: 30m, 2h, 1d, forever
+
+    Returns:
+        秒数，forever 返回 None
+
+    Raises:
+        ValueError: 无效的时间格式
+    """
+    if not time_str or not isinstance(time_str, str):
+        raise ValueError("时间字符串不能为空")
+
+    time_str = time_str.strip().lower()
+
+    # 永久封禁
+    if time_str in ("forever", "permanent", "永久"):
+        return None
+
+    # 解析数值和单位
+    if len(time_str) < 2:
+        raise ValueError(f"无效的时间格式: {time_str}")
+
+    try:
+        value = int(time_str[:-1])
+        unit = time_str[-1]
+    except ValueError:
+        raise ValueError(f"无效的时间格式: {time_str}")
+
+    # 转换为秒
+    if unit == "m":  # 分钟
+        return value * 60
+    elif unit == "h":  # 小时
+        return value * 3600
+    elif unit == "d":  # 天
+        return value * 86400
+    else:
+        raise ValueError(f"不支持的时间单位: {unit}")
+
+
+def validate_user_id(user_id: int) -> bool:
+    """验证 Telegram 用户 ID 是否有效
+
+    Args:
+        user_id: 用户 ID
+
+    Returns:
+        是否有效
+    """
+    # Telegram 用户 ID 必须是正整数
+    # 合理范围: 1 到 2^53-1 (JavaScript 安全整数范围)
+    if not isinstance(user_id, int):
+        return False
+
+    return 0 < user_id < 2**53
+

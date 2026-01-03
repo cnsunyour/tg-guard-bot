@@ -31,16 +31,13 @@ def test_config_from_env(monkeypatch):
 @pytest.mark.unit
 def test_config_model_signature_key_required(monkeypatch):
     """测试模型签名密钥是必填字段"""
-    # 清除所有可能的环境变量
-    for key in list(os.environ.keys()):
-        if key.startswith(("BOT_", "ADMIN_", "DB_", "REDIS_", "MODEL_")):
-            monkeypatch.delenv(key, raising=False)
-
+    # 设置其他必填字段
     monkeypatch.setenv("BOT_TOKEN", "123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
     monkeypatch.setenv("ADMIN_IDS", "[123456789]")
     monkeypatch.setenv("DB_PASSWORD", "test_password")
     monkeypatch.setenv("REDIS_PASSWORD", "redis_password")
-    # 不设置 MODEL_SIGNATURE_KEY
+    # 设置空的 MODEL_SIGNATURE_KEY 以覆盖 .env 文件中的值
+    monkeypatch.setenv("MODEL_SIGNATURE_KEY", "")
 
     from src.core.config import Settings
 
