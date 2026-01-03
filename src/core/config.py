@@ -52,9 +52,11 @@ class Settings(BaseSettings):
     embedding_model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5", description="Embedding 模型名称"
     )
+    # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
-        default="CHANGE_ME_TO_RANDOM_SECRET_KEY",
-        description="模型文件签名密钥（安全：防止模型文件被篡改）"
+        ...,
+        description="模型文件签名密钥（必填：防止模型文件被篡改，请使用随机生成的密钥）",
+        min_length=32  # 要求至少 32 个字符以确保安全性
     )
 
     @field_validator("admin_ids", mode="before")
