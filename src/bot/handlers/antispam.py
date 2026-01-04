@@ -14,7 +14,7 @@ from src.services.spam_detector import get_detector
 from src.services.moderation import ModerationService
 from src.repositories.group_repo import GroupRepository
 from src.core.config import settings
-from src.core.utils import format_user_mention, auto_delete_message
+from src.core.utils import format_user_mention, auto_delete_message, check_admin_permission
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.redis import get_redis, RedisKeys  # ✅ P1-12: 导入 Redis 和键管理
 
@@ -90,6 +90,157 @@ def managed_temp_file(suffix: str = ".jpg") -> Iterator[str]:
                 logger.error(f"删除临时文件失败 {temp_file_path}: {e}")
 
 
+@router.message(Command("antispam"))
+async def cmd_antispam(message: Message, bot: Bot) -> None:
+    """反垃圾配置命令"""
+    logger.debug(
+        f"收到 /antispam 命令 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+        f"[chat_type:{message.chat.type}] [from_user:{message.from_user.username}] "
+        f"[sender_chat:{message.sender_chat.id if message.sender_chat else None}]"
+    )
+
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        logger.debug("私聊模式，拒绝执行")
+        reply = await message.answer("❌ 此命令只能在群组中使用")
+        await auto_delete_message(reply)
+        return
+
+    # 检查权限（使用统一的权限检查函数）
+    if not await check_admin_permission(message, bot):
+        reply = await message.answer("❌ 只有管理员可以使用此命令")
+        await auto_delete_message(reply)
+        return
+
+    logger.debug("权限检查通过，准备发送配置菜单")
+
+    # 显示配置菜单
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 启用反垃圾",
+                    callback_data=f"antispam_toggle:{message.chat.id}:on",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ 禁用反垃圾",
+                    callback_data=f"antispam_toggle:{message.chat.id}:off",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📊 查看统计",
+                    callback_data=f"antispam_stats:{message.chat.id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔄 重新训练模型",
+                    callback_data=f"antispam_retrain:{message.chat.id}",
+                )
+            ],
+        ]
+    )
+
+    logger.debug("发送配置菜单消息")
+    reply = await message.answer("🛡️ 反垃圾配置", reply_markup=keyboard)
+    logger.debug(f"配置菜单已发送，消息ID: {reply.message_id}")
+    await auto_delete_message(reply)
+
+
+@router.callback_query(F.data.startswith("antispam_toggle:"))
+async def on_antispam_toggle(callback: CallbackQuery) -> None:
+    """处理反垃圾开关"""
+    try:
+        _, chat_id_str, action = callback.data.split(":")
+        chat_id = int(chat_id_str)
+
+        # ✅ 权限验证
+        if callback.from_user.id not in settings.admin_ids:
+            # ✅ P1-10: 使用 Redis 缓存减少 API 调用
+            if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
+                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                logger.warning(
+                    f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 反垃圾设置但无权限"
+                )
+                return
+
+        # ✅ 参数白名单验证
+        if action not in ["on", "off"]:
+            await callback.answer("❌ 无效的操作", show_alert=True)
+            logger.warning(f"无效的反垃圾操作: {action}")
+            return
+
+        enabled = action == "on"
+
+        await GroupRepository.update_antispam_settings(chat_id, enabled)
+
+        status = "已启用" if enabled else "已禁用"
+        await callback.message.edit_text(f"✅ 反垃圾功能{status}")
+        await callback.answer(f"反垃圾{status}")
+
+        logger.info(f"群组 {chat_id} 反垃圾功能{status}")
+
+    except Exception as e:
+        logger.error(f"切换反垃圾失败: {e}")
+        await callback.answer("❌ 操作失败", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("antispam_stats:"))
+async def on_antispam_stats(callback: CallbackQuery) -> None:
+    """查看反垃圾统计"""
+    try:
+        detector = get_detector()
+        stats = await detector.get_statistics()
+
+        text = (
+            f"📊 <b>反垃圾统计</b>\n\n"
+            f"总样本数: {stats.get('total_samples', 0)}\n"
+            f"垃圾样本: {stats.get('spam_samples', 0)}\n"
+            f"正常样本: {stats.get('normal_samples', 0)}\n\n"
+            f"ML 分类器: {'✅ 已训练' if stats.get('classifier_trained') else '❌ 未训练'}\n"
+            f"Embedding: {'✅ 已初始化' if stats.get('embedder_initialized') else '❌ 未初始化'}"
+        )
+
+        await callback.message.edit_text(text)
+        await callback.answer("统计信息已更新")
+
+    except Exception as e:
+        logger.error(f"获取统计信息失败: {e}")
+        await callback.answer("❌ 获取失败", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("antispam_retrain:"))
+async def on_antispam_retrain(callback: CallbackQuery) -> None:
+    """重新训练模型"""
+    try:
+        _, chat_id_str = callback.data.split(":")
+        chat_id = int(chat_id_str)
+
+        # ✅ 权限验证 - 重训练是敏感操作，仅超级管理员可执行
+        if callback.from_user.id not in settings.admin_ids:
+            await callback.answer("❌ 只有超级管理员可以重新训练模型", show_alert=True)
+            logger.warning(
+                f"用户 {callback.from_user.id} 尝试触发模型重训练但无权限"
+            )
+            return
+
+        await callback.answer("正在训练模型，请稍候...")
+
+        detector = get_detector()
+        success, message = await detector.retrain_model()
+
+        if success:
+            await callback.message.edit_text(f"✅ {message}")
+        else:
+            await callback.message.edit_text(f"❌ {message}")
+
+    except Exception as e:
+        logger.error(f"重新训练模型失败: {e}")
+        await callback.answer("❌ 训练失败", show_alert=True)
+
 @router.message(F.text)
 async def on_message(message: Message, bot: Bot) -> None:
     """处理所有文本消息，检测垃圾"""
@@ -105,6 +256,10 @@ async def on_message(message: Message, bot: Bot) -> None:
             command_name = command_match.group(1)
             # 只跳过已注册的命令
             if command_name in _registered_commands:
+                logger.debug(
+                    f"[文本处理器] 跳过已注册命令 [群组:{message.chat.id}] "
+                    f"[命令:{command_name}]"
+                )
                 return
             # 未注册的命令格式文本（如 /abc spam）会继续进行垃圾检测
             logger.debug(
@@ -431,144 +586,3 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         await callback.answer("❌ 处理失败", show_alert=True)
 
 
-@router.message(Command("antispam"))
-async def cmd_antispam(message: Message, bot: Bot) -> None:
-    """反垃圾配置命令"""
-    # 检查是否在群组中
-    if message.chat.type == "private":
-        reply = await message.answer("❌ 此命令只能在群组中使用")
-        await auto_delete_message(reply)
-        return
-
-    # 检查权限
-    if message.from_user.id not in settings.admin_ids:
-        # ✅ P1-10: 使用 Redis 缓存减少 API 调用
-        if not await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
-            reply = await message.answer("❌ 只有管理员可以使用此命令")
-            await auto_delete_message(reply)
-            return
-
-    # 显示配置菜单
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ 启用反垃圾",
-                    callback_data=f"antispam_toggle:{message.chat.id}:on",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="❌ 禁用反垃圾",
-                    callback_data=f"antispam_toggle:{message.chat.id}:off",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📊 查看统计",
-                    callback_data=f"antispam_stats:{message.chat.id}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔄 重新训练模型",
-                    callback_data=f"antispam_retrain:{message.chat.id}",
-                )
-            ],
-        ]
-    )
-
-    reply = await message.answer("🛡️ 反垃圾配置", reply_markup=keyboard)
-    await auto_delete_message(reply)
-
-
-@router.callback_query(F.data.startswith("antispam_toggle:"))
-async def on_antispam_toggle(callback: CallbackQuery) -> None:
-    """处理反垃圾开关"""
-    try:
-        _, chat_id_str, action = callback.data.split(":")
-        chat_id = int(chat_id_str)
-
-        # ✅ 权限验证
-        if callback.from_user.id not in settings.admin_ids:
-            # ✅ P1-10: 使用 Redis 缓存减少 API 调用
-            if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
-                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
-                logger.warning(
-                    f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 反垃圾设置但无权限"
-                )
-                return
-
-        # ✅ 参数白名单验证
-        if action not in ["on", "off"]:
-            await callback.answer("❌ 无效的操作", show_alert=True)
-            logger.warning(f"无效的反垃圾操作: {action}")
-            return
-
-        enabled = action == "on"
-
-        await GroupRepository.update_antispam_settings(chat_id, enabled)
-
-        status = "已启用" if enabled else "已禁用"
-        await callback.message.edit_text(f"✅ 反垃圾功能{status}")
-        await callback.answer(f"反垃圾{status}")
-
-        logger.info(f"群组 {chat_id} 反垃圾功能{status}")
-
-    except Exception as e:
-        logger.error(f"切换反垃圾失败: {e}")
-        await callback.answer("❌ 操作失败", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("antispam_stats:"))
-async def on_antispam_stats(callback: CallbackQuery) -> None:
-    """查看反垃圾统计"""
-    try:
-        detector = get_detector()
-        stats = await detector.get_statistics()
-
-        text = (
-            f"📊 <b>反垃圾统计</b>\n\n"
-            f"总样本数: {stats.get('total_samples', 0)}\n"
-            f"垃圾样本: {stats.get('spam_samples', 0)}\n"
-            f"正常样本: {stats.get('normal_samples', 0)}\n\n"
-            f"ML 分类器: {'✅ 已训练' if stats.get('classifier_trained') else '❌ 未训练'}\n"
-            f"Embedding: {'✅ 已初始化' if stats.get('embedder_initialized') else '❌ 未初始化'}"
-        )
-
-        await callback.message.edit_text(text)
-        await callback.answer("统计信息已更新")
-
-    except Exception as e:
-        logger.error(f"获取统计信息失败: {e}")
-        await callback.answer("❌ 获取失败", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("antispam_retrain:"))
-async def on_antispam_retrain(callback: CallbackQuery) -> None:
-    """重新训练模型"""
-    try:
-        _, chat_id_str = callback.data.split(":")
-        chat_id = int(chat_id_str)
-
-        # ✅ 权限验证 - 重训练是敏感操作，仅超级管理员可执行
-        if callback.from_user.id not in settings.admin_ids:
-            await callback.answer("❌ 只有超级管理员可以重新训练模型", show_alert=True)
-            logger.warning(
-                f"用户 {callback.from_user.id} 尝试触发模型重训练但无权限"
-            )
-            return
-
-        await callback.answer("正在训练模型，请稍候...")
-
-        detector = get_detector()
-        success, message = await detector.retrain_model()
-
-        if success:
-            await callback.message.edit_text(f"✅ {message}")
-        else:
-            await callback.message.edit_text(f"❌ {message}")
-
-    except Exception as e:
-        logger.error(f"重新训练模型失败: {e}")
-        await callback.answer("❌ 训练失败", show_alert=True)

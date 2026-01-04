@@ -6,6 +6,40 @@ from typing import Optional
 from loguru import logger
 
 
+async def check_admin_permission(message, bot) -> bool:
+    """检查是否是管理员（统一的权限检查函数）
+
+    支持：
+    - 超级管理员（配置在 .env）
+    - 群组管理员（通过 Telegram API 查询）
+    - 匿名管理员（sender_chat.id == chat.id）
+
+    Args:
+        message: aiogram Message 对象
+        bot: aiogram Bot 对象
+
+    Returns:
+        是否是管理员
+
+    ✅ P1-10: 使用 Redis 缓存减少 API 调用
+    """
+    from src.core.config import settings
+    from src.core.cache import PermissionCache
+
+    # 1. 检查是否是匿名管理员
+    # 当管理员以"匿名管理员"身份执行命令时，sender_chat 会被设置为群组本身
+    if message.sender_chat is not None and message.sender_chat.id == message.chat.id:
+        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{message.text}]")
+        return True
+
+    # 2. 检查是否在配置的超级管理员列表中
+    if message.from_user.id in settings.admin_ids:
+        return True
+
+    # 3. 使用缓存检查是否是群组管理员
+    return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
+
+
 def escape_html(text: Optional[str]) -> str:
     """转义 HTML 特殊字符，防止 HTML 注入
 

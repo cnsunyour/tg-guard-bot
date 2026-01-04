@@ -42,7 +42,9 @@ class PermissionCache:
             # 缓存未命中，调用 Telegram API
             logger.debug(f"权限检查调用 API [群组:{chat_id}] [用户:{user_id}]")
             member = await bot.get_chat_member(chat_id, user_id)
+            logger.debug(f"API 返回用户状态: {member.status} [群组:{chat_id}] [用户:{user_id}]")
             is_admin = member.status in ["creator", "administrator"]
+            logger.debug(f"权限判定结果: {is_admin} [群组:{chat_id}] [用户:{user_id}]")
 
             # 存入缓存
             await redis.setex(cache_key, PermissionCache.CACHE_TTL, "1" if is_admin else "0")

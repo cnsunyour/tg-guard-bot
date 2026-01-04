@@ -1,6 +1,6 @@
 """管理员配置命令处理器"""
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from loguru import logger
@@ -8,7 +8,7 @@ from loguru import logger
 from src.repositories.group_repo import GroupRepository
 from src.core.config import settings
 from src.core.health import get_health_checker
-from src.core.utils import auto_delete_message
+from src.core.utils import auto_delete_message, check_admin_permission
 
 router = Router(name="admin")
 
@@ -34,19 +34,17 @@ async def cmd_start(message: Message) -> None:
 
 
 @router.message(Command("setverify"))
-async def cmd_set_verify(message: Message) -> None:
+async def cmd_set_verify(message: Message, bot: Bot) -> None:
     """设置验证方式"""
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
         return
 
-    # 检查是否是管理员
-    if message.from_user.id not in settings.admin_ids:
-        member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
-        if member.status not in ["creator", "administrator"]:
-            await message.answer("❌ 只有管理员可以使用此命令")
-            return
+    # 检查权限（使用统一的权限检查函数）
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
 
     # 显示验证方式选择
     keyboard = InlineKeyboardMarkup(

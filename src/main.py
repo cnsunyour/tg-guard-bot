@@ -54,15 +54,13 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     # 设置到反垃圾模块
     antispam.set_registered_commands(registered_commands)
 
-    # ✅ 注册白名单中间件（在速率限制之前）
+    # ✅ 注册白名单中间件（最高优先级）
     from src.bot.middlewares import WhitelistMiddleware
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
 
     # ✅ 注册速率限制中间件（防止 DoS 攻击）
     from src.bot.middlewares import ThrottleMiddleware
-    # 对消息和回调查询都应用速率限制
-    # 配置：每秒最多 3 个请求
     dp.message.middleware(ThrottleMiddleware(rate_limit=3, time_window=1))
     dp.callback_query.middleware(ThrottleMiddleware(rate_limit=5, time_window=1))
 
