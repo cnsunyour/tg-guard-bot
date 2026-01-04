@@ -25,13 +25,11 @@ class OCRExtractor:
 
             # 初始化 PaddleOCR
             # 参考文档: https://www.paddleocr.ai/
-            # 新版本已移除 use_gpu 和 show_log 参数
+            # 注意：新版本已移除 use_gpu、show_log 参数
+            # drop_score、det、rec 等参数在调用 ocr() 方法时传入，不在初始化时使用
             self._ocr = PaddleOCR(
                 use_angle_cls=True,     # 启用文字方向分类器，提高倾斜文字识别准确度
                 lang="ch",              # 中文+英文模型
-                det=True,               # 启用文本检测
-                rec=True,               # 启用文本识别
-                drop_score=0.6,         # 置信度阈值，过滤低质量结果（提高到 0.6）
             )
 
             self._initialized = True
