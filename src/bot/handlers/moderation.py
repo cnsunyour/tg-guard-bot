@@ -11,7 +11,7 @@ from loguru import logger
 from src.services.moderation import ModerationService
 from src.repositories.user_repo import UserRepository
 from src.core.config import settings
-from src.core.utils import escape_html, auto_delete_message, check_admin_permission
+from src.core.utils import escape_html, auto_delete_message, check_admin_permission, parse_message_link
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 
 router = Router(name="moderation")
@@ -641,7 +641,7 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
 async def cmd_delete_range(message: Message, bot: Bot) -> None:
     """删除消息范围
 
-    用法：回复起始消息，然后使用 /delrange <结束消息ID> 删除两条消息之间的所有消息
+    用法：回复起始消息，然后使用 /delrange <结束消息ID或链接> 删除两条消息之间的所有消息
     """
     # 检查是否在群组中
     if message.chat.type == "private":
@@ -657,28 +657,31 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     if not message.reply_to_message:
         reply = await message.answer(
             "❌ 请回复起始消息\\n\\n"
-            "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID&gt;\\n"
-            "<b>示例</b>: /delrange 12345  (删除回复的消息到消息12345之间的所有消息)\\n\\n"
-            "💡 <b>提示</b>: 可以在电脑端右键点击消息选择\"复制消息链接\"来获取消息ID"
+            "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID或链接&gt;\\n\\n"
+            "<b>示例1</b>: /delrange 12345\\n"
+            "<b>示例2</b>: /delrange https://t.me/c/1234567890/12345\\n\\n"
+            "💡 <b>提示</b>: 在电脑端右键点击消息选择\"复制消息链接\"，然后直接粘贴即可"
         )
         await auto_delete_message(reply)
         return
 
     # 解析参数
-    parts = message.text.split()
+    parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        reply = await message.answer("❌ 请指定结束消息ID")
+        reply = await message.answer("❌ 请指定结束消息ID或消息链接")
         await auto_delete_message(reply)
         return
 
-    try:
-        end_message_id = int(parts[1])
-        if end_message_id <= 0:
-            reply = await message.answer("❌ 消息ID必须是正整数")
-            await auto_delete_message(reply)
-            return
-    except ValueError:
-        reply = await message.answer("❌ 消息ID必须是数字")
+    # 使用 parse_message_link 解析消息ID或链接
+    end_message_id = parse_message_link(parts[1])
+
+    if end_message_id is None:
+        reply = await message.answer(
+            "❌ 无法解析消息ID\\n\\n"
+            "支持的格式：\\n"
+            "1. 纯数字：12345\\n"
+            "2. 消息链接：https://t.me/c/1234567890/12345"
+        )
         await auto_delete_message(reply)
         return
 

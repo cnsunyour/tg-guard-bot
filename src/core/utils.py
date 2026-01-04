@@ -2,6 +2,7 @@
 
 import html
 import asyncio
+import re
 from typing import Optional
 from loguru import logger
 
@@ -181,4 +182,63 @@ async def auto_delete_message(message, delay: int = 30) -> None:
 
     # 创建后台任务
     asyncio.create_task(_delete())
+
+
+def parse_message_link(text: str) -> Optional[int]:
+    """从消息链接或消息ID中提取消息ID
+
+    支持的格式：
+    1. 纯数字：123456
+    2. 公开频道/群组链接：https://t.me/channel_name/123456
+    3. 私有群组链接：https://t.me/c/1234567890/123456
+    4. 带参数的链接：https://t.me/c/1234567890/123456?comment=789
+
+    Args:
+        text: 消息链接或消息ID字符串
+
+    Returns:
+        消息ID，如果解析失败返回 None
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    text = text.strip()
+
+    # 1. 尝试直接解析为数字
+    if text.isdigit():
+        message_id = int(text)
+        if message_id > 0:
+            return message_id
+        return None
+
+    # 2. 解析 Telegram 消息链接
+    # 支持格式：
+    # - https://t.me/channel_name/123456
+    # - https://t.me/c/1234567890/123456
+    # - t.me/channel_name/123456 (无协议)
+
+    # 匹配模式：提取最后的数字部分（消息ID）
+    # 模式说明：
+    # - t\.me/ : 匹配域名
+    # - (?:c/\d+/)? : 可选的私有群组ID部分
+    # - [^/]+/ : 频道名称或其他路径
+    # - (\d+) : 消息ID（捕获组）
+    # - (?:\?|$) : 后面跟查询参数或结束
+
+    patterns = [
+        r't\.me/c/\d+/(\d+)',           # 私有群组：t.me/c/chat_id/message_id
+        r't\.me/[^/]+/(\d+)',            # 公开频道/群组：t.me/channel/message_id
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            message_id = int(match.group(1))
+            if message_id > 0:
+                logger.debug(f"从链接中解析到消息ID: {message_id}")
+                return message_id
+
+    # 解析失败
+    logger.debug(f"无法从文本中解析消息ID: {text}")
+    return None
 
