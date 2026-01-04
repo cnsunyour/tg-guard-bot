@@ -113,7 +113,13 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
 
     # 获取原因
     parts = message.text.split(maxsplit=2)
-    reason = parts[2] if len(parts) > 2 else None
+    # 判断是回复消息还是命令参数模式
+    if message.reply_to_message:
+        # 回复消息模式: /kick [原因]
+        reason = parts[1] if len(parts) > 1 else None
+    else:
+        # 命令参数模式: /kick <用户ID> [原因]
+        reason = parts[2] if len(parts) > 2 else None
 
     # 执行踢出
     success, error_msg = await ModerationService.kick_user(
@@ -163,11 +169,21 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
     duration = None
     reason = None
 
-    if len(parts) > 2:
-        duration = parse_duration(parts[2])
-
-    if len(parts) > 3:
-        reason = parts[3]
+    # 判断是回复消息还是命令参数模式
+    if message.reply_to_message:
+        # 回复消息模式: /mute [时长] [原因]
+        # parts[0] = "/mute", parts[1] = 时长, parts[2] = 原因
+        if len(parts) > 1:
+            duration = parse_duration(parts[1])
+        if len(parts) > 2:
+            reason = parts[2]
+    else:
+        # 命令参数模式: /mute <用户ID> [时长] [原因]
+        # parts[0] = "/mute", parts[1] = 用户ID, parts[2] = 时长, parts[3] = 原因
+        if len(parts) > 2:
+            duration = parse_duration(parts[2])
+        if len(parts) > 3:
+            reason = parts[3]
 
     # 执行禁言
     success, error_msg = await ModerationService.mute_user(
@@ -252,7 +268,13 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
 
     # 获取原因
     parts = message.text.split(maxsplit=2)
-    reason = parts[2] if len(parts) > 2 else None
+    # 判断是回复消息还是命令参数模式
+    if message.reply_to_message:
+        # 回复消息模式: /ban [原因]
+        reason = parts[1] if len(parts) > 1 else None
+    else:
+        # 命令参数模式: /ban <用户ID> [原因]
+        reason = parts[2] if len(parts) > 2 else None
 
     # 执行封禁
     success, error_msg = await ModerationService.ban_user(
@@ -334,7 +356,13 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
 
     # 获取原因
     parts = message.text.split(maxsplit=2)
-    reason = parts[2] if len(parts) > 2 else None
+    # 判断是回复消息还是命令参数模式
+    if message.reply_to_message:
+        # 回复消息模式: /warn [原因]
+        reason = parts[1] if len(parts) > 1 else None
+    else:
+        # 命令参数模式: /warn <用户ID> [原因]
+        reason = parts[2] if len(parts) > 2 else None
 
     # 执行警告
     success, warning_count, auto_muted = await ModerationService.warn_user(
