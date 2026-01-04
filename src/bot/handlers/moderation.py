@@ -11,6 +11,7 @@ from loguru import logger
 from src.services.moderation import ModerationService
 from src.repositories.user_repo import UserRepository
 from src.repositories.spam_repo import SpamRepository
+from src.repositories.report_repo import ReportRepository
 from src.core.config import settings
 from src.core.utils import escape_html, auto_delete_message, check_admin_permission, parse_message_link
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
@@ -742,33 +743,25 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
 
 @router.message(Command("spam"))
 async def cmd_spam(message: Message, bot: Bot) -> None:
-    """标记垃圾消息并封禁用户
+    """标记垃圾消息
 
-    此命令会：
-    1. 封禁发送垃圾消息的用户
-    2. 删除垃圾消息
-    3. 将消息内容添加到反垃圾训练库
+    - 普通用户：创建举报记录，通知管理员
+    - 管理员：直接封禁用户并添加到训练库
     """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
         return
 
-    # 检查权限
-    if not await check_admin_permission(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
-        return
-
     # 必须回复某条消息
     if not message.reply_to_message:
         reply = await message.answer(
-            "❌ 请回复要标记为垃圾的消息\\n\\n"
-            "<b>用法</b>: 回复垃圾消息，然后使用 /spam [原因]\\n"
-            "<b>示例</b>: /spam 发送广告\\n\\n"
-            "💡 <b>此命令会</b>:\\n"
-            "1. 封禁用户\\n"
-            "2. 删除消息\\n"
-            "3. 添加到反垃圾训练库"
+            "❌ 请回复要标记为垃圾的消息\n\n"
+            "<b>用法</b>: 回复垃圾消息，然后使用 /spam [原因]\n"
+            "<b>示例</b>: /spam 发送广告\n\n"
+            "💡 <b>说明</b>:\n"
+            "• 普通用户：创建举报记录\n"
+            "• 管理员：直接封禁并添加到训练库"
         )
         await auto_delete_message(reply)
         return
@@ -778,9 +771,9 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
 
     # 获取原因
     parts = message.text.split(maxsplit=1)
-    reason = parts[1] if len(parts) > 1 else "发送垃圾消息"
+    reason = parts[1] if len(parts) > 1 else "垃圾消息"
 
-    # 获取消息文本内容用于训练
+    # 获取消息文本内容
     spam_text = ""
     if message.reply_to_message.text:
         spam_text = message.reply_to_message.text
@@ -792,48 +785,278 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
         content_type = message.reply_to_message.content_type
         spam_text = f"[{content_type}消息]"
 
-    # 执行封禁
-    success, error_msg = await ModerationService.ban_user(
-        bot=bot,
-        chat_id=message.chat.id,
-        user_id=target_user_id,
-        operator_id=message.from_user.id,
-        reason=f"垃圾消息: {reason}",
-    )
+    # 检查是否是管理员
+    is_admin = await check_admin_permission(message, bot)
 
-    if success:
-        # 删除垃圾消息
-        try:
-            await message.reply_to_message.delete()
-            logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
-        except Exception as e:
-            logger.debug(f"删除垃圾消息失败: {e}")
+    if is_admin:
+        # 管理员模式：直接封禁+删除+训练库
+        success, error_msg = await ModerationService.ban_user(
+            bot=bot,
+            chat_id=message.chat.id,
+            user_id=target_user_id,
+            operator_id=message.from_user.id,
+            reason=f"垃圾消息: {reason}",
+        )
 
-        # 添加到反垃圾训练库
-        try:
-            await SpamRepository.add_sample(
-                text=spam_text,
-                is_spam=True,
-                confidence=1.0,  # 管理员标注，置信度为1.0
-                labeled_by=message.from_user.id,
+        if success:
+            # 删除垃圾消息
+            try:
+                await message.reply_to_message.delete()
+                logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
+            except Exception as e:
+                logger.debug(f"删除垃圾消息失败: {e}")
+
+            # 添加到反垃圾训练库
+            try:
+                await SpamRepository.add_sample(
+                    text=spam_text,
+                    is_spam=True,
+                    confidence=1.0,  # 管理员标注，置信度为1.0
+                    labeled_by=message.from_user.id,
+                )
+                logger.info(
+                    f"垃圾样本已添加到训练库 [标注者:{message.from_user.id}] "
+                    f"[文本长度:{len(spam_text)}]"
+                )
+            except Exception as e:
+                logger.error(f"添加垃圾样本失败: {e}")
+
+            reply = await message.answer(
+                f"✅ 已处理垃圾消息\n"
+                f"• 用户已封禁: {target_user_id}\n"
+                f"• 消息已删除\n"
+                f"• 已添加到训练库\n"
+                f"• 原因: {escape_html(reason)}"
             )
+            await auto_delete_message(reply)
+        else:
+            reply = await message.answer(f"❌ {error_msg}")
+            await auto_delete_message(reply)
+    else:
+        # 普通用户模式：创建举报记录
+        try:
+            # 检查举报频率限制（防止滥用）
+            recent_reports = await ReportRepository.count_user_reports(
+                group_id=message.chat.id,
+                reporter_id=message.from_user.id,
+                days=1,
+            )
+
+            if recent_reports >= 10:
+                reply = await message.answer(
+                    "❌ 您今天的举报次数已达上限（10次）\n"
+                    "如有紧急情况，请联系管理员"
+                )
+                await auto_delete_message(reply)
+                return
+
+            # 创建举报记录
+            report = await ReportRepository.create_report(
+                group_id=message.chat.id,
+                reporter_id=message.from_user.id,
+                reported_user_id=target_user_id,
+                message_id=message.reply_to_message.message_id,
+                message_text=spam_text,
+                reason=reason,
+            )
+
+            # 统计待处理举报数量
+            pending_count = await ReportRepository.count_pending_reports(message.chat.id)
+
             logger.info(
-                f"垃圾样本已添加到训练库 [标注者:{message.from_user.id}] "
-                f"[文本长度:{len(spam_text)}]"
+                f"新举报记录 [ID:{report.id}] [举报者:{message.from_user.id}] "
+                f"[被举报:{target_user_id}] [原因:{reason}]"
             )
-        except Exception as e:
-            logger.error(f"添加垃圾样本失败: {e}")
 
+            reply = await message.answer(
+                f"✅ 举报已提交\n"
+                f"• 举报ID: #{report.id}\n"
+                f"• 原因: {escape_html(reason)}\n"
+                f"• 待处理举报: {pending_count} 条\n\n"
+                f"💡 管理员将尽快处理"
+            )
+            await auto_delete_message(reply)
+
+        except Exception as e:
+            logger.error(f"创建举报记录失败: {e}")
+            reply = await message.answer("❌ 举报提交失败，请稍后重试")
+            await auto_delete_message(reply)
+
+
+@router.message(Command("reports"))
+async def cmd_reports(message: Message, bot: Bot) -> None:
+    """查看待处理的举报列表（仅管理员）"""
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    try:
+        # 获取待处理举报
+        reports = await ReportRepository.get_pending_reports(message.chat.id, limit=10)
+
+        if not reports:
+            reply = await message.answer("✅ 当前没有待处理的举报")
+            await auto_delete_message(reply)
+            return
+
+        # 构建举报列表
+        response = f"📋 <b>待处理举报</b> (共 {len(reports)} 条)\n\n"
+
+        for idx, report in enumerate(reports, 1):
+            # 格式化时间
+            time_str = report.created_at.strftime("%m-%d %H:%M")
+
+            # 截断消息文本
+            text_preview = report.message_text[:50] if report.message_text else "[无文本]"
+            if len(report.message_text or "") > 50:
+                text_preview += "..."
+
+            response += (
+                f"<b>#{report.id}</b> [{time_str}]\n"
+                f"• 举报者: {report.reporter_id}\n"
+                f"• 被举报: {report.reported_user_id}\n"
+                f"• 原因: {escape_html(report.reason or '无')}\n"
+                f"• 内容: {escape_html(text_preview)}\n"
+                f"• 操作: /approve {report.id}\n\n"
+            )
+
+        response += "💡 使用 /approve <ID> 处理举报"
+
+        reply = await message.answer(response)
+        await auto_delete_message(reply, delay=60)  # 60秒后删除
+
+    except Exception as e:
+        logger.error(f"获取举报列表失败: {e}")
+        reply = await message.answer("❌ 获取举报列表失败")
+        await auto_delete_message(reply)
+
+
+@router.message(Command("approve"))
+async def cmd_approve(message: Message, bot: Bot) -> None:
+    """批准举报并执行封禁（仅管理员）
+
+    用法：/approve <report_id>
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 解析参数
+    parts = message.text.split()
+    if len(parts) < 2:
         reply = await message.answer(
-            f"✅ 已处理垃圾消息\\n"
-            f"• 用户已封禁: {target_user_id}\\n"
-            f"• 消息已删除\\n"
-            f"• 已添加到训练库\\n"
-            f"• 原因: {escape_html(reason)}"
+            "❌ 请指定举报ID\n\n"
+            "<b>用法</b>: /approve &lt;举报ID&gt;\n"
+            "<b>示例</b>: /approve 123"
         )
         await auto_delete_message(reply)
-    else:
-        reply = await message.answer(f"❌ {error_msg}")
+        return
+
+    try:
+        report_id = int(parts[1])
+    except ValueError:
+        reply = await message.answer("❌ 举报ID必须是数字")
         await auto_delete_message(reply)
+        return
+
+    try:
+        # 获取举报记录
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            reply = await message.answer(f"❌ 未找到举报记录 #{report_id}")
+            await auto_delete_message(reply)
+            return
+
+        # 检查是否属于当前群组
+        if report.group_id != message.chat.id:
+            reply = await message.answer("❌ 此举报不属于当前群组")
+            await auto_delete_message(reply)
+            return
+
+        # 检查状态
+        if report.status != "pending":
+            reply = await message.answer(
+                f"❌ 此举报已被处理\n"
+                f"状态: {report.status}"
+            )
+            await auto_delete_message(reply)
+            return
+
+        # 执行封禁
+        success, error_msg = await ModerationService.ban_user(
+            bot=bot,
+            chat_id=message.chat.id,
+            user_id=report.reported_user_id,
+            operator_id=message.from_user.id,
+            reason=f"举报#{report_id}: {report.reason}",
+        )
+
+        if success:
+            # 删除被举报的消息
+            try:
+                await bot.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=report.message_id,
+                )
+                logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
+            except Exception as e:
+                logger.debug(f"删除被举报的消息失败: {e}")
+
+            # 添加到反垃圾训练库
+            if report.message_text:
+                try:
+                    await SpamRepository.add_sample(
+                        text=report.message_text,
+                        is_spam=True,
+                        confidence=1.0,
+                        labeled_by=message.from_user.id,
+                    )
+                    logger.info(
+                        f"举报#{report_id}的内容已添加到训练库 "
+                        f"[文本长度:{len(report.message_text)}]"
+                    )
+                except Exception as e:
+                    logger.error(f"添加训练样本失败: {e}")
+
+            # 更新举报状态
+            await ReportRepository.update_report_status(
+                report_id=report_id,
+                status="approved",
+                handled_by=message.from_user.id,
+            )
+
+            reply = await message.answer(
+                f"✅ 举报#{report_id}已处理\n"
+                f"• 用户已封禁: {report.reported_user_id}\n"
+                f"• 消息已删除\n"
+                f"• 已添加到训练库\n"
+                f"• 举报者: {report.reporter_id}\n"
+                f"• 原因: {escape_html(report.reason or '无')}"
+            )
+            await auto_delete_message(reply)
+
+        else:
+            reply = await message.answer(f"❌ 封禁失败: {error_msg}")
+            await auto_delete_message(reply)
+
+    except Exception as e:
+        logger.error(f"处理举报失败: {e}")
+        reply = await message.answer("❌ 处理举报失败，请稍后重试")
+        await auto_delete_message(reply)
+
+
 
 
