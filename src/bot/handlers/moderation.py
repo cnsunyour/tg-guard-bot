@@ -517,7 +517,7 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
 async def cmd_delete_before(message: Message, bot: Bot) -> None:
     """删除往前（更早）的消息
 
-    用法：回复某条消息，然后使用 /delbefore <N> 删除该消息及往前N条消息
+    用法：回复某条消息，然后使用 /delbefore <N> 删除包含该消息在内的共N条消息
     """
     # 检查是否在群组中
     if message.chat.type == "private":
@@ -534,7 +534,7 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
         reply = await message.answer(
             "❌ 请回复要删除的消息\\n\\n"
             "<b>用法</b>: 回复某条消息，然后使用 /delbefore &lt;数量&gt;\\n"
-            "<b>示例</b>: /delbefore 10  (删除该消息及往前10条)"
+            "<b>示例</b>: /delbefore 10  (删除包含该消息在内往前共10条消息)"
         )
         await auto_delete_message(reply)
         return
@@ -579,7 +579,7 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
 async def cmd_delete_after(message: Message, bot: Bot) -> None:
     """删除往后（更晚）的消息
 
-    用法：回复某条消息，然后使用 /delafter <N> 删除该消息及往后N条消息
+    用法：回复某条消息，然后使用 /delafter <N> 删除包含该消息在内的共N条消息
     """
     # 检查是否在群组中
     if message.chat.type == "private":
@@ -596,7 +596,7 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
         reply = await message.answer(
             "❌ 请回复要删除的消息\\n\\n"
             "<b>用法</b>: 回复某条消息，然后使用 /delafter &lt;数量&gt;\\n"
-            "<b>示例</b>: /delafter 10  (删除该消息及往后10条)"
+            "<b>示例</b>: /delafter 10  (删除包含该消息在内往后共10条消息)"
         )
         await auto_delete_message(reply)
         return

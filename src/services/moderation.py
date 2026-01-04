@@ -320,13 +320,13 @@ class ModerationService:
     async def delete_messages_before(
         bot: Bot, chat_id: int, start_message_id: int, count: int, operator_id: int
     ) -> tuple[int, int]:
-        """删除指定消息往前（更早）的N条消息
+        """删除指定消息往前（更早）的N条消息（包含起始消息）
 
         Args:
             bot: Bot 实例
             chat_id: 群组 ID
             start_message_id: 起始消息 ID（包含）
-            count: 要删除的消息数量
+            count: 要删除的消息总数（包含起始消息）
             operator_id: 操作者 ID
 
         Returns:
@@ -336,6 +336,7 @@ class ModerationService:
         fail_count = 0
 
         # 从起始消息往前删除（消息ID递减）
+        # count 是总数，包含起始消息，所以删除 start_message_id 到 start_message_id-(count-1)
         for i in range(count):
             message_id = start_message_id - i
             if message_id <= 0:
@@ -362,7 +363,7 @@ class ModerationService:
         )
 
         logger.info(
-            f"管理员 {operator_id} 删除了消息 {start_message_id} 往前 {count} 条消息"
+            f"管理员 {operator_id} 删除了消息 {start_message_id} 往前共 {count} 条消息"
             f"（成功: {success_count}, 失败: {fail_count}）"
         )
         return success_count, fail_count
@@ -371,13 +372,13 @@ class ModerationService:
     async def delete_messages_after(
         bot: Bot, chat_id: int, start_message_id: int, count: int, operator_id: int
     ) -> tuple[int, int]:
-        """删除指定消息往后（更晚）的N条消息
+        """删除指定消息往后（更晚）的N条消息（包含起始消息）
 
         Args:
             bot: Bot 实例
             chat_id: 群组 ID
             start_message_id: 起始消息 ID（包含）
-            count: 要删除的消息数量
+            count: 要删除的消息总数（包含起始消息）
             operator_id: 操作者 ID
 
         Returns:
@@ -387,6 +388,7 @@ class ModerationService:
         fail_count = 0
 
         # 从起始消息往后删除（消息ID递增）
+        # count 是总数，包含起始消息，所以删除 start_message_id 到 start_message_id+(count-1)
         for i in range(count):
             message_id = start_message_id + i
 
@@ -411,7 +413,7 @@ class ModerationService:
         )
 
         logger.info(
-            f"管理员 {operator_id} 删除了消息 {start_message_id} 往后 {count} 条消息"
+            f"管理员 {operator_id} 删除了消息 {start_message_id} 往后共 {count} 条消息"
             f"（成功: {success_count}, 失败: {fail_count}）"
         )
         return success_count, fail_count
