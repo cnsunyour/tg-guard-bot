@@ -153,6 +153,14 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
     )
 
     if success:
+        # 如果是回复消息模式，删除被回复的消息
+        if message.reply_to_message:
+            try:
+                await message.reply_to_message.delete()
+                logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
+            except Exception as e:
+                logger.debug(f"删除被回复的消息失败: {e}")
+
         reply = await message.answer(
             f"✅ 已踢出用户 {target_user_id}" + (f"\n原因: {escape_html(reason)}" if reason else "")
         )
@@ -220,6 +228,14 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
     )
 
     if success:
+        # 如果是回复消息模式，删除被回复的消息
+        if message.reply_to_message:
+            try:
+                await message.reply_to_message.delete()
+                logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
+            except Exception as e:
+                logger.debug(f"删除被回复的消息失败: {e}")
+
         duration_text = "永久" if duration is None else f"{duration}分钟"
         reply = await message.answer(
             f"✅ 已禁言用户 {target_user_id}，时长: {duration_text}"
@@ -316,6 +332,14 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
     )
 
     if success:
+        # 如果是回复消息模式，删除被回复的消息
+        if message.reply_to_message:
+            try:
+                await message.reply_to_message.delete()
+                logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
+            except Exception as e:
+                logger.debug(f"删除被回复的消息失败: {e}")
+
         reply = await message.answer(
             f"✅ 已封禁用户 {target_user_id}" + (f"\n原因: {escape_html(reason)}" if reason else "")
         )
