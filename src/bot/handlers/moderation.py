@@ -512,3 +512,202 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
         reply = await message.answer("❌ 操作失败")
         await auto_delete_message(reply)
 
+
+@router.message(Command("delbefore"))
+async def cmd_delete_before(message: Message, bot: Bot) -> None:
+    """删除往前（更早）的消息
+
+    用法：回复某条消息，然后使用 /delbefore <N> 删除该消息及往前N条消息
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 必须回复某条消息
+    if not message.reply_to_message:
+        reply = await message.answer(
+            "❌ 请回复要删除的消息\\n\\n"
+            "<b>用法</b>: 回复某条消息，然后使用 /delbefore &lt;数量&gt;\\n"
+            "<b>示例</b>: /delbefore 10  (删除该消息及往前10条)"
+        )
+        await auto_delete_message(reply)
+        return
+
+    # 解析参数
+    parts = message.text.split()
+    if len(parts) < 2:
+        reply = await message.answer("❌ 请指定要删除的消息数量")
+        await auto_delete_message(reply)
+        return
+
+    try:
+        count = int(parts[1])
+        if count <= 0 or count > 100:
+            reply = await message.answer("❌ 删除数量必须在 1-100 之间")
+            await auto_delete_message(reply)
+            return
+    except ValueError:
+        reply = await message.answer("❌ 删除数量必须是数字")
+        await auto_delete_message(reply)
+        return
+
+    # 执行删除
+    start_message_id = message.reply_to_message.message_id
+    success_count, fail_count = await ModerationService.delete_messages_before(
+        bot=bot,
+        chat_id=message.chat.id,
+        start_message_id=start_message_id,
+        count=count,
+        operator_id=message.from_user.id,
+    )
+
+    reply = await message.answer(
+        f"✅ 删除完成\\n"
+        f"成功: {success_count} 条\\n"
+        f"失败: {fail_count} 条"
+    )
+    await auto_delete_message(reply)
+
+
+@router.message(Command("delafter"))
+async def cmd_delete_after(message: Message, bot: Bot) -> None:
+    """删除往后（更晚）的消息
+
+    用法：回复某条消息，然后使用 /delafter <N> 删除该消息及往后N条消息
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 必须回复某条消息
+    if not message.reply_to_message:
+        reply = await message.answer(
+            "❌ 请回复要删除的消息\\n\\n"
+            "<b>用法</b>: 回复某条消息，然后使用 /delafter &lt;数量&gt;\\n"
+            "<b>示例</b>: /delafter 10  (删除该消息及往后10条)"
+        )
+        await auto_delete_message(reply)
+        return
+
+    # 解析参数
+    parts = message.text.split()
+    if len(parts) < 2:
+        reply = await message.answer("❌ 请指定要删除的消息数量")
+        await auto_delete_message(reply)
+        return
+
+    try:
+        count = int(parts[1])
+        if count <= 0 or count > 100:
+            reply = await message.answer("❌ 删除数量必须在 1-100 之间")
+            await auto_delete_message(reply)
+            return
+    except ValueError:
+        reply = await message.answer("❌ 删除数量必须是数字")
+        await auto_delete_message(reply)
+        return
+
+    # 执行删除
+    start_message_id = message.reply_to_message.message_id
+    success_count, fail_count = await ModerationService.delete_messages_after(
+        bot=bot,
+        chat_id=message.chat.id,
+        start_message_id=start_message_id,
+        count=count,
+        operator_id=message.from_user.id,
+    )
+
+    reply = await message.answer(
+        f"✅ 删除完成\\n"
+        f"成功: {success_count} 条\\n"
+        f"失败: {fail_count} 条"
+    )
+    await auto_delete_message(reply)
+
+
+@router.message(Command("delrange"))
+async def cmd_delete_range(message: Message, bot: Bot) -> None:
+    """删除消息范围
+
+    用法：回复起始消息，然后使用 /delrange <结束消息ID> 删除两条消息之间的所有消息
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 必须回复某条消息
+    if not message.reply_to_message:
+        reply = await message.answer(
+            "❌ 请回复起始消息\\n\\n"
+            "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID&gt;\\n"
+            "<b>示例</b>: /delrange 12345  (删除回复的消息到消息12345之间的所有消息)\\n\\n"
+            "💡 <b>提示</b>: 可以在电脑端右键点击消息选择\"复制消息链接\"来获取消息ID"
+        )
+        await auto_delete_message(reply)
+        return
+
+    # 解析参数
+    parts = message.text.split()
+    if len(parts) < 2:
+        reply = await message.answer("❌ 请指定结束消息ID")
+        await auto_delete_message(reply)
+        return
+
+    try:
+        end_message_id = int(parts[1])
+        if end_message_id <= 0:
+            reply = await message.answer("❌ 消息ID必须是正整数")
+            await auto_delete_message(reply)
+            return
+    except ValueError:
+        reply = await message.answer("❌ 消息ID必须是数字")
+        await auto_delete_message(reply)
+        return
+
+    # 执行删除
+    start_message_id = message.reply_to_message.message_id
+
+    # 限制删除范围，防止意外删除过多消息
+    message_range = abs(end_message_id - start_message_id) + 1
+    if message_range > 1000:
+        reply = await message.answer(
+            f"❌ 删除范围过大（{message_range} 条消息）\\n"
+            "为了安全，单次最多删除 1000 条消息"
+        )
+        await auto_delete_message(reply)
+        return
+
+    success_count, fail_count = await ModerationService.delete_messages_range(
+        bot=bot,
+        chat_id=message.chat.id,
+        start_message_id=start_message_id,
+        end_message_id=end_message_id,
+        operator_id=message.from_user.id,
+    )
+
+    reply = await message.answer(
+        f"✅ 删除完成\\n"
+        f"消息范围: {min(start_message_id, end_message_id)} - {max(start_message_id, end_message_id)}\\n"
+        f"成功: {success_count} 条\\n"
+        f"失败: {fail_count} 条"
+    )
+    await auto_delete_message(reply)
+

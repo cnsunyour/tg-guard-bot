@@ -315,3 +315,154 @@ class ModerationService:
         except Exception as e:
             logger.error(f"清除警告失败: {e}")
             return False, 0
+
+    @staticmethod
+    async def delete_messages_before(
+        bot: Bot, chat_id: int, start_message_id: int, count: int, operator_id: int
+    ) -> tuple[int, int]:
+        """删除指定消息往前（更早）的N条消息
+
+        Args:
+            bot: Bot 实例
+            chat_id: 群组 ID
+            start_message_id: 起始消息 ID（包含）
+            count: 要删除的消息数量
+            operator_id: 操作者 ID
+
+        Returns:
+            (成功删除数量, 失败数量)
+        """
+        success_count = 0
+        fail_count = 0
+
+        # 从起始消息往前删除（消息ID递减）
+        for i in range(count):
+            message_id = start_message_id - i
+            if message_id <= 0:
+                break
+
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                success_count += 1
+            except Exception as e:
+                logger.debug(f"删除消息 {message_id} 失败: {e}")
+                fail_count += 1
+
+        # 记录日志
+        await AuditRepository.log_action(
+            group_id=chat_id,
+            operator_id=operator_id,
+            action="delete_messages_before",
+            details={
+                "start_message_id": start_message_id,
+                "count": count,
+                "success": success_count,
+                "failed": fail_count,
+            },
+        )
+
+        logger.info(
+            f"管理员 {operator_id} 删除了消息 {start_message_id} 往前 {count} 条消息"
+            f"（成功: {success_count}, 失败: {fail_count}）"
+        )
+        return success_count, fail_count
+
+    @staticmethod
+    async def delete_messages_after(
+        bot: Bot, chat_id: int, start_message_id: int, count: int, operator_id: int
+    ) -> tuple[int, int]:
+        """删除指定消息往后（更晚）的N条消息
+
+        Args:
+            bot: Bot 实例
+            chat_id: 群组 ID
+            start_message_id: 起始消息 ID（包含）
+            count: 要删除的消息数量
+            operator_id: 操作者 ID
+
+        Returns:
+            (成功删除数量, 失败数量)
+        """
+        success_count = 0
+        fail_count = 0
+
+        # 从起始消息往后删除（消息ID递增）
+        for i in range(count):
+            message_id = start_message_id + i
+
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                success_count += 1
+            except Exception as e:
+                logger.debug(f"删除消息 {message_id} 失败: {e}")
+                fail_count += 1
+
+        # 记录日志
+        await AuditRepository.log_action(
+            group_id=chat_id,
+            operator_id=operator_id,
+            action="delete_messages_after",
+            details={
+                "start_message_id": start_message_id,
+                "count": count,
+                "success": success_count,
+                "failed": fail_count,
+            },
+        )
+
+        logger.info(
+            f"管理员 {operator_id} 删除了消息 {start_message_id} 往后 {count} 条消息"
+            f"（成功: {success_count}, 失败: {fail_count}）"
+        )
+        return success_count, fail_count
+
+    @staticmethod
+    async def delete_messages_range(
+        bot: Bot, chat_id: int, start_message_id: int, end_message_id: int, operator_id: int
+    ) -> tuple[int, int]:
+        """删除两个消息ID之间的所有消息（包含起止消息）
+
+        Args:
+            bot: Bot 实例
+            chat_id: 群组 ID
+            start_message_id: 起始消息 ID
+            end_message_id: 结束消息 ID
+            operator_id: 操作者 ID
+
+        Returns:
+            (成功删除数量, 失败数量)
+        """
+        # 确保 start <= end
+        if start_message_id > end_message_id:
+            start_message_id, end_message_id = end_message_id, start_message_id
+
+        success_count = 0
+        fail_count = 0
+
+        # 遍历消息ID范围并删除
+        for message_id in range(start_message_id, end_message_id + 1):
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                success_count += 1
+            except Exception as e:
+                logger.debug(f"删除消息 {message_id} 失败: {e}")
+                fail_count += 1
+
+        # 记录日志
+        await AuditRepository.log_action(
+            group_id=chat_id,
+            operator_id=operator_id,
+            action="delete_messages_range",
+            details={
+                "start_message_id": start_message_id,
+                "end_message_id": end_message_id,
+                "success": success_count,
+                "failed": fail_count,
+            },
+        )
+
+        logger.info(
+            f"管理员 {operator_id} 删除了消息范围 {start_message_id}-{end_message_id}"
+            f"（成功: {success_count}, 失败: {fail_count}）"
+        )
+        return success_count, fail_count
