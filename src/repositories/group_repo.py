@@ -25,6 +25,11 @@ class GroupRepository:
                 session.add(group)
                 await session.commit()
                 await session.refresh(group)
+            elif title is not None:
+                # 群组已存在，更新 title（如果提供了新的 title）
+                group.title = title
+                await session.commit()
+                await session.refresh(group)
 
             return group
 
