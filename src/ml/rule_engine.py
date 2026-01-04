@@ -1,32 +1,53 @@
 """规则引擎模块 - Stage 1 快速过滤"""
 
 import re
-from typing import Optional, List, Tuple
+from typing import ClassVar
 from urllib.parse import urlparse
-from loguru import logger
 
-from src.core.config import settings
+from loguru import logger
 
 
 class RuleEngine:
     """规则引擎 - 基于规则的快速垃圾检测"""
 
     # 默认关键词黑名单（可通过配置扩展）
-    DEFAULT_BLACKLIST_KEYWORDS = [
+    DEFAULT_BLACKLIST_KEYWORDS: ClassVar[list[str]] = [
         # 常见广告词
-        "加微信", "加V信", "加wx", "私聊我", "扫码", "点击链接",
+        "加微信",
+        "加V信",
+        "加wx",
+        "私聊我",
+        "扫码",
+        "点击链接",
         # 赌博相关
-        "赌博", "下注", "返水", "充值", "提款", "博彩",
+        "赌博",
+        "下注",
+        "返水",
+        "充值",
+        "提款",
+        "博彩",
         # 色情相关
-        "约炮", "一夜情", "美女", "小姐姐上门",
+        "约炮",
+        "一夜情",
+        "美女",
+        "小姐姐上门",
         # 诈骗相关
-        "刷单", "兼职", "日赚", "躺赚", "零投资", "高回报",
+        "刷单",
+        "兼职",
+        "日赚",
+        "躺赚",
+        "零投资",
+        "高回报",
         # 垃圾推广
-        "点赞", "关注", "转发", "免费送", "领取",
+        "点赞",
+        "关注",
+        "转发",
+        "免费送",
+        "领取",
     ]
 
     # Telegram 邀请链接模式
-    TG_INVITE_PATTERNS = [
+    TG_INVITE_PATTERNS: ClassVar[list[str]] = [
         r"t\.me/\+",
         r"t\.me/joinchat/",
         r"telegram\.me/\+",
@@ -34,14 +55,18 @@ class RuleEngine:
     ]
 
     # 可疑域名模式
-    SUSPICIOUS_DOMAINS = [
-        ".tk", ".ml", ".ga", ".cf", ".gq",  # 免费域名
+    SUSPICIOUS_DOMAINS: ClassVar[list[str]] = [
+        ".tk",
+        ".ml",
+        ".ga",
+        ".cf",
+        ".gq",  # 免费域名
     ]
 
     def __init__(
         self,
-        blacklist_keywords: Optional[List[str]] = None,
-        whitelist_domains: Optional[List[str]] = None,
+        blacklist_keywords: list[str] | None = None,
+        whitelist_domains: list[str] | None = None,
     ):
         """初始化规则引擎
 
@@ -52,7 +77,7 @@ class RuleEngine:
         self.blacklist_keywords = blacklist_keywords or self.DEFAULT_BLACKLIST_KEYWORDS
         self.whitelist_domains = whitelist_domains or []
 
-    def check_keywords(self, text: str) -> Tuple[bool, Optional[str]]:
+    def check_keywords(self, text: str) -> tuple[bool, str | None]:
         """检查关键词黑名单
 
         Returns:
@@ -65,14 +90,16 @@ class RuleEngine:
                 return True, keyword
         return False, None
 
-    def check_urls(self, text: str) -> Tuple[bool, List[str], str]:
+    def check_urls(self, text: str) -> tuple[bool, list[str], str]:
         """检查 URL 和链接
 
         Returns:
             (是否可疑, URL列表, 原因)
         """
         # 提取所有 URL
-        url_pattern = r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
+        url_pattern = (
+            r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+"
+        )
         urls = re.findall(url_pattern, text)
 
         if not urls:
@@ -130,7 +157,7 @@ class RuleEngine:
             return True
         return False
 
-    def check_contact_info(self, text: str) -> Tuple[bool, str]:
+    def check_contact_info(self, text: str) -> tuple[bool, str]:
         """检查联系方式（微信、QQ、电话等）
 
         Returns:
@@ -179,10 +206,10 @@ class RuleEngine:
 
         emoji_pattern = re.compile(
             "["
-            "\U0001F600-\U0001F64F"  # 表情符号
-            "\U0001F300-\U0001F5FF"  # 符号和象形文字
-            "\U0001F680-\U0001F6FF"  # 交通和地图符号
-            "\U0001F1E0-\U0001F1FF"  # 旗帜
+            "\U0001f600-\U0001f64f"  # 表情符号
+            "\U0001f300-\U0001f5ff"  # 符号和象形文字
+            "\U0001f680-\U0001f6ff"  # 交通和地图符号
+            "\U0001f1e0-\U0001f1ff"  # 旗帜
             "]+",
             flags=re.UNICODE,
         )
@@ -256,7 +283,7 @@ class RuleEngine:
 
 
 # 全局规则引擎实例
-_rule_engine: Optional[RuleEngine] = None
+_rule_engine: RuleEngine | None = None
 
 
 def get_rule_engine() -> RuleEngine:

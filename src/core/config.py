@@ -1,7 +1,6 @@
 """核心配置模块，使用 Pydantic Settings 管理环境变量"""
 
-from typing import Optional
-from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,7 +29,7 @@ class Settings(BaseSettings):
     redis_host: str = Field(default="localhost", description="Redis 主机")
     redis_port: int = Field(default=6379, description="Redis 端口")
     redis_db: int = Field(default=0, description="Redis 数据库")
-    redis_password: Optional[str] = Field(default=None, description="Redis 密码")
+    redis_password: str | None = Field(default=None, description="Redis 密码")
 
     # 应用配置
     log_level: str = Field(default="INFO", description="日志级别")
@@ -46,22 +45,19 @@ class Settings(BaseSettings):
     max_warnings: int = Field(default=3, description="最大警告次数")
 
     # AI 模型路径
-    ml_model_path: str = Field(
-        default="data/models/spam_classifier.pkl", description="ML 模型路径"
-    )
+    ml_model_path: str = Field(default="data/models/spam_classifier.pkl", description="ML 模型路径")
     embedding_model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5", description="Embedding 模型名称"
     )
     # OCR 功能配置
     enable_ocr: bool = Field(
-        default=False,
-        description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
+        default=False, description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
     )
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
         ...,
         description="模型文件签名密钥（必填：防止模型文件被篡改，请使用随机生成的密钥）",
-        min_length=32  # 要求至少 32 个字符以确保安全性
+        min_length=32,  # 要求至少 32 个字符以确保安全性
     )
 
     @field_validator("admin_ids", mode="before")

@@ -1,9 +1,9 @@
 """通用工具函数模块"""
 
-import html
 import asyncio
+import html
 import re
-from typing import Optional
+
 from loguru import logger
 
 
@@ -24,8 +24,8 @@ async def check_admin_permission(message, bot) -> bool:
 
     ✅ P1-10: 使用 Redis 缓存减少 API 调用
     """
-    from src.core.config import settings
     from src.core.cache import PermissionCache
+    from src.core.config import settings
 
     # 1. 检查是否是匿名管理员
     # 当管理员以"匿名管理员"身份执行命令时，sender_chat 会被设置为群组本身
@@ -41,7 +41,7 @@ async def check_admin_permission(message, bot) -> bool:
     return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
 
 
-def escape_html(text: Optional[str]) -> str:
+def escape_html(text: str | None) -> str:
     """转义 HTML 特殊字符，防止 HTML 注入
 
     Args:
@@ -68,15 +68,12 @@ def format_user_mention(user) -> str:
     name = escape_html(user.full_name or user.first_name or "Unknown")
 
     # 用户名或 ID
-    if user.username:
-        identifier = f"@{user.username}"
-    else:
-        identifier = f"ID:{user.id}"
+    identifier = f"@{user.username}" if user.username else f"ID:{user.id}"
 
     return f"{name} ({identifier})"
 
 
-def mask_text(text: Optional[str], show_length: int = 10) -> str:
+def mask_text(text: str | None, show_length: int = 10) -> str:
     """脱敏文本内容，用于日志记录
 
     Args:
@@ -97,7 +94,7 @@ def mask_text(text: Optional[str], show_length: int = 10) -> str:
     return f"{text_str[:show_length]}...*** (length: {len(text_str)})"
 
 
-def parse_time_to_seconds(time_str: str) -> Optional[int]:
+def parse_time_to_seconds(time_str: str) -> int | None:
     """解析时间字符串为秒数
 
     Args:
@@ -167,13 +164,12 @@ async def auto_delete_message(message, delay: int = 30) -> None:
         - 此函数会创建一个异步任务在后台执行
         - 如果消息已被删除或权限不足，会静默失败
     """
+
     async def _delete():
         try:
             await asyncio.sleep(delay)
             await message.delete()
-            logger.debug(
-                f"自动删除消息 [群组:{message.chat.id}] [消息ID:{message.message_id}]"
-            )
+            logger.debug(f"自动删除消息 [群组:{message.chat.id}] [消息ID:{message.message_id}]")
         except Exception as e:
             # 静默处理删除失败（消息可能已被手动删除或权限不足）
             logger.debug(
@@ -184,7 +180,7 @@ async def auto_delete_message(message, delay: int = 30) -> None:
     asyncio.create_task(_delete())
 
 
-def parse_message_link(text: str) -> Optional[int]:
+def parse_message_link(text: str) -> int | None:
     """从消息链接或消息ID中提取消息ID
 
     支持的格式：
@@ -226,8 +222,8 @@ def parse_message_link(text: str) -> Optional[int]:
     # - (?:\?|$) : 后面跟查询参数或结束
 
     patterns = [
-        r't\.me/c/\d+/(\d+)',           # 私有群组：t.me/c/chat_id/message_id
-        r't\.me/[^/]+/(\d+)',            # 公开频道/群组：t.me/channel/message_id
+        r"t\.me/c/\d+/(\d+)",  # 私有群组：t.me/c/chat_id/message_id
+        r"t\.me/[^/]+/(\d+)",  # 公开频道/群组：t.me/channel/message_id
     ]
 
     for pattern in patterns:
@@ -241,4 +237,3 @@ def parse_message_link(text: str) -> Optional[int]:
     # 解析失败
     logger.debug(f"无法从文本中解析消息ID: {text}")
     return None
-

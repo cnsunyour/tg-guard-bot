@@ -1,9 +1,10 @@
 """操作日志模型"""
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, String, DateTime, JSON
-from sqlalchemy.orm import Mapped, mapped_column
+
+from sqlalchemy import BigInteger, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
 

@@ -1,12 +1,12 @@
 """审计日志数据仓库"""
 
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
-from sqlalchemy import select, and_
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any
 
-from src.models.audit_log import AuditLog
+from sqlalchemy import and_, select
+
 from src.core.database import get_db_session
+from src.models.audit_log import AuditLog
 
 
 class AuditRepository:
@@ -17,8 +17,8 @@ class AuditRepository:
         group_id: int,
         operator_id: int,
         action: str,
-        target_user_id: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None,
+        target_user_id: int | None = None,
+        details: dict[str, Any] | None = None,
     ) -> AuditLog:
         """记录操作日志"""
         async with get_db_session() as session:
@@ -36,11 +36,11 @@ class AuditRepository:
 
     @staticmethod
     async def get_logs(
-        group_id: Optional[int] = None,
-        operator_id: Optional[int] = None,
-        action: Optional[str] = None,
+        group_id: int | None = None,
+        operator_id: int | None = None,
+        action: str | None = None,
         limit: int = 100,
-    ) -> List[AuditLog]:
+    ) -> list[AuditLog]:
         """获取操作日志"""
         async with get_db_session() as session:
             query = select(AuditLog)
@@ -62,17 +62,13 @@ class AuditRepository:
             return list(result.scalars().all())
 
     @staticmethod
-    async def get_recent_logs(
-        group_id: int, hours: int = 24, limit: int = 50
-    ) -> List[AuditLog]:
+    async def get_recent_logs(group_id: int, hours: int = 24, limit: int = 50) -> list[AuditLog]:
         """获取最近的操作日志"""
         async with get_db_session() as session:
             since = datetime.utcnow() - timedelta(hours=hours)
             result = await session.execute(
                 select(AuditLog)
-                .where(
-                    and_(AuditLog.group_id == group_id, AuditLog.created_at >= since)
-                )
+                .where(and_(AuditLog.group_id == group_id, AuditLog.created_at >= since))
                 .order_by(AuditLog.created_at.desc())
                 .limit(limit)
             )
@@ -81,7 +77,7 @@ class AuditRepository:
     @staticmethod
     async def get_user_actions(
         group_id: int, target_user_id: int, limit: int = 20
-    ) -> List[AuditLog]:
+    ) -> list[AuditLog]:
         """获取针对特定用户的操作记录"""
         async with get_db_session() as session:
             result = await session.execute(

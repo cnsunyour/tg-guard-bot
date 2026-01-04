@@ -4,15 +4,15 @@
 """
 
 from src.core.database import Base
-from src.models.group import Group
-from src.models.user import Warning
-from src.models.spam_sample import SpamSample
 from src.models.audit_log import AuditLog
+from src.models.group import Group
+from src.models.spam_sample import SpamSample
+from src.models.user import Warning
 
 __all__ = [
+    "AuditLog",
     "Base",
     "Group",
-    "Warning",
     "SpamSample",
-    "AuditLog",
+    "Warning",
 ]

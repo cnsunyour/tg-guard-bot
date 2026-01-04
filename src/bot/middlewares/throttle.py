@@ -1,8 +1,10 @@
 """速率限制中间件 - 防止 DoS 攻击"""
 
-from typing import Callable, Dict, Any, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from aiogram import BaseMiddleware
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
 from src.core.redis import get_redis
@@ -31,9 +33,9 @@ class ThrottleMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[Message | CallbackQuery, Dict[str, Any]], Awaitable[Any]],
+        handler: Callable[[Message | CallbackQuery, dict[str, Any]], Awaitable[Any]],
         event: Message | CallbackQuery,
-        data: Dict[str, Any],
+        data: dict[str, Any],
     ) -> Any:
         """处理速率限制"""
         # 获取用户 ID

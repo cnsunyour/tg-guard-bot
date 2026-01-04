@@ -1,8 +1,7 @@
 """Telegram Bot 主程序"""
 
-import sys
 import asyncio
-from contextlib import asynccontextmanager
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -10,9 +9,9 @@ from aiogram.enums import ParseMode
 from loguru import logger
 
 from src.core.config import settings
-from src.core.database import init_db, close_db
-from src.core.redis import close_redis
+from src.core.database import close_db, init_db
 from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关闭函数
+from src.core.redis import close_redis
 
 
 async def setup_bot() -> tuple[Bot, Dispatcher]:
@@ -25,7 +24,8 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     # 注册路由器
-    from src.bot.handlers import verification, admin, moderation, antispam, events
+    from src.bot.handlers import admin, antispam, events, moderation, verification
+
     dp.include_router(events.router)  # 系统事件（最高优先级）
     dp.include_router(admin.router)  # 管理命令
     dp.include_router(moderation.router)  # 群管理命令
@@ -56,16 +56,19 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     # ✅ 注册白名单中间件（最高优先级）
     from src.bot.middlewares import WhitelistMiddleware
+
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
 
     # ✅ 注册速率限制中间件（防止 DoS 攻击）
     from src.bot.middlewares import ThrottleMiddleware
+
     dp.message.middleware(ThrottleMiddleware(rate_limit=3, time_window=1))
     dp.callback_query.middleware(ThrottleMiddleware(rate_limit=5, time_window=1))
 
     # ✅ 注册自动删除中间件（在群组中自动删除命令消息和响应）
     from src.bot.middlewares import AutoDeleteMiddleware
+
     dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
     return bot, dp

@@ -1,14 +1,12 @@
 """Redis 连接管理模块"""
 
-from typing import Optional
-
-from redis.asyncio import Redis, ConnectionPool
+from redis.asyncio import ConnectionPool, Redis
 
 from src.core.config import settings
 
 # 全局 Redis 连接池和客户端
-_redis_pool: Optional[ConnectionPool] = None
-_redis_client: Optional[Redis] = None
+_redis_pool: ConnectionPool | None = None
+_redis_client: Redis | None = None
 
 
 def get_redis_pool() -> ConnectionPool:

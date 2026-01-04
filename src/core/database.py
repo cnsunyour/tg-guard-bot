@@ -1,7 +1,7 @@
 """数据库连接管理模块"""
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -67,7 +67,7 @@ async def init_db() -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         # 导入所有模型以确保它们被注册
-        from src.models import group, user, spam_sample, audit_log, report  # noqa: F401
+        from src.models import audit_log, group, report, spam_sample, user  # noqa: F401
 
         await conn.run_sync(Base.metadata.create_all)
 
@@ -93,10 +93,10 @@ def __getattr__(name: str):
 # 显式导出供外部使用的对象
 __all__ = [
     "Base",
-    "engine",  # 通过 __getattr__ 提供
+    "close_db",
+    "engine",  # 通过 __getattr__ 提供  # noqa: F822
+    "get_db_session",
     "get_engine",
     "get_session_factory",
-    "get_db_session",
     "init_db",
-    "close_db",
 ]

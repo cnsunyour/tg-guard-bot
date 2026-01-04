@@ -1,25 +1,28 @@
 """群管理命令处理器"""
 
 import re
-from typing import Optional
 
-from aiogram import Router, Bot, F
-from aiogram.types import Message
+from aiogram import Bot, Router
 from aiogram.filters import Command
+from aiogram.types import Message
 from loguru import logger
 
-from src.services.moderation import ModerationService
-from src.repositories.user_repo import UserRepository
-from src.repositories.spam_repo import SpamRepository
-from src.repositories.report_repo import ReportRepository
 from src.core.config import settings
-from src.core.utils import escape_html, auto_delete_message, check_admin_permission, parse_message_link
-from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
+from src.core.utils import (
+    auto_delete_message,
+    check_admin_permission,
+    escape_html,
+    parse_message_link,
+)
+from src.repositories.report_repo import ReportRepository
+from src.repositories.spam_repo import SpamRepository
+from src.repositories.user_repo import UserRepository
+from src.services.moderation import ModerationService
 
 router = Router(name="moderation")
 
 
-def parse_user_from_message(message: Message) -> Optional[int]:
+def parse_user_from_message(message: Message) -> int | None:
     """从消息中解析用户ID
 
     支持的格式：
@@ -63,15 +66,15 @@ def parse_user_from_message(message: Message) -> Optional[int]:
             # 如果是 @username 格式但没有在 entities 中找到
             if arg.startswith("@"):
                 logger.warning(
-                    f"检测到 @username 格式但无法解析用户ID。"
-                    f"可能原因：用户没有在群组中，或需要使用 text_mention。"
+                    "检测到 @username 格式但无法解析用户ID。"
+                    "可能原因：用户没有在群组中，或需要使用 text_mention。"
                 )
                 return None
 
     return None
 
 
-def parse_duration(text: str) -> Optional[int]:
+def parse_duration(text: str) -> int | None:
     """解析时长（支持格式：30m, 2h, 1d）
 
     Returns:
@@ -107,8 +110,6 @@ def parse_duration(text: str) -> Optional[int]:
         return MAX_DAYS * 24 * 60
 
     return minutes
-
-
 
 
 @router.message(Command("kick"))
@@ -437,8 +438,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
 
     if success:
         response = (
-            f"⚠️ 已警告用户 {target_user_id}\n"
-            f"累计警告: {warning_count}/{settings.max_warnings}"
+            f"⚠️ 已警告用户 {target_user_id}\n" f"累计警告: {warning_count}/{settings.max_warnings}"
         )
         if reason:
             # ✅ P1-8: 转义用户输入的原因，防止 HTML 注入
@@ -594,9 +594,7 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\\n"
-        f"成功: {success_count} 条\\n"
-        f"失败: {fail_count} 条"
+        f"✅ 删除完成\\n" f"成功: {success_count} 条\\n" f"失败: {fail_count} 条"
     )
     await auto_delete_message(reply)
 
@@ -656,9 +654,7 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\\n"
-        f"成功: {success_count} 条\\n"
-        f"失败: {fail_count} 条"
+        f"✅ 删除完成\\n" f"成功: {success_count} 条\\n" f"失败: {fail_count} 条"
     )
     await auto_delete_message(reply)
 
@@ -686,7 +682,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
             "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID或链接&gt;\\n\\n"
             "<b>示例1</b>: /delrange 12345\\n"
             "<b>示例2</b>: /delrange https://t.me/c/1234567890/12345\\n\\n"
-            "💡 <b>提示</b>: 在电脑端右键点击消息选择\"复制消息链接\"，然后直接粘贴即可"
+            '💡 <b>提示</b>: 在电脑端右键点击消息选择"复制消息链接"，然后直接粘贴即可'
         )
         await auto_delete_message(reply)
         return
@@ -718,8 +714,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     message_range = abs(end_message_id - start_message_id) + 1
     if message_range > 1000:
         reply = await message.answer(
-            f"❌ 删除范围过大（{message_range} 条消息）\\n"
-            "为了安全，单次最多删除 1000 条消息"
+            f"❌ 删除范围过大（{message_range} 条消息）\\n" "为了安全，单次最多删除 1000 条消息"
         )
         await auto_delete_message(reply)
         return
@@ -844,8 +839,7 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
 
             if recent_reports >= 10:
                 reply = await message.answer(
-                    "❌ 您今天的举报次数已达上限（10次）\n"
-                    "如有紧急情况，请联系管理员"
+                    "❌ 您今天的举报次数已达上限（10次）\n" "如有紧急情况，请联系管理员"
                 )
                 await auto_delete_message(reply)
                 return
@@ -908,7 +902,7 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
         # 构建举报列表
         response = f"📋 <b>待处理举报</b> (共 {len(reports)} 条)\n\n"
 
-        for idx, report in enumerate(reports, 1):
+        for _idx, report in enumerate(reports, 1):
             # 格式化时间
             time_str = report.created_at.strftime("%m-%d %H:%M")
 
@@ -988,10 +982,7 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
 
         # 检查状态
         if report.status != "pending":
-            reply = await message.answer(
-                f"❌ 此举报已被处理\n"
-                f"状态: {report.status}"
-            )
+            reply = await message.answer(f"❌ 此举报已被处理\n" f"状态: {report.status}")
             await auto_delete_message(reply)
             return
 
@@ -1056,7 +1047,3 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         logger.error(f"处理举报失败: {e}")
         reply = await message.answer("❌ 处理举报失败，请稍后重试")
         await auto_delete_message(reply)
-
-
-
-

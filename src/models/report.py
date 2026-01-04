@@ -1,7 +1,8 @@
 """举报记录模型"""
 
 from datetime import datetime
-from sqlalchemy import BigInteger, String, Text, Boolean, DateTime, Integer
+
+from sqlalchemy import BigInteger, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base

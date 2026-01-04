@@ -3,17 +3,18 @@
 ✅ P1-11: CPU 密集型操作已移至线程池
 """
 
-from typing import Tuple, Dict, Any, Optional
+from typing import Any
+
 from loguru import logger
 
-from src.ml.rule_engine import get_rule_engine
+from src.core.config import settings
+from src.core.executor import run_in_executor  # ✅ P1-11: 导入线程池执行器
+from src.core.utils import mask_text
 from src.ml.classifier import get_classifier
 from src.ml.embedder import get_embedder
 from src.ml.ocr import get_ocr_extractor
+from src.ml.rule_engine import get_rule_engine
 from src.repositories.spam_repo import SpamRepository
-from src.core.config import settings
-from src.core.utils import mask_text
-from src.core.executor import run_in_executor  # ✅ P1-11: 导入线程池执行器
 
 
 class SpamDetector:
@@ -26,7 +27,7 @@ class SpamDetector:
         self.embedder = get_embedder()
         self.ocr_extractor = get_ocr_extractor()
 
-    async def detect(self, text: str, user_id: int, chat_id: int) -> Dict[str, Any]:
+    async def detect(self, text: str, user_id: int, chat_id: int) -> dict[str, Any]:
         """检测文本是否为垃圾信息
 
         Args:
@@ -66,9 +67,7 @@ class SpamDetector:
         if self.classifier.is_trained:
             try:
                 # ✅ P1-11: 在线程池中运行 ML 推理
-                is_spam_ml, confidence_ml = await run_in_executor(
-                    self.classifier.predict, text
-                )
+                is_spam_ml, confidence_ml = await run_in_executor(self.classifier.predict, text)
 
                 if is_spam_ml and confidence_ml > settings.spam_threshold_ml:
                     result["is_spam"] = True
@@ -77,8 +76,7 @@ class SpamDetector:
                     result["reasons"].append(f"ML 分类器 (置信度: {confidence_ml:.2f})")
 
                     logger.info(
-                        f"Stage 2 检测到垃圾信息 [用户:{user_id}] "
-                        f"置信度: {confidence_ml:.2f}"
+                        f"Stage 2 检测到垃圾信息 [用户:{user_id}] " f"置信度: {confidence_ml:.2f}"
                     )
                     return result
 
@@ -89,9 +87,7 @@ class SpamDetector:
         if self.embedder.is_initialized:
             try:
                 # ✅ P1-11: 在线程池中运行 Embedding 推理
-                is_spam_emb, similarity = await run_in_executor(
-                    self.embedder.predict, text
-                )
+                is_spam_emb, similarity = await run_in_executor(self.embedder.predict, text)
 
                 if is_spam_emb:
                     result["is_spam"] = True
@@ -100,8 +96,7 @@ class SpamDetector:
                     result["reasons"].append(f"语义相似度 ({similarity:.2f})")
 
                     logger.info(
-                        f"Stage 3 检测到垃圾信息 [用户:{user_id}] "
-                        f"相似度: {similarity:.2f}"
+                        f"Stage 3 检测到垃圾信息 [用户:{user_id}] " f"相似度: {similarity:.2f}"
                     )
                     return result
 
@@ -112,9 +107,7 @@ class SpamDetector:
         logger.debug(f"消息通过检测 [用户:{user_id}]")
         return result
 
-    async def detect_image(
-        self, image_path: str, user_id: int, chat_id: int
-    ) -> Dict[str, Any]:
+    async def detect_image(self, image_path: str, user_id: int, chat_id: int) -> dict[str, Any]:
         """检测图片是否为垃圾信息（通过 OCR 提取文字）
 
         Args:
@@ -141,23 +134,16 @@ class SpamDetector:
         # 提取图片中的文字
         try:
             # ✅ P1-11: OCR 是 CPU 密集型操作，在线程池中运行
-            extracted_text = await run_in_executor(
-                self.ocr_extractor.extract_text, image_path
-            )
+            extracted_text = await run_in_executor(self.ocr_extractor.extract_text, image_path)
 
             if not extracted_text:
                 logger.debug(f"图片中未提取到文字 [用户:{user_id}]")
                 return result
 
-            logger.info(
-                f"从图片提取文字 [用户:{user_id}] "
-                f"内容: {mask_text(extracted_text)}"
-            )
+            logger.info(f"从图片提取文字 [用户:{user_id}] " f"内容: {mask_text(extracted_text)}")
 
             # 使用文本检测管道检测提取的文字
-            text_result = await self.detect(
-                text=extracted_text, user_id=user_id, chat_id=chat_id
-            )
+            text_result = await self.detect(text=extracted_text, user_id=user_id, chat_id=chat_id)
 
             if text_result["is_spam"]:
                 # 标记为图片垃圾
@@ -179,7 +165,7 @@ class SpamDetector:
             return result
 
     async def add_feedback(
-        self, text: str, is_spam: bool, labeled_by: int, confidence: Optional[float] = None
+        self, text: str, is_spam: bool, labeled_by: int, confidence: float | None = None
     ) -> bool:
         """添加管理员反馈样本
 
@@ -201,8 +187,7 @@ class SpamDetector:
             )
 
             logger.info(
-                f"已添加反馈样本 [标注者:{labeled_by}] "
-                f"类型: {'垃圾' if is_spam else '正常'}"
+                f"已添加反馈样本 [标注者:{labeled_by}] " f"类型: {'垃圾' if is_spam else '正常'}"
             )
             return True
 
@@ -210,7 +195,7 @@ class SpamDetector:
             logger.error(f"添加反馈样本失败: {e}")
             return False
 
-    async def get_statistics(self) -> Dict[str, Any]:
+    async def get_statistics(self) -> dict[str, Any]:
         """获取统计信息"""
         try:
             total_samples = await SpamRepository.count_samples()
@@ -229,7 +214,7 @@ class SpamDetector:
             logger.error(f"获取统计信息失败: {e}")
             return {}
 
-    async def retrain_model(self) -> Tuple[bool, str]:
+    async def retrain_model(self) -> tuple[bool, str]:
         """重新训练模型
 
         Returns:
@@ -244,9 +229,7 @@ class SpamDetector:
 
             # 训练分类器
             # ✅ P1-11: 模型训练是 CPU 密集型操作，在线程池中运行
-            accuracy, metrics = await run_in_executor(
-                self.classifier.train, texts, labels
-            )
+            accuracy, metrics = await run_in_executor(self.classifier.train, texts, labels)
 
             # 保存模型
             saved = self.classifier.save_model()
@@ -267,11 +250,11 @@ class SpamDetector:
 
         except Exception as e:
             logger.error(f"重新训练模型失败: {e}")
-            return False, f"训练失败: {str(e)}"
+            return False, f"训练失败: {e!s}"
 
 
 # 全局检测器实例
-_detector: Optional[SpamDetector] = None
+_detector: SpamDetector | None = None
 
 
 def get_detector() -> SpamDetector:

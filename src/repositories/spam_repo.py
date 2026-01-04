@@ -1,11 +1,9 @@
 """垃圾样本数据仓库"""
 
-from typing import List, Optional, Tuple
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
-from src.models.spam_sample import SpamSample
 from src.core.database import get_db_session
+from src.models.spam_sample import SpamSample
 
 
 class SpamRepository:
@@ -15,8 +13,8 @@ class SpamRepository:
     async def add_sample(
         text: str,
         is_spam: bool,
-        confidence: Optional[float] = None,
-        labeled_by: Optional[int] = None,
+        confidence: float | None = None,
+        labeled_by: int | None = None,
     ) -> SpamSample:
         """添加样本
 
@@ -40,8 +38,8 @@ class SpamRepository:
 
     @staticmethod
     async def get_all_samples(
-        is_spam: Optional[bool] = None, limit: Optional[int] = None
-    ) -> List[SpamSample]:
+        is_spam: bool | None = None, limit: int | None = None
+    ) -> list[SpamSample]:
         """获取所有样本
 
         Args:
@@ -63,7 +61,7 @@ class SpamRepository:
             return list(result.scalars().all())
 
     @staticmethod
-    async def get_training_data() -> Tuple[List[str], List[bool]]:
+    async def get_training_data() -> tuple[list[str], list[bool]]:
         """获取训练数据
 
         Returns:
@@ -77,7 +75,7 @@ class SpamRepository:
         return texts, labels
 
     @staticmethod
-    async def count_samples(is_spam: Optional[bool] = None) -> int:
+    async def count_samples(is_spam: bool | None = None) -> int:
         """统计样本数量
 
         Args:
@@ -100,9 +98,7 @@ class SpamRepository:
             sample_id: 样本 ID
         """
         async with get_db_session() as session:
-            result = await session.execute(
-                select(SpamSample).where(SpamSample.id == sample_id)
-            )
+            result = await session.execute(select(SpamSample).where(SpamSample.id == sample_id))
             sample = result.scalar_one_or_none()
 
             if sample:
@@ -113,7 +109,7 @@ class SpamRepository:
             return False
 
     @staticmethod
-    async def get_recent_samples(limit: int = 100) -> List[SpamSample]:
+    async def get_recent_samples(limit: int = 100) -> list[SpamSample]:
         """获取最近的样本
 
         Args:
@@ -121,16 +117,12 @@ class SpamRepository:
         """
         async with get_db_session() as session:
             result = await session.execute(
-                select(SpamSample)
-                .order_by(SpamSample.created_at.desc())
-                .limit(limit)
+                select(SpamSample).order_by(SpamSample.created_at.desc()).limit(limit)
             )
             return list(result.scalars().all())
 
     @staticmethod
-    async def update_sample_label(
-        sample_id: int, is_spam: bool, labeled_by: int
-    ) -> bool:
+    async def update_sample_label(sample_id: int, is_spam: bool, labeled_by: int) -> bool:
         """更新样本标签
 
         Args:
@@ -139,9 +131,7 @@ class SpamRepository:
             labeled_by: 标注者 ID
         """
         async with get_db_session() as session:
-            result = await session.execute(
-                select(SpamSample).where(SpamSample.id == sample_id)
-            )
+            result = await session.execute(select(SpamSample).where(SpamSample.id == sample_id))
             sample = result.scalar_one_or_none()
 
             if sample:

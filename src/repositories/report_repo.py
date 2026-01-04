@@ -1,12 +1,11 @@
 """举报记录数据仓库"""
 
-from typing import List, Optional
 from datetime import datetime
-from sqlalchemy import select, and_, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.report import Report
+from sqlalchemy import and_, func, select
+
 from src.core.database import get_db_session
+from src.models.report import Report
 
 
 class ReportRepository:
@@ -18,8 +17,8 @@ class ReportRepository:
         reporter_id: int,
         reported_user_id: int,
         message_id: int,
-        message_text: Optional[str] = None,
-        reason: Optional[str] = None,
+        message_text: str | None = None,
+        reason: str | None = None,
     ) -> Report:
         """创建举报记录
 
@@ -47,7 +46,7 @@ class ReportRepository:
             return report
 
     @staticmethod
-    async def get_pending_reports(group_id: int, limit: int = 10) -> List[Report]:
+    async def get_pending_reports(group_id: int, limit: int = 10) -> list[Report]:
         """获取待处理的举报
 
         Args:
@@ -70,7 +69,7 @@ class ReportRepository:
             return list(result.scalars().all())
 
     @staticmethod
-    async def get_report_by_id(report_id: int) -> Optional[Report]:
+    async def get_report_by_id(report_id: int) -> Report | None:
         """根据ID获取举报记录
 
         Args:

@@ -4,8 +4,10 @@
 """
 
 import asyncio
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Any, TypeVar
+from typing import Any, TypeVar
+
 from loguru import logger
 
 from src.core.config import settings
@@ -27,15 +29,12 @@ def get_executor() -> ThreadPoolExecutor:
         # 根据 CPU 核心数设置线程数
         # 对于 CPU 密集型任务，通常设置为 CPU 核心数
         max_workers = getattr(settings, "cpu_executor_workers", None) or 2
-        _executor = ThreadPoolExecutor(
-            max_workers=max_workers,
-            thread_name_prefix="cpu_worker_"
-        )
+        _executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="cpu_worker_")
         logger.info(f"线程池已初始化: max_workers={max_workers}")
     return _executor
 
 
-async def run_in_executor(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_in_executor[T](func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """在线程池中运行同步 CPU 密集型函数
 
     Args:
@@ -55,6 +54,7 @@ async def run_in_executor(func: Callable[..., T], *args: Any, **kwargs: Any) -> 
     # 使用 functools.partial 处理关键字参数
     if kwargs:
         from functools import partial
+
         func = partial(func, **kwargs)
 
     try:

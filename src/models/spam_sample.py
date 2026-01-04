@@ -1,7 +1,8 @@
 """垃圾样本模型"""
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, Float, Integer, Text, DateTime
+
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base

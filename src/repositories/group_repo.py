@@ -1,18 +1,16 @@
 """群组数据仓库"""
 
-from typing import Optional, List
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.group import Group
 from src.core.database import get_db_session
+from src.models.group import Group
 
 
 class GroupRepository:
     """群组数据仓库"""
 
     @staticmethod
-    async def get_or_create(chat_id: int, title: Optional[str] = None) -> Group:
+    async def get_or_create(chat_id: int, title: str | None = None) -> Group:
         """获取或创建群组配置"""
         async with get_db_session() as session:
             # 查询群组
@@ -34,14 +32,14 @@ class GroupRepository:
             return group
 
     @staticmethod
-    async def get(chat_id: int) -> Optional[Group]:
+    async def get(chat_id: int) -> Group | None:
         """获取群组配置"""
         async with get_db_session() as session:
             result = await session.execute(select(Group).where(Group.id == chat_id))
             return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_by_id(chat_id: int) -> Optional[Group]:
+    async def get_by_id(chat_id: int) -> Group | None:
         """根据 ID 获取群组配置（别名方法）"""
         return await GroupRepository.get(chat_id)
 
@@ -58,7 +56,7 @@ class GroupRepository:
 
     @staticmethod
     async def update_antispam_settings(
-        chat_id: int, enabled: bool, level: Optional[int] = None
+        chat_id: int, enabled: bool, level: int | None = None
     ) -> None:
         """更新反垃圾设置"""
         async with get_db_session() as session:
@@ -83,10 +81,10 @@ class GroupRepository:
                 await session.commit()
 
     @staticmethod
-    async def get_whitelisted_groups() -> List[Group]:
+    async def get_whitelisted_groups() -> list[Group]:
         """获取所有白名单群组"""
         async with get_db_session() as session:
             result = await session.execute(
-                select(Group).where(Group.is_whitelisted == True).order_by(Group.id)
+                select(Group).where(Group.is_whitelisted).order_by(Group.id)
             )
             return list(result.scalars().all())

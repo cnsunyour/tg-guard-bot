@@ -3,7 +3,6 @@
 ✅ P1-10: 实施权限检查缓存，避免频繁调用 Telegram API
 """
 
-from typing import Optional
 from aiogram import Bot
 from loguru import logger
 
@@ -122,7 +121,7 @@ class GroupConfigCache:
         return f"group_config:{chat_id}"
 
     @staticmethod
-    async def get(chat_id: int) -> Optional[dict]:
+    async def get(chat_id: int) -> dict | None:
         """从缓存获取群组配置
 
         Args:
@@ -138,6 +137,7 @@ class GroupConfigCache:
             cached = await redis.get(cache_key)
             if cached:
                 import json
+
                 logger.debug(f"群组配置命中缓存 [群组:{chat_id}]")
                 return json.loads(cached)
             return None
@@ -159,10 +159,11 @@ class GroupConfigCache:
 
         try:
             import json
+
             await redis.setex(
                 cache_key,
                 GroupConfigCache.CACHE_TTL,
-                json.dumps(config, default=str)  # default=str 处理日期等类型
+                json.dumps(config, default=str),  # default=str 处理日期等类型
             )
             logger.debug(f"已设置群组配置缓存 [群组:{chat_id}]")
 

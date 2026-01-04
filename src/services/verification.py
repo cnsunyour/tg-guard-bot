@@ -1,13 +1,11 @@
 """验证服务模块"""
 
 import secrets
-from typing import Optional
 from dataclasses import dataclass
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from src.core.redis import get_redis, RedisKeys
-from src.core.config import settings
+from src.core.redis import RedisKeys, get_redis
 from src.core.utils import escape_html
 
 
@@ -222,7 +220,7 @@ class VerificationService:
 
         # 解析存储的值
         if ":" in stored_value:
-            challenge_type, correct_answer = stored_value.split(":", 1)
+            _challenge_type, correct_answer = stored_value.split(":", 1)
             return answer == correct_answer
         else:
             # 按钮验证类型

@@ -1,14 +1,15 @@
 """健康检查和性能监控模块"""
 
 import time
-import psutil
-from typing import Dict, Any
 from datetime import datetime
+from typing import Any
+
+import psutil
 from loguru import logger
+from sqlalchemy import text
 
 from src.core.database import engine
 from src.core.redis import get_redis
-from sqlalchemy import text
 
 
 class HealthChecker:
@@ -19,7 +20,7 @@ class HealthChecker:
         self.start_time = time.time()
         self.check_count = 0
 
-    async def check_database(self) -> Dict[str, Any]:
+    async def check_database(self) -> dict[str, Any]:
         """检查数据库连接
 
         Returns:
@@ -48,7 +49,7 @@ class HealthChecker:
                 "error": str(e),
             }
 
-    async def check_redis(self) -> Dict[str, Any]:
+    async def check_redis(self) -> dict[str, Any]:
         """检查 Redis 连接
 
         Returns:
@@ -78,7 +79,7 @@ class HealthChecker:
                 "error": str(e),
             }
 
-    def get_system_metrics(self) -> Dict[str, Any]:
+    def get_system_metrics(self) -> dict[str, Any]:
         """获取系统性能指标
 
         Returns:
@@ -115,7 +116,7 @@ class HealthChecker:
             logger.error(f"获取系统指标失败: {e}")
             return {}
 
-    def get_uptime(self) -> Dict[str, Any]:
+    def get_uptime(self) -> dict[str, Any]:
         """获取运行时间
 
         Returns:
@@ -134,7 +135,7 @@ class HealthChecker:
             "started_at": datetime.fromtimestamp(self.start_time).isoformat(),
         }
 
-    async def full_check(self) -> Dict[str, Any]:
+    async def full_check(self) -> dict[str, Any]:
         """执行完整健康检查
 
         Returns:

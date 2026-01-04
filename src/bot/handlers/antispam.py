@@ -2,21 +2,22 @@
 
 import re
 import tempfile
-from pathlib import Path
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from pathlib import Path
+
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 
-from src.services.spam_detector import get_detector
-from src.services.moderation import ModerationService
-from src.repositories.group_repo import GroupRepository
-from src.core.config import settings
-from src.core.utils import format_user_mention, auto_delete_message, check_admin_permission
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
-from src.core.redis import get_redis, RedisKeys  # ✅ P1-12: 导入 Redis 和键管理
+from src.core.config import settings
+from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
+from src.core.utils import auto_delete_message, check_admin_permission, format_user_mention
+from src.repositories.group_repo import GroupRepository
+from src.services.moderation import ModerationService
+from src.services.spam_detector import get_detector
 
 router = Router(name="antispam")
 
@@ -53,10 +54,7 @@ def is_anonymous_admin(message: Message) -> bool:
     Returns:
         是否是匿名管理员消息
     """
-    return (
-        message.sender_chat is not None
-        and message.sender_chat.id == message.chat.id
-    )
+    return message.sender_chat is not None and message.sender_chat.id == message.chat.id
 
 
 @contextmanager
@@ -217,14 +215,12 @@ async def on_antispam_retrain(callback: CallbackQuery) -> None:
     """重新训练模型"""
     try:
         _, chat_id_str = callback.data.split(":")
-        chat_id = int(chat_id_str)
+        int(chat_id_str)
 
         # ✅ 权限验证 - 重训练是敏感操作，仅超级管理员可执行
         if callback.from_user.id not in settings.admin_ids:
             await callback.answer("❌ 只有超级管理员可以重新训练模型", show_alert=True)
-            logger.warning(
-                f"用户 {callback.from_user.id} 尝试触发模型重训练但无权限"
-            )
+            logger.warning(f"用户 {callback.from_user.id} 尝试触发模型重训练但无权限")
             return
 
         await callback.answer("正在训练模型，请稍候...")
@@ -241,6 +237,7 @@ async def on_antispam_retrain(callback: CallbackQuery) -> None:
         logger.error(f"重新训练模型失败: {e}")
         await callback.answer("❌ 训练失败", show_alert=True)
 
+
 @router.message(F.text)
 async def on_message(message: Message, bot: Bot) -> None:
     """处理所有文本消息，检测垃圾"""
@@ -251,7 +248,7 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 跳过已注册的命令消息
     if message.text.startswith("/"):
         # 提取命令名（格式：/command 或 /command@botname 或 /command args）
-        command_match = re.match(r'^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)', message.text)
+        command_match = re.match(r"^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)", message.text)
         if command_match:
             command_name = command_match.group(1)
             # 只跳过已注册的命令
@@ -471,7 +468,9 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                     # TTL 1小时
                     if "ocr_text" in result["details"]:
                         redis = get_redis()
-                        text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
+                        text_cache_key = RedisKeys.spam_message_text(
+                            message.chat.id, message.message_id
+                        )
                         await redis.setex(text_cache_key, 3600, result["details"]["ocr_text"])
 
                     # 发送提示消息（不包含 OCR 提取的敏感内容）
@@ -528,7 +527,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
     ✅ P1-12: 从 Redis 缓存获取真实文本，而非使用 message_id
     """
     try:
-        _, feedback_type, user_id_str, message_id_str = callback.data.split(":", 3)
+        _, feedback_type, _user_id_str, message_id_str = callback.data.split(":", 3)
 
         # 检查是否是管理员
         if callback.from_user.id not in settings.admin_ids:
@@ -546,9 +545,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
 
         # ✅ P1-12: 从 Redis 获取缓存的原始消息文本
         redis = get_redis()
-        text_cache_key = RedisKeys.spam_message_text(
-            callback.message.chat.id, int(message_id_str)
-        )
+        text_cache_key = RedisKeys.spam_message_text(callback.message.chat.id, int(message_id_str))
         cached_text = await redis.get(text_cache_key)
 
         if cached_text:
@@ -558,12 +555,13 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                 is_spam=is_spam,
                 labeled_by=callback.from_user.id,
             )
-            logger.debug(f"使用缓存文本添加反馈 [消息ID:{message_id_str}] [长度:{len(cached_text)}]")
+            logger.debug(
+                f"使用缓存文本添加反馈 [消息ID:{message_id_str}] [长度:{len(cached_text)}]"
+            )
         else:
             # 缓存已过期或不存在，记录警告但仍然接受反馈
             logger.warning(
-                f"反馈文本缓存未命中 [消息ID:{message_id_str}]，"
-                "可能是缓存过期或系统重启导致"
+                f"反馈文本缓存未命中 [消息ID:{message_id_str}]，" "可能是缓存过期或系统重启导致"
             )
             await callback.answer("⚠️ 原始文本已过期，反馈可能不完整", show_alert=True)
             return
@@ -571,18 +569,16 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         # 更新消息
         feedback_text = "✅ 确认为正常消息" if not is_spam else "❌ 确认为垃圾信息"
         await callback.message.edit_text(
-            callback.message.text + f"\n\n{feedback_text} (by {format_user_mention(callback.from_user)})"
+            callback.message.text
+            + f"\n\n{feedback_text} (by {format_user_mention(callback.from_user)})"
         )
 
         await callback.answer(f"反馈已记录: {feedback_text}")
 
         logger.info(
-            f"管理员反馈 [管理员:{callback.from_user.id}] "
-            f"类型: {'垃圾' if is_spam else '正常'}"
+            f"管理员反馈 [管理员:{callback.from_user.id}] " f"类型: {'垃圾' if is_spam else '正常'}"
         )
 
     except Exception as e:
         logger.error(f"处理管理员反馈失败: {e}")
         await callback.answer("❌ 处理失败", show_alert=True)
-
-

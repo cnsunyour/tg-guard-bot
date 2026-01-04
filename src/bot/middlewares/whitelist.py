@@ -1,9 +1,11 @@
 """群组白名单中间件 - 仅在白名单群组中提供服务"""
 
-from typing import Callable, Dict, Any, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from aiogram import BaseMiddleware, Bot
-from aiogram.types import Message, CallbackQuery, ChatMemberUpdated
 from aiogram.enums import ChatType
+from aiogram.types import CallbackQuery, ChatMemberUpdated, Message
 from loguru import logger
 
 from src.repositories.group_repo import GroupRepository
@@ -18,9 +20,11 @@ class WhitelistMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[Message | CallbackQuery | ChatMemberUpdated, Dict[str, Any]], Awaitable[Any]],
+        handler: Callable[
+            [Message | CallbackQuery | ChatMemberUpdated, dict[str, Any]], Awaitable[Any]
+        ],
         event: Message | CallbackQuery | ChatMemberUpdated,
-        data: Dict[str, Any],
+        data: dict[str, Any],
     ) -> Any:
         """检查群组白名单"""
 
@@ -65,9 +69,7 @@ class WhitelistMiddleware(BaseMiddleware):
         elif isinstance(event, ChatMemberUpdated):
             group_name = event.chat.title or str(chat_id)
 
-        logger.warning(
-            f"群组不在白名单中，准备退出: {group_name} (ID: {chat_id})"
-        )
+        logger.warning(f"群组不在白名单中，准备退出: {group_name} (ID: {chat_id})")
 
         # 尝试发送提示消息
         try:
@@ -75,7 +77,7 @@ class WhitelistMiddleware(BaseMiddleware):
                 await bot.send_message(
                     chat_id=chat_id,
                     text="⚠️ 此群组未在授权列表中，Bot 将自动退出。\n"
-                         "如需使用，请联系 Bot 管理员添加群组白名单。"
+                    "如需使用，请联系 Bot 管理员添加群组白名单。",
                 )
         except Exception as e:
             logger.debug(f"发送退出提示消息失败: {e}")

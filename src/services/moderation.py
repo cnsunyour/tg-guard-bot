@@ -1,15 +1,14 @@
 """群管理服务模块"""
 
-from typing import Optional
 from datetime import datetime, timedelta
 
 from aiogram import Bot
 from aiogram.types import ChatPermissions
 from loguru import logger
 
-from src.repositories.user_repo import UserRepository
-from src.repositories.audit_repo import AuditRepository
 from src.core.config import settings
+from src.repositories.audit_repo import AuditRepository
+from src.repositories.user_repo import UserRepository
 
 
 class ModerationService:
@@ -39,8 +38,8 @@ class ModerationService:
 
     @staticmethod
     async def kick_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: Optional[str] = None
-    ) -> tuple[bool, Optional[str]]:
+        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: str | None = None
+    ) -> tuple[bool, str | None]:
         """踢出用户
 
         Returns:
@@ -78,9 +77,9 @@ class ModerationService:
         chat_id: int,
         user_id: int,
         operator_id: int,
-        duration: Optional[int] = None,
-        reason: Optional[str] = None,
-    ) -> tuple[bool, Optional[str]]:
+        duration: int | None = None,
+        reason: str | None = None,
+    ) -> tuple[bool, str | None]:
         """禁言用户
 
         Args:
@@ -132,9 +131,7 @@ class ModerationService:
             return False, "操作失败，请检查 Bot 权限"
 
     @staticmethod
-    async def unmute_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int
-    ) -> bool:
+    async def unmute_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
         """解除禁言"""
         try:
             # 恢复用户权限
@@ -167,8 +164,8 @@ class ModerationService:
 
     @staticmethod
     async def ban_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: Optional[str] = None
-    ) -> tuple[bool, Optional[str]]:
+        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: str | None = None
+    ) -> tuple[bool, str | None]:
         """永久封禁用户
 
         Returns:
@@ -200,9 +197,7 @@ class ModerationService:
             return False, "操作失败，请检查 Bot 权限"
 
     @staticmethod
-    async def unban_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int
-    ) -> bool:
+    async def unban_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
         """解除封禁"""
         try:
             # 解除封禁
@@ -229,7 +224,7 @@ class ModerationService:
         chat_id: int,
         user_id: int,
         operator_id: int,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> tuple[bool, int, bool]:
         """警告用户
 
@@ -255,8 +250,7 @@ class ModerationService:
             )
 
             logger.info(
-                f"用户 {user_id} 被管理员 {operator_id} 警告，"
-                f"累计警告次数: {warning_count}"
+                f"用户 {user_id} 被管理员 {operator_id} 警告，" f"累计警告次数: {warning_count}"
             )
 
             # 检查是否达到自动禁言阈值
@@ -286,9 +280,7 @@ class ModerationService:
             return False, 0, False
 
     @staticmethod
-    async def clear_warnings(
-        chat_id: int, user_id: int, operator_id: int
-    ) -> tuple[bool, int]:
+    async def clear_warnings(chat_id: int, user_id: int, operator_id: int) -> tuple[bool, int]:
         """清除用户警告
 
         Returns:
@@ -307,9 +299,7 @@ class ModerationService:
                 details={"cleared_count": count},
             )
 
-            logger.info(
-                f"用户 {user_id} 的 {count} 条警告被管理员 {operator_id} 清除"
-            )
+            logger.info(f"用户 {user_id} 的 {count} 条警告被管理员 {operator_id} 清除")
             return True, count
 
         except Exception as e:

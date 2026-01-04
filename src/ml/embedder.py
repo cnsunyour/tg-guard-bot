@@ -1,11 +1,11 @@
 """Embedding 语义分析模块 - Stage 3 语义检测"""
 
-from typing import List, Optional, Tuple
 import numpy as np
 from loguru import logger
 
 try:
     from fastembed import TextEmbedding
+
     FASTEMBED_AVAILABLE = True
 except ImportError:
     FASTEMBED_AVAILABLE = False
@@ -17,15 +17,15 @@ from src.core.config import settings
 class SpamEmbedder:
     """垃圾信息语义嵌入检测器"""
 
-    def __init__(self, model_name: Optional[str] = None):
+    def __init__(self, model_name: str | None = None):
         """初始化 Embedder
 
         Args:
             model_name: 模型名称，默认使用配置中的模型
         """
         self.model_name = model_name or settings.embedding_model_name
-        self.model: Optional[TextEmbedding] = None
-        self.spam_prototypes: List[np.ndarray] = []
+        self.model: TextEmbedding | None = None
+        self.spam_prototypes: list[np.ndarray] = []
         self.is_initialized = False
 
         # 预定义的垃圾信息原型文本
@@ -70,7 +70,7 @@ class SpamEmbedder:
             logger.error(f"加载 Embedding 模型失败: {e}")
             return False
 
-    def _generate_prototypes(self, texts: List[str]) -> None:
+    def _generate_prototypes(self, texts: list[str]) -> None:
         """生成垃圾信息原型向量
 
         Args:
@@ -124,7 +124,7 @@ class SpamEmbedder:
 
         return float(dot_product / (norm1 * norm2))
 
-    def predict(self, text: str) -> Tuple[bool, float]:
+    def predict(self, text: str) -> tuple[bool, float]:
         """预测文本是否为垃圾信息
 
         Args:
@@ -170,7 +170,7 @@ class SpamEmbedder:
             logger.error(f"Embedding 预测失败: {e}")
             return False, 0.0
 
-    def predict_batch(self, texts: List[str]) -> List[Tuple[bool, float]]:
+    def predict_batch(self, texts: list[str]) -> list[tuple[bool, float]]:
         """批量预测
 
         Args:
@@ -212,7 +212,7 @@ class SpamEmbedder:
 
 
 # 全局 Embedder 实例
-_embedder: Optional[SpamEmbedder] = None
+_embedder: SpamEmbedder | None = None
 
 
 def get_embedder() -> SpamEmbedder:

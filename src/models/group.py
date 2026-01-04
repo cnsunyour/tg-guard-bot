@@ -1,7 +1,8 @@
 """群组模型"""
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, Integer, String, DateTime
+
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
@@ -24,17 +25,13 @@ class Group(Base):
     )
 
     # 反垃圾配置
-    antispam_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=True, comment="是否启用反垃圾"
-    )
+    antispam_enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否启用反垃圾")
     antispam_level: Mapped[int] = mapped_column(
         Integer, default=2, comment="反垃圾严格程度: 1-宽松, 2-中等, 3-严格"
     )
 
     # 白名单配置
-    is_whitelisted: Mapped[bool] = mapped_column(
-        Boolean, default=False, comment="是否在白名单中"
-    )
+    is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否在白名单中")
 
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(

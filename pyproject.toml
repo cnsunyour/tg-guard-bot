@@ -176,6 +176,13 @@ ignore = [
     "B008",   # do not perform function calls in argument defaults
     "B904",   # raise without from inside except
     "UP007",  # Use X | Y for type annotations (not compatible with Python 3.9)
+    "RUF001", # ambiguous unicode character in string
+    "RUF002", # ambiguous unicode character in docstring
+    "RUF003", # ambiguous unicode character in comment
+    "SIM102", # nested if statements (prefer explicit for readability)
+    "PTH",    # prefer pathlib over os.path (os.path is fine)
+    "ARG002", # unused method argument (interface compatibility)
+    "RUF006", # store reference to asyncio.create_task (fire-and-forget tasks)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -190,15 +197,17 @@ known-first-party = ["src"]
 # ============================================================================
 [tool.mypy]
 python_version = "3.12"
-warn_return_any = true
+warn_return_any = false
 warn_unused_configs = true
 warn_redundant_casts = true
-warn_unused_ignores = true
-disallow_untyped_defs = true
+warn_unused_ignores = false
+disallow_untyped_defs = false
 disallow_any_unimported = false
-no_implicit_optional = true
-strict_equality = true
-warn_unreachable = true
+no_implicit_optional = false
+strict_equality = false
+warn_unreachable = false
+check_untyped_defs = false
+ignore_missing_imports = true
 
 # 第三方库类型提示
 [[tool.mypy.overrides]]

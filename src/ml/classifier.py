@@ -1,17 +1,16 @@
 """TF-IDF + SVM 分类器模块 - Stage 2 机器学习分类"""
 
+import hashlib
+import hmac
 import os
 import pickle
-import hmac
-import hashlib
-from typing import Optional, List, Tuple
 
 import jieba
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.svm import LinearSVC
-from sklearn.pipeline import Pipeline
 from loguru import logger
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.pipeline import Pipeline
+from sklearn.svm import LinearSVC
 
 from src.core.config import settings
 
@@ -19,20 +18,20 @@ from src.core.config import settings
 class SpamClassifier:
     """垃圾信息分类器 - TF-IDF + SVM"""
 
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: str | None = None):
         """初始化分类器
 
         Args:
             model_path: 模型文件路径，如果为 None 则使用配置中的路径
         """
         self.model_path = model_path or settings.ml_model_path
-        self.model: Optional[Pipeline] = None
+        self.model: Pipeline | None = None
         self.is_trained = False
 
         # 尝试加载已有模型
         self.load_model()
 
-    def _tokenize(self, text: str) -> List[str]:
+    def _tokenize(self, text: str) -> list[str]:
         """中文分词
 
         Args:
@@ -72,9 +71,7 @@ class SpamClassifier:
             ]
         )
 
-    def train(
-        self, texts: List[str], labels: List[bool]
-    ) -> Tuple[float, dict]:
+    def train(self, texts: list[str], labels: list[bool]) -> tuple[float, dict]:
         """训练模型
 
         Args:
@@ -121,7 +118,7 @@ class SpamClassifier:
 
         return accuracy, metrics
 
-    def predict(self, text: str) -> Tuple[bool, float]:
+    def predict(self, text: str) -> tuple[bool, float]:
         """预测文本是否为垃圾信息
 
         Args:
@@ -146,8 +143,7 @@ class SpamClassifier:
             confidence = 1.0 / (1.0 + np.exp(-decision))  # sigmoid
 
             logger.debug(
-                f"预测结果: {'垃圾' if prediction else '正常'}, "
-                f"置信度: {confidence:.2f}"
+                f"预测结果: {'垃圾' if prediction else '正常'}, " f"置信度: {confidence:.2f}"
             )
 
             return bool(prediction), float(confidence)
@@ -156,7 +152,7 @@ class SpamClassifier:
             logger.error(f"预测失败: {e}")
             return False, 0.0
 
-    def predict_batch(self, texts: List[str]) -> List[Tuple[bool, float]]:
+    def predict_batch(self, texts: list[str]) -> list[tuple[bool, float]]:
         """批量预测
 
         Args:
@@ -179,7 +175,7 @@ class SpamClassifier:
 
             results = [
                 (bool(pred), float(conf))
-                for pred, conf in zip(predictions, confidences)
+                for pred, conf in zip(predictions, confidences, strict=False)
             ]
 
             return results
@@ -188,7 +184,7 @@ class SpamClassifier:
             logger.error(f"批量预测失败: {e}")
             return [(False, 0.0)] * len(texts)
 
-    def save_model(self, path: Optional[str] = None) -> bool:
+    def save_model(self, path: str | None = None) -> bool:
         """保存模型（带数字签名）
 
         Args:
@@ -209,14 +205,12 @@ class SpamClassifier:
 
             # 生成签名
             signature = hmac.new(
-                settings.model_signature_key.encode(),
-                model_data,
-                hashlib.sha256
+                settings.model_signature_key.encode(), model_data, hashlib.sha256
             ).hexdigest()
 
             # 保存：签名 + 换行 + 数据
             with open(save_path, "wb") as f:
-                f.write(signature.encode() + b'\n' + model_data)
+                f.write(signature.encode() + b"\n" + model_data)
 
             logger.info(f"模型已保存到: {save_path} (已签名)")
             return True
@@ -225,7 +219,7 @@ class SpamClassifier:
             logger.error(f"保存模型失败: {e}")
             return False
 
-    def load_model(self, path: Optional[str] = None) -> bool:
+    def load_model(self, path: str | None = None) -> bool:
         """加载模型（验证签名）
 
         Args:
@@ -242,7 +236,7 @@ class SpamClassifier:
                 content = f.read()
 
             # 分离签名和数据
-            parts = content.split(b'\n', 1)
+            parts = content.split(b"\n", 1)
 
             if len(parts) != 2:
                 # 尝试作为旧格式（无签名）加载
@@ -261,9 +255,7 @@ class SpamClassifier:
 
             # 验证签名
             expected_signature = hmac.new(
-                settings.model_signature_key.encode(),
-                model_data,
-                hashlib.sha256
+                settings.model_signature_key.encode(), model_data, hashlib.sha256
             ).hexdigest()
 
             if not hmac.compare_digest(saved_signature, expected_signature):
@@ -282,7 +274,7 @@ class SpamClassifier:
 
 
 # 全局分类器实例
-_classifier: Optional[SpamClassifier] = None
+_classifier: SpamClassifier | None = None
 
 
 def get_classifier() -> SpamClassifier:

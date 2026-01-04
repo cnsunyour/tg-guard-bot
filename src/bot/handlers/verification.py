@@ -1,16 +1,15 @@
 """入群验证处理器"""
 
 import asyncio
-from typing import Optional
 
-from aiogram import Router, F, Bot
-from aiogram.types import ChatMemberUpdated, CallbackQuery, ChatPermissions
-from aiogram.filters import ChatMemberUpdatedFilter, JOIN_TRANSITION
+from aiogram import Bot, F, Router
+from aiogram.filters import JOIN_TRANSITION, ChatMemberUpdatedFilter
+from aiogram.types import CallbackQuery, ChatMemberUpdated, ChatPermissions
 from loguru import logger
 
-from src.services.verification import VerificationService
-from src.repositories.group_repo import GroupRepository
 from src.core.utils import format_user_mention
+from src.repositories.group_repo import GroupRepository
+from src.services.verification import VerificationService
 
 router = Router(name="verification")
 
@@ -247,7 +246,8 @@ async def handle_verification_success(
 
         # 发送欢迎消息
         welcome_msg = await bot.send_message(
-            chat_id=chat_id, text=f"✅ 验证成功！欢迎 {format_user_mention(callback.from_user)} 加入群组！"
+            chat_id=chat_id,
+            text=f"✅ 验证成功！欢迎 {format_user_mention(callback.from_user)} 加入群组！",
         )
 
         # 5秒后删除欢迎消息

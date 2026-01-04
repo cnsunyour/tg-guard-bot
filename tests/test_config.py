@@ -1,8 +1,5 @@
 """配置加载测试"""
 
-import os
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 

@@ -1,7 +1,8 @@
 """自动删除消息中间件"""
 
-from typing import Callable, Dict, Any, Awaitable
 import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
@@ -32,9 +33,9 @@ class AutoDeleteMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: Message,
-        data: Dict[str, Any],
+        data: dict[str, Any],
     ) -> Any:
         """中间件处理函数"""
 

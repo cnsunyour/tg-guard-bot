@@ -1,14 +1,14 @@
 """管理员配置命令处理器"""
 
-from aiogram import Router, F, Bot
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 
-from src.repositories.group_repo import GroupRepository
 from src.core.config import settings
 from src.core.health import get_health_checker
 from src.core.utils import auto_delete_message, check_admin_permission
+from src.repositories.group_repo import GroupRepository
 
 router = Router(name="admin")
 
@@ -89,10 +89,7 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
         # ✅ 权限验证
         if callback.from_user.id not in settings.admin_ids:
             try:
-                member = await callback.bot.get_chat_member(
-                    chat_id,
-                    callback.from_user.id
-                )
+                member = await callback.bot.get_chat_member(chat_id, callback.from_user.id)
                 if member.status not in ["creator", "administrator"]:
                     await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
                     logger.warning(
@@ -212,9 +209,9 @@ async def cmd_health(message: Message) -> None:
             text += f"   错误: {redis['error']}\n"
 
         # 系统资源
-        if "system" in report and report["system"]:
+        if report.get("system"):
             sys = report["system"]
-            text += f"\n💻 <b>系统资源</b>\n"
+            text += "\n💻 <b>系统资源</b>\n"
             text += f"• CPU: {sys['cpu']['percent']:.1f}% ({sys['cpu']['count']} 核)\n"
             text += (
                 f"• 内存: {sys['memory']['used_mb']:.0f}/{sys['memory']['total_mb']:.0f} MB "
@@ -242,8 +239,6 @@ async def cmd_stats(message: Message) -> None:
         return
 
     try:
-        from src.repositories.spam_repo import SpamRepository
-        from src.repositories.user_repo import UserRepository
         from src.services.spam_detector import get_detector
 
         # 获取反垃圾统计
@@ -263,15 +258,13 @@ async def cmd_stats(message: Message) -> None:
         text += (
             f"• ML 分类器: {'✅ 已训练' if spam_stats.get('classifier_trained') else '❌ 未训练'}\n"
         )
-        text += (
-            f"• Embedding: {'✅ 已初始化' if spam_stats.get('embedder_initialized') else '❌ 未初始化'}\n"
-        )
+        text += f"• Embedding: {'✅ 已初始化' if spam_stats.get('embedder_initialized') else '❌ 未初始化'}\n"
 
         # 系统信息
         health_checker = get_health_checker()
         uptime = health_checker.get_uptime()
 
-        text += f"\n⏱️ <b>系统信息</b>\n"
+        text += "\n⏱️ <b>系统信息</b>\n"
         text += f"• 运行时间: {uptime['formatted']}\n"
         text += f"• 启动时间: {uptime['started_at']}\n"
 
@@ -406,4 +399,3 @@ async def cmd_whitelist_list(message: Message) -> None:
     except Exception as e:
         logger.error(f"获取白名单列表失败: {e}")
         await message.answer("❌ 获取白名单列表失败，请重试")
-

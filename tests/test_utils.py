@@ -9,7 +9,10 @@ def test_escape_html():
     from src.core.utils import escape_html
 
     # 基本转义
-    assert escape_html("<script>alert('xss')</script>") == "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+    assert (
+        escape_html("<script>alert('xss')</script>")
+        == "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+    )
     assert escape_html("Hello & World") == "Hello &amp; World"
     assert escape_html('Test "quotes"') == "Test &quot;quotes&quot;"
 
@@ -72,7 +75,9 @@ def test_parse_time_to_seconds():
     assert parse_time_to_seconds("7d") == 7 * 86400
 
     # 永久（None 或大数值）
-    assert parse_time_to_seconds("forever") is None or parse_time_to_seconds("forever") > 365 * 86400
+    assert (
+        parse_time_to_seconds("forever") is None or parse_time_to_seconds("forever") > 365 * 86400
+    )
 
     # 无效输入
     with pytest.raises((ValueError, AttributeError)):

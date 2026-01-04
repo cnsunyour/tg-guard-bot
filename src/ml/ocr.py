@@ -1,7 +1,7 @@
 """图片 OCR 模块 - 使用 PaddleOCR 提取图片中的文字"""
 
-from typing import Optional, List, Tuple
 from pathlib import Path
+
 from loguru import logger
 
 from src.core.utils import mask_text
@@ -22,6 +22,7 @@ class OCRExtractor:
 
         # 检查是否启用 OCR 功能
         from src.core.config import settings
+
         if not settings.enable_ocr:
             logger.info("OCR 功能已禁用（ENABLE_OCR=False），跳过初始化")
             self._initialized = False
@@ -36,7 +37,7 @@ class OCRExtractor:
             logger.info("正在初始化 PaddleOCR（ARM 架构 CPU 模式，首次使用会下载轻量级模型）...")
             self._ocr = PaddleOCR(
                 use_angle_cls=True,  # 启用文字方向分类器
-                lang="ch",           # 中文+英文模型（自动使用轻量级版本）
+                lang="ch",  # 中文+英文模型（自动使用轻量级版本）
             )
 
             self._initialized = True
@@ -44,8 +45,7 @@ class OCRExtractor:
 
         except ImportError:
             logger.warning(
-                "PaddleOCR 未安装，OCR 功能不可用。"
-                "安装命令: pip install paddleocr paddlepaddle"
+                "PaddleOCR 未安装，OCR 功能不可用。" "安装命令: pip install paddleocr paddlepaddle"
             )
             self._initialized = False
         except Exception as e:
@@ -53,7 +53,7 @@ class OCRExtractor:
             logger.warning("OCR 功能不可用")
             self._initialized = False
 
-    def extract_text(self, image_path: str) -> Optional[str]:
+    def extract_text(self, image_path: str) -> str | None:
         """从图片中提取文字
 
         Args:
@@ -83,7 +83,7 @@ class OCRExtractor:
                 return None
 
             # 检查文件扩展名是否为图片格式
-            allowed_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+            allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
             if image_path_obj.suffix.lower() not in allowed_extensions:
                 logger.warning(f"不支持的图片格式: {image_path_obj.suffix}")
                 return None
@@ -121,9 +121,7 @@ class OCRExtractor:
             logger.error(f"OCR 提取失败: {e}")
             return None
 
-    def extract_text_with_details(
-        self, image_path: str
-    ) -> Optional[List[Tuple[str, float]]]:
+    def extract_text_with_details(self, image_path: str) -> list[tuple[str, float]] | None:
         """从图片中提取文字（带详细信息）
 
         Args:
@@ -173,7 +171,7 @@ class OCRExtractor:
 
 
 # 全局 OCR 提取器实例
-_extractor: Optional[OCRExtractor] = None
+_extractor: OCRExtractor | None = None
 
 
 def get_ocr_extractor() -> OCRExtractor:

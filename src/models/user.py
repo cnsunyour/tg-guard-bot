@@ -1,7 +1,8 @@
 """用户警告模型"""
 
 from datetime import datetime
-from sqlalchemy import BigInteger, Integer, String, DateTime, ForeignKey, Text
+
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
