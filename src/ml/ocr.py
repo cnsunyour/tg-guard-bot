@@ -32,12 +32,11 @@ class OCRExtractor:
 
             # 初始化 PaddleOCR
             # 参考文档: https://www.paddleocr.ai/
-            # 注意：新版本已移除 use_gpu、show_log 参数
-            # drop_score、det、rec 等参数在调用 ocr() 方法时传入，不在初始化时使用
-            logger.info("正在初始化 PaddleOCR（需要下载模型，首次使用较慢）...")
+            # ARM 架构 CPU 推理模式（自动下载轻量级模型）
+            logger.info("正在初始化 PaddleOCR（ARM 架构 CPU 模式，首次使用会下载轻量级模型）...")
             self._ocr = PaddleOCR(
-                use_angle_cls=True,     # 启用文字方向分类器，提高倾斜文字识别准确度
-                lang="ch",              # 中文+英文模型
+                use_angle_cls=True,  # 启用文字方向分类器
+                lang="ch",           # 中文+英文模型（自动使用轻量级版本）
             )
 
             self._initialized = True
@@ -51,9 +50,7 @@ class OCRExtractor:
             self._initialized = False
         except Exception as e:
             logger.error(f"PaddleOCR 初始化失败: {e}")
-            logger.warning(
-                "OCR 功能不可用。如果是 ARM 架构或内存不足，建议设置 ENABLE_OCR=False"
-            )
+            logger.warning("OCR 功能不可用")
             self._initialized = False
 
     def extract_text(self, image_path: str) -> Optional[str]:
@@ -91,8 +88,8 @@ class OCRExtractor:
                 logger.warning(f"不支持的图片格式: {image_path_obj.suffix}")
                 return None
 
-            # 执行 OCR
-            result = self._ocr.ocr(str(image_path_obj), cls=True)
+            # 执行 OCR（PaddleOCR 3.x 版本）
+            result = self._ocr.ocr(str(image_path_obj))
 
             if not result or not result[0]:
                 logger.debug(f"图片中未检测到文字: {image_path}")
@@ -146,7 +143,7 @@ class OCRExtractor:
                 logger.error(f"图片文件不存在: {image_path}")
                 return None
 
-            result = self._ocr.ocr(image_path, cls=True)
+            result = self._ocr.ocr(image_path)
 
             if not result or not result[0]:
                 return None
