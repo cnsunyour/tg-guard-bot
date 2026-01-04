@@ -23,6 +23,14 @@
 - **查看警告** `/warnings`
 - **清除警告** `/clearwarnings`
 
+### 🚨 举报系统
+- **用户举报** `/spam` - 普通用户举报垃圾消息（管理员审核）
+- **管理员处理** `/spam` - 管理员直接封禁并加入训练库
+- **查看举报** `/reports` - 管理员查看待处理举报列表
+- **审核举报** `/approve <id>` - 管理员批准举报并执行封禁
+- **防滥用限流** - 用户每天最多举报 10 次
+- **消息删除** - 回复消息执行处罚时自动删除违规消息
+
 ### 🛡️ 智能反垃圾（三阶段检测）
 - **Stage 1: 规则引擎** - 快速过滤关键词、链接、联系方式（~70% 垃圾）
 - **Stage 2: ML 分类器** - TF-IDF + SVM 捕获变体（~90% 垃圾）
@@ -178,6 +186,9 @@ make help            # 显示所有命令
 - `/warn @user [原因]` - 警告成员
 - `/warnings @user` - 查看警告记录
 - `/clearwarnings @user` - 清除警告
+- `/spam` - 举报/标记垃圾消息（普通用户创建举报，管理员直接封禁）
+- `/reports` - 查看待处理举报列表
+- `/approve <id>` - 处理举报并执行封禁
 - `/antispam` - 配置反垃圾
 
 ### 超级管理员命令
@@ -255,11 +266,13 @@ tg-guard-bot/
 │   │   ├── group.py            # 群组配置
 │   │   ├── user.py             # 用户/警告
 │   │   ├── spam_sample.py      # 垃圾样本
+│   │   ├── report.py           # 举报记录
 │   │   └── audit_log.py        # 操作日志
 │   ├── repositories/           # 数据访问层
 │   │   ├── group_repo.py
 │   │   ├── user_repo.py
-│   │   └── spam_repo.py
+│   │   ├── spam_repo.py
+│   │   └── report_repo.py
 │   └── core/                   # 核心配置
 │       ├── config.py           # 配置管理
 │       ├── database.py         # DB 连接

@@ -674,3 +674,214 @@ plugins = sqlalchemy.ext.mypy.plugin
 **审查人**: Claude (Sonnet 4.5) + Codex + Gemini
 **报告生成**: 2025-01-03
 **下次审查建议**: 修复 P0/P1 问题后
+
+---
+
+## 📝 2026-01-04 增量审查：举报系统
+
+### 新增功能概述
+
+实现了完整的用户举报和管理员审核系统，包括：
+
+1. **Report 模型** (`src/models/report.py`) - 举报记录数据模型
+2. **ReportRepository** (`src/repositories/report_repo.py`) - 数据访问层
+3. **扩展 /spam 命令** - 双模式：用户举报 vs 管理员直接处理
+4. **新增 /reports 命令** - 查看待处理举报列表
+5. **新增 /approve 命令** - 审核并执行封禁
+
+### 代码质量评估
+
+| 维度 | 评分 | 说明 |
+|------|------|------|
+| **架构设计** | 9/10 | 遵循现有分层架构，Repository 模式应用良好 |
+| **安全性** | 8/10 | 权限验证完整，参数验证到位，有防滥用机制 |
+| **数据库设计** | 9/10 | 索引合理，字段完整，状态流转清晰 |
+| **错误处理** | 8/10 | 异常捕获完善，日志记录充分 |
+| **可维护性** | 9/10 | 代码清晰，注释完整，易于理解 |
+
+### ✅ 优点
+
+1. **双模式设计优雅**
+   ```python
+   # 根据权限自动切换行为
+   is_admin = await check_admin_permission(message, bot)
+   if is_admin:
+       # 管理员直接处理
+   else:
+       # 用户创建举报
+   ```
+
+2. **防滥用机制完善**
+   - 用户限流：每天最多 10 次举报
+   - 管理员权限验证
+   - 举报状态流转（pending → approved/rejected）
+
+3. **数据库索引优化**
+   ```sql
+   -- 高效查询支持
+   INDEX on group_id, reporter_id, reported_user_id, status
+   ```
+
+4. **消息自动删除**
+   - `/kick`, `/ban`, `/mute` 回复模式自动删除违规消息
+   - 减少群组垃圾信息
+
+5. **完整的举报流程**
+   - 创建举报 → 管理员审核 → 执行封禁 → 添加训练数据
+   - 支持举报历史追踪
+
+### ⚠️ 建议改进
+
+#### 1. 类型注解完整性
+
+**文件**: `src/repositories/report_repo.py`
+
+**建议**: 完善返回类型注解
+```python
+# 当前
+async def count_user_reports(...) -> int:
+    return result.scalar() or 0
+
+# 建议
+from typing import Optional
+
+async def count_user_reports(...) -> int:
+    count: Optional[int] = result.scalar()
+    return count or 0
+```
+
+#### 2. 错误消息国际化
+
+**文件**: `src/bot/handlers/moderation.py`
+
+**当前**: 硬编码中文错误消息
+```python
+await callback.answer("❌ 只有管理员可以使用此命令")
+```
+
+**建议**: 考虑未来支持多语言
+```python
+from src.core.i18n import _
+await callback.answer(_("errors.admin_only"))
+```
+
+#### 3. 举报原因规范化
+
+**文件**: `src/repositories/report_repo.py`
+
+**建议**: 添加举报原因枚举
+```python
+from enum import Enum
+
+class ReportReason(str, Enum):
+    SPAM = "spam"
+    HARASSMENT = "harassment"
+    INAPPROPRIATE = "inappropriate"
+    OTHER = "other"
+```
+
+#### 4. 批量处理支持
+
+**功能增强**: 支持管理员批量审核举报
+```python
+@router.message(Command("approve_all"))
+async def cmd_approve_all(message: Message, bot: Bot) -> None:
+    """批量处理前 N 条举报"""
+    # 实现批量审核逻辑
+```
+
+### 🔒 安全性分析
+
+✅ **安全措施到位**:
+1. 权限验证：所有管理命令都验证权限
+2. 参数验证：report_id 类型检查
+3. 防滥用：用户限流机制
+4. SQL 注入防护：使用 ORM 参数化查询
+5. 日志记录：完整的操作审计
+
+❌ **潜在风险**:
+无明显安全风险
+
+### 📊 性能分析
+
+✅ **性能优化**:
+1. 数据库索引完善（group_id, status 等）
+2. 限制查询数量（limit=10）
+3. 使用异步操作，不阻塞主线程
+
+⚠️ **可优化点**:
+1. 举报列表分页（当前固定 10 条）
+2. 添加缓存（高频查询的待处理举报数量）
+
+### 🧪 测试建议
+
+缺失测试覆盖，建议添加：
+
+```python
+# tests/test_report_repo.py
+async def test_create_report():
+    """测试创建举报"""
+    report = await ReportRepository.create_report(...)
+    assert report.status == "pending"
+
+async def test_rate_limit():
+    """测试举报限流"""
+    # 创建 10 次举报
+    # 第 11 次应该被拒绝
+
+async def test_approve_report():
+    """测试审核举报"""
+    # 创建举报
+    # 管理员审核
+    # 验证用户被封禁
+```
+
+### 📈 数据库迁移
+
+新增表结构：
+
+```sql
+CREATE TABLE reports (
+    id SERIAL PRIMARY KEY,
+    group_id BIGINT NOT NULL,
+    reporter_id BIGINT NOT NULL,
+    reported_user_id BIGINT NOT NULL,
+    message_id INTEGER NOT NULL,
+    message_text TEXT,
+    reason VARCHAR(255),
+    status VARCHAR(20) DEFAULT 'pending',
+    handled_by BIGINT,
+    handled_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 索引
+CREATE INDEX ix_reports_group_id ON reports(group_id);
+CREATE INDEX ix_reports_reporter_id ON reports(reporter_id);
+CREATE INDEX ix_reports_reported_user_id ON reports(reported_user_id);
+CREATE INDEX ix_reports_status ON reports(status);
+```
+
+### 总结
+
+举报系统实现质量优秀，架构清晰，安全性到位。主要优点：
+
+✅ 遵循项目架构规范
+✅ 防滥用机制完善
+✅ 数据库设计合理
+✅ 错误处理充分
+✅ 代码可读性强
+
+小改进建议：
+- 添加单元测试
+- 考虑国际化支持
+- 支持批量操作
+- 添加举报原因枚举
+
+**总体评分**: 8.5/10
+
+---
+
+**审查人**: Claude (Sonnet 4.5)
+**审查日期**: 2026-01-04
+**审查范围**: 举报系统新增功能
