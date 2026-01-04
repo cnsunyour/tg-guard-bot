@@ -18,32 +18,53 @@ router = Router(name="moderation")
 
 
 def parse_user_from_message(message: Message) -> Optional[int]:
-    """从消息中解析用户ID"""
-    # 检查是否回复了某条消息
+    """从消息中解析用户ID
+
+    支持的格式：
+    1. 回复消息
+    2. 用户ID：/command 123456
+    3. @提及用户（text_mention）：/command @user
+
+    Returns:
+        用户ID，如果无法解析则返回 None
+    """
+    # 1. 检查是否回复了某条消息
     if message.reply_to_message:
         return message.reply_to_message.from_user.id
 
-    # 检查命令参数中是否有用户ID或用户名
+    # 2. 检查 entities 中是否有 text_mention（用户被 @ 提及）
+    if message.entities:
+        for entity in message.entities:
+            # text_mention: 用户没有用户名，通过客户端点击选择用户时的提及
+            # 包含完整的 User 对象
+            if entity.type == "text_mention" and entity.user:
+                logger.debug(f"通过 text_mention 解析到用户: {entity.user.id}")
+                return entity.user.id
+
+    # 3. 检查命令参数中是否有用户ID
     if message.text:
         parts = message.text.split(maxsplit=1)
         if len(parts) > 1:
-            arg = parts[1].strip()
-
-            # 尝试解析 @username
-            if arg.startswith("@"):
-                # 这里需要通过 Telegram API 查询用户名对应的ID
-                # 暂时返回 None，后续可以改进
-                return None
+            arg = parts[1].strip().split()[0]  # 只取第一个参数
 
             # 尝试解析纯数字ID
             if arg.isdigit():
                 user_id = int(arg)
                 # ✅ M1: 验证 Telegram 用户 ID 范围（1 到 2^63-1）
                 if 1 <= user_id <= 9223372036854775807:
+                    logger.debug(f"通过用户ID解析: {user_id}")
                     return user_id
                 else:
-                    # 无效的用户 ID
+                    logger.warning(f"无效的用户 ID: {user_id}")
                     return None
+
+            # 如果是 @username 格式但没有在 entities 中找到
+            if arg.startswith("@"):
+                logger.warning(
+                    f"检测到 @username 格式但无法解析用户ID。"
+                    f"可能原因：用户没有在群组中，或需要使用 text_mention。"
+                )
+                return None
 
     return None
 
@@ -105,9 +126,10 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请回复要踢出的用户消息，或使用格式：\n"
-            "/kick <用户ID>\n"
-            "/kick @username (暂不支持)"
+            "❌ 请指定要踢出的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /kick <用户ID>\n"
+            "方式3: /kick @用户（在输入框中 @ 并从列表中选择）"
         )
         return
 
@@ -158,8 +180,10 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请回复要禁言的用户消息，或使用格式：\n"
-            "/mute <用户ID> [时长] [原因]\n"
+            "❌ 请指定要禁言的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /mute <用户ID> [时长] [原因]\n"
+            "方式3: /mute @用户 [时长] [原因]\n\n"
             "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久"
         )
         return
@@ -225,7 +249,10 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请回复要解除禁言的用户消息，或使用格式：\n" "/unmute <用户ID>"
+            "❌ 请指定要解除禁言的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /unmute <用户ID>\n"
+            "方式3: /unmute @用户"
         )
         return
 
@@ -262,7 +289,10 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请回复要封禁的用户消息，或使用格式：\n" "/ban <用户ID> [原因]"
+            "❌ 请指定要封禁的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /ban <用户ID> [原因]\n"
+            "方式3: /ban @用户 [原因]"
         )
         return
 
@@ -313,7 +343,10 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请回复要解除封禁的用户消息，或使用格式：\n" "/unban <用户ID>"
+            "❌ 请指定要解除封禁的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /unban <用户ID>\n"
+            "方式3: /unban @用户"
         )
         return
 
@@ -350,7 +383,10 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请回复要警告的用户消息，或使用格式：\n" "/warn <用户ID> [原因]"
+            "❌ 请指定要警告的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /warn <用户ID> [原因]\n"
+            "方式3: /warn @用户 [原因]"
         )
         return
 
@@ -454,7 +490,10 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         reply = await message.answer(
-            "❌ 请回复要清除警告的用户消息，或使用格式：\n" "/clearwarnings <用户ID>"
+            "❌ 请指定要清除警告的用户：\n\n"
+            "方式1: 回复用户的消息\n"
+            "方式2: /clearwarnings <用户ID>\n"
+            "方式3: /clearwarnings @用户"
         )
         await auto_delete_message(reply)
         return
