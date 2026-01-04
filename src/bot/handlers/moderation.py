@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.services.moderation import ModerationService
 from src.repositories.user_repo import UserRepository
+from src.repositories.spam_repo import SpamRepository
 from src.core.config import settings
 from src.core.utils import escape_html, auto_delete_message, check_admin_permission, parse_message_link
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
@@ -737,4 +738,102 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
         f"失败: {fail_count} 条"
     )
     await auto_delete_message(reply)
+
+
+@router.message(Command("spam"))
+async def cmd_spam(message: Message, bot: Bot) -> None:
+    """标记垃圾消息并封禁用户
+
+    此命令会：
+    1. 封禁发送垃圾消息的用户
+    2. 删除垃圾消息
+    3. 将消息内容添加到反垃圾训练库
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 必须回复某条消息
+    if not message.reply_to_message:
+        reply = await message.answer(
+            "❌ 请回复要标记为垃圾的消息\\n\\n"
+            "<b>用法</b>: 回复垃圾消息，然后使用 /spam [原因]\\n"
+            "<b>示例</b>: /spam 发送广告\\n\\n"
+            "💡 <b>此命令会</b>:\\n"
+            "1. 封禁用户\\n"
+            "2. 删除消息\\n"
+            "3. 添加到反垃圾训练库"
+        )
+        await auto_delete_message(reply)
+        return
+
+    # 获取目标用户ID
+    target_user_id = message.reply_to_message.from_user.id
+
+    # 获取原因
+    parts = message.text.split(maxsplit=1)
+    reason = parts[1] if len(parts) > 1 else "发送垃圾消息"
+
+    # 获取消息文本内容用于训练
+    spam_text = ""
+    if message.reply_to_message.text:
+        spam_text = message.reply_to_message.text
+    elif message.reply_to_message.caption:
+        spam_text = message.reply_to_message.caption
+
+    # 如果没有文本内容，记录消息类型
+    if not spam_text:
+        content_type = message.reply_to_message.content_type
+        spam_text = f"[{content_type}消息]"
+
+    # 执行封禁
+    success, error_msg = await ModerationService.ban_user(
+        bot=bot,
+        chat_id=message.chat.id,
+        user_id=target_user_id,
+        operator_id=message.from_user.id,
+        reason=f"垃圾消息: {reason}",
+    )
+
+    if success:
+        # 删除垃圾消息
+        try:
+            await message.reply_to_message.delete()
+            logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
+        except Exception as e:
+            logger.debug(f"删除垃圾消息失败: {e}")
+
+        # 添加到反垃圾训练库
+        try:
+            await SpamRepository.add_sample(
+                text=spam_text,
+                is_spam=True,
+                confidence=1.0,  # 管理员标注，置信度为1.0
+                labeled_by=message.from_user.id,
+            )
+            logger.info(
+                f"垃圾样本已添加到训练库 [标注者:{message.from_user.id}] "
+                f"[文本长度:{len(spam_text)}]"
+            )
+        except Exception as e:
+            logger.error(f"添加垃圾样本失败: {e}")
+
+        reply = await message.answer(
+            f"✅ 已处理垃圾消息\\n"
+            f"• 用户已封禁: {target_user_id}\\n"
+            f"• 消息已删除\\n"
+            f"• 已添加到训练库\\n"
+            f"• 原因: {escape_html(reason)}"
+        )
+        await auto_delete_message(reply)
+    else:
+        reply = await message.answer(f"❌ {error_msg}")
+        await auto_delete_message(reply)
+
 
