@@ -35,7 +35,7 @@ RUN if [ "$ENABLE_OCR" = "true" ]; then \
 COPY pyproject.toml ./
 
 # 安装 Python 依赖
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip setuptools wheel && \
     if [ "$ENABLE_OCR" = "true" ]; then \
         pip install -e ".[ocr]"; \
     else \

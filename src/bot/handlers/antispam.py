@@ -20,6 +20,25 @@ from src.core.redis import get_redis, RedisKeys  # ✅ P1-12: 导入 Redis 和�
 router = Router(name="antispam")
 
 
+def is_anonymous_admin(message: Message) -> bool:
+    """检查消息是否来自匿名管理员
+
+    当管理员以"匿名管理员"身份发言时：
+    - message.sender_chat 不为 None
+    - message.sender_chat.id == message.chat.id (发送者是群组本身)
+
+    Args:
+        message: 消息对象
+
+    Returns:
+        是否是匿名管理员消息
+    """
+    return (
+        message.sender_chat is not None
+        and message.sender_chat.id == message.chat.id
+    )
+
+
 @contextmanager
 def managed_temp_file(suffix: str = ".jpg") -> Iterator[str]:
     """✅ M8: 上下文管理器确保临时文件一定会被清理
@@ -58,12 +77,22 @@ async def on_message(message: Message, bot: Bot) -> None:
     if message.chat.type == "private":
         return
 
-    # 跳过管理员消息
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        logger.debug(f"跳过匿名管理员文本消息 [群组:{message.chat.id}]")
+        return
+
+    # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
+        logger.debug(f"跳过超级管理员文本消息 [用户:{message.from_user.id}]")
         return
 
     # ✅ P1-10: 使用 Redis 缓存减少 API 调用
+    # 跳过群组管理员消息
     if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        logger.debug(
+            f"跳过群组管理员文本消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
+        )
         return
 
     # 检查群组是否启用反垃圾
@@ -168,12 +197,22 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     if message.chat.type == "private":
         return
 
-    # 跳过管理员消息
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        logger.debug(f"跳过匿名管理员图片消息 [群组:{message.chat.id}]")
+        return
+
+    # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
+        logger.debug(f"跳过超级管理员图片消息 [用户:{message.from_user.id}]")
         return
 
     # ✅ P1-10: 使用 Redis 缓存减少 API 调用
+    # 跳过群组管理员消息
     if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        logger.debug(
+            f"跳过群组管理员图片消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
+        )
         return
 
     # 检查群组是否启用反垃圾
