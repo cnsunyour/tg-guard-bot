@@ -27,11 +27,11 @@ class OCRExtractor:
             # use_angle_cls=True: 检测文字方向
             # lang='ch': 中文+英文
             # show_log=False: 关闭详细日志
+            # 注意：新版本 PaddleOCR 不再使用 use_gpu 参数
             self._ocr = PaddleOCR(
                 use_angle_cls=True,
                 lang="ch",
                 show_log=False,
-                use_gpu=False,  # VPS 通常没有 GPU
             )
 
             self._initialized = True
