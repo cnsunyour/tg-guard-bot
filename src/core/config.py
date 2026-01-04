@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     embedding_model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5", description="Embedding 模型名称"
     )
+    # OCR 功能配置
+    enable_ocr: bool = Field(
+        default=False,
+        description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
+    )
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
         ...,

@@ -20,6 +20,13 @@ class OCRExtractor:
         if self._initialized:
             return
 
+        # 检查是否启用 OCR 功能
+        from src.core.config import settings
+        if not settings.enable_ocr:
+            logger.info("OCR 功能已禁用（ENABLE_OCR=False），跳过初始化")
+            self._initialized = False
+            return
+
         try:
             from paddleocr import PaddleOCR
 
@@ -27,6 +34,7 @@ class OCRExtractor:
             # 参考文档: https://www.paddleocr.ai/
             # 注意：新版本已移除 use_gpu、show_log 参数
             # drop_score、det、rec 等参数在调用 ocr() 方法时传入，不在初始化时使用
+            logger.info("正在初始化 PaddleOCR（需要下载模型，首次使用较慢）...")
             self._ocr = PaddleOCR(
                 use_angle_cls=True,     # 启用文字方向分类器，提高倾斜文字识别准确度
                 lang="ch",              # 中文+英文模型
@@ -43,6 +51,9 @@ class OCRExtractor:
             self._initialized = False
         except Exception as e:
             logger.error(f"PaddleOCR 初始化失败: {e}")
+            logger.warning(
+                "OCR 功能不可用。如果是 ARM 架构或内存不足，建议设置 ENABLE_OCR=False"
+            )
             self._initialized = False
 
     def extract_text(self, image_path: str) -> Optional[str]:
