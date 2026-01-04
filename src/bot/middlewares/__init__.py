@@ -2,5 +2,6 @@
 
 from .throttle import ThrottleMiddleware
 from .whitelist import WhitelistMiddleware
+from .auto_delete import AutoDeleteMiddleware
 
-__all__ = ["ThrottleMiddleware", "WhitelistMiddleware"]
+__all__ = ["ThrottleMiddleware", "WhitelistMiddleware", "AutoDeleteMiddleware"]

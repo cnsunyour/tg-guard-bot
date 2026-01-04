@@ -8,6 +8,7 @@ from loguru import logger
 from src.repositories.group_repo import GroupRepository
 from src.core.config import settings
 from src.core.health import get_health_checker
+from src.core.utils import auto_delete_message
 
 router = Router(name="admin")
 
@@ -68,7 +69,8 @@ async def cmd_set_verify(message: Message) -> None:
         ]
     )
 
-    await message.answer("请选择验证方式：", reply_markup=keyboard)
+    reply = await message.answer("请选择验证方式：", reply_markup=keyboard)
+    await auto_delete_message(reply)
 
 
 @router.callback_query(F.data.startswith("setverify:"))
@@ -141,11 +143,25 @@ async def cmd_verify_config(message: Message) -> None:
             f"反垃圾级别: {group.antispam_level}/3"
         )
 
-        await message.answer(config_text)
+        reply = await message.answer(config_text)
+        await auto_delete_message(reply)
+
+        # 删除管理员的命令消息
+        try:
+            await message.delete()
+        except Exception as e:
+            logger.debug(f"删除命令消息失败: {e}")
 
     except Exception as e:
         logger.error(f"查看验证配置失败: {e}")
-        await message.answer("❌ 获取配置失败，请重试")
+        reply = await message.answer("❌ 获取配置失败，请重试")
+        await auto_delete_message(reply)
+
+        # 删除管理员的命令消息
+        try:
+            await message.delete()
+        except Exception as e:
+            logger.debug(f"删除命令消息失败: {e}")
 
 
 @router.message(Command("help"))

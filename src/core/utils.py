@@ -1,7 +1,9 @@
 """通用工具函数模块"""
 
 import html
+import asyncio
 from typing import Optional
+from loguru import logger
 
 
 def escape_html(text: Optional[str]) -> str:
@@ -117,4 +119,32 @@ def validate_user_id(user_id: int) -> bool:
         return False
 
     return 0 < user_id < 2**53
+
+
+async def auto_delete_message(message, delay: int = 30) -> None:
+    """自动删除消息（延迟指定秒数后删除）
+
+    Args:
+        message: aiogram Message 对象
+        delay: 延迟时间（秒），默认30秒
+
+    注意：
+        - 此函数会创建一个异步任务在后台执行
+        - 如果消息已被删除或权限不足，会静默失败
+    """
+    async def _delete():
+        try:
+            await asyncio.sleep(delay)
+            await message.delete()
+            logger.debug(
+                f"自动删除消息 [群组:{message.chat.id}] [消息ID:{message.message_id}]"
+            )
+        except Exception as e:
+            # 静默处理删除失败（消息可能已被手动删除或权限不足）
+            logger.debug(
+                f"自动删除消息失败 [群组:{message.chat.id}] [消息ID:{message.message_id}]: {e}"
+            )
+
+    # 创建后台任务
+    asyncio.create_task(_delete())
 

@@ -11,7 +11,7 @@ from loguru import logger
 from src.services.moderation import ModerationService
 from src.repositories.user_repo import UserRepository
 from src.core.config import settings
-from src.core.utils import escape_html
+from src.core.utils import escape_html, auto_delete_message
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 
 router = Router(name="moderation")
@@ -147,12 +147,14 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        await message.answer(
+        reply = await message.answer(
             f"✅ 已踢出用户 {target_user_id}" + (f"\n原因: {escape_html(reason)}" if reason else "")
         )
+        await auto_delete_message(reply)
     else:
         # ✅ M7: 显示详细的错误消息
-        await message.answer(f"❌ {error_msg}")
+        reply = await message.answer(f"❌ {error_msg}")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("mute"))
@@ -201,13 +203,15 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
 
     if success:
         duration_text = "永久" if duration is None else f"{duration}分钟"
-        await message.answer(
+        reply = await message.answer(
             f"✅ 已禁言用户 {target_user_id}，时长: {duration_text}"
             + (f"\n原因: {escape_html(reason)}" if reason else "")
         )
+        await auto_delete_message(reply)
     else:
         # ✅ M7: 显示详细的错误消息
-        await message.answer(f"❌ {error_msg}")
+        reply = await message.answer(f"❌ {error_msg}")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("unmute"))
@@ -240,9 +244,11 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        await message.answer(f"✅ 已解除用户 {target_user_id} 的禁言")
+        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的禁言")
+        await auto_delete_message(reply)
     else:
-        await message.answer("❌ 操作失败，请检查Bot权限")
+        reply = await message.answer("❌ 操作失败，请检查Bot权限")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("ban"))
@@ -280,12 +286,14 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        await message.answer(
+        reply = await message.answer(
             f"✅ 已封禁用户 {target_user_id}" + (f"\n原因: {escape_html(reason)}" if reason else "")
         )
+        await auto_delete_message(reply)
     else:
         # ✅ M7: 显示详细的错误消息
-        await message.answer(f"❌ {error_msg}")
+        reply = await message.answer(f"❌ {error_msg}")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("unban"))
@@ -318,9 +326,11 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        await message.answer(f"✅ 已解除用户 {target_user_id} 的封禁")
+        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的封禁")
+        await auto_delete_message(reply)
     else:
-        await message.answer("❌ 操作失败，请检查Bot权限或用户未被封禁")
+        reply = await message.answer("❌ 操作失败，请检查Bot权限或用户未被封禁")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("warn"))
@@ -369,9 +379,11 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         if auto_muted:
             response += f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，自动禁言 24 小时"
 
-        await message.answer(response)
+        reply = await message.answer(response)
+        await auto_delete_message(reply)
     else:
-        await message.answer("❌ 操作失败")
+        reply = await message.answer("❌ 操作失败")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("warnings"))
@@ -392,14 +404,16 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     if target_user_id != message.from_user.id:
         # 查看他人警告需要管理员权限
         if not await check_admin_permission(message, bot):
-            await message.answer("❌ 只有管理员可以查看其他用户的警告记录")
+            reply = await message.answer("❌ 只有管理员可以查看其他用户的警告记录")
+            await auto_delete_message(reply)
             return
 
     # 获取警告列表
     warnings = await UserRepository.get_warnings(message.chat.id, target_user_id)
 
     if not warnings:
-        await message.answer(f"✅ 用户 {target_user_id} 没有警告记录")
+        reply = await message.answer(f"✅ 用户 {target_user_id} 没有警告记录")
+        await auto_delete_message(reply)
         return
 
     # 格式化警告列表
@@ -413,7 +427,8 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     if len(warnings) > 10:
         response += f"\n... 还有 {len(warnings) - 10} 条历史记录"
 
-    await message.answer(response)
+    reply = await message.answer(response)
+    await auto_delete_message(reply)
 
 
 @router.message(Command("clearwarnings"))
@@ -432,9 +447,10 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
     # 解析目标用户
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
-        await message.answer(
+        reply = await message.answer(
             "❌ 请回复要清除警告的用户消息，或使用格式：\n" "/clearwarnings <用户ID>"
         )
+        await auto_delete_message(reply)
         return
 
     # 清除警告
@@ -445,6 +461,9 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        await message.answer(f"✅ 已清除用户 {target_user_id} 的 {count} 条警告记录")
+        reply = await message.answer(f"✅ 已清除用户 {target_user_id} 的 {count} 条警告记录")
+        await auto_delete_message(reply)
     else:
-        await message.answer("❌ 操作失败")
+        reply = await message.answer("❌ 操作失败")
+        await auto_delete_message(reply)
+

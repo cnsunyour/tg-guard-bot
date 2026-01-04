@@ -32,6 +32,28 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
 
+    # ✅ 自动提取所有已注册的命令并设置到反垃圾白名单
+    from aiogram.filters import Command
+
+    def extract_commands_from_router(router) -> set[str]:
+        """从 router 中提取所有已注册的命令"""
+        commands = set()
+        for handler in router.message.handlers:
+            for filter_obj in handler.filters:
+                # filter_obj.callback 是实际的 Command 对象
+                if isinstance(filter_obj.callback, Command):
+                    commands.update(filter_obj.callback.commands)
+        return commands
+
+    # 从 dispatcher 和所有 sub routers 中提取命令
+    registered_commands = set()
+    registered_commands.update(extract_commands_from_router(dp))
+    for router in dp.sub_routers:
+        registered_commands.update(extract_commands_from_router(router))
+
+    # 设置到反垃圾模块
+    antispam.set_registered_commands(registered_commands)
+
     # ✅ 注册白名单中间件（在速率限制之前）
     from src.bot.middlewares import WhitelistMiddleware
     dp.message.middleware(WhitelistMiddleware())
@@ -43,6 +65,10 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     # 配置：每秒最多 3 个请求
     dp.message.middleware(ThrottleMiddleware(rate_limit=3, time_window=1))
     dp.callback_query.middleware(ThrottleMiddleware(rate_limit=5, time_window=1))
+
+    # ✅ 注册自动删除中间件（在群组中自动删除命令消息和响应）
+    from src.bot.middlewares import AutoDeleteMiddleware
+    dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
     return bot, dp
 

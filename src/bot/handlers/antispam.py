@@ -1,5 +1,6 @@
 """反垃圾消息处理器"""
 
+import re
 import tempfile
 from pathlib import Path
 from contextlib import contextmanager
@@ -13,11 +14,30 @@ from src.services.spam_detector import get_detector
 from src.services.moderation import ModerationService
 from src.repositories.group_repo import GroupRepository
 from src.core.config import settings
-from src.core.utils import format_user_mention
+from src.core.utils import format_user_mention, auto_delete_message
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.redis import get_redis, RedisKeys  # ✅ P1-12: 导入 Redis 和键管理
 
 router = Router(name="antispam")
+
+# 已注册的命令集合（将在 bot 启动时自动从 dispatcher 中提取）
+_registered_commands: set[str] = set()
+
+
+def set_registered_commands(commands: set[str]) -> None:
+    """设置已注册的命令列表（由 main.py 在启动时调用）
+
+    Args:
+        commands: 从 dispatcher 中提取的所有命令名集合
+    """
+    global _registered_commands
+    _registered_commands = commands
+    logger.info(f"已注册 {len(commands)} 个命令到反垃圾白名单: {sorted(commands)}")
+
+
+def get_registered_commands() -> set[str]:
+    """获取已注册的命令列表"""
+    return _registered_commands
 
 
 def is_anonymous_admin(message: Message) -> bool:
@@ -76,6 +96,21 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 跳过私聊消息
     if message.chat.type == "private":
         return
+
+    # 跳过已注册的命令消息
+    if message.text.startswith("/"):
+        # 提取命令名（格式：/command 或 /command@botname 或 /command args）
+        command_match = re.match(r'^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)', message.text)
+        if command_match:
+            command_name = command_match.group(1)
+            # 只跳过已注册的命令
+            if command_name in _registered_commands:
+                return
+            # 未注册的命令格式文本（如 /abc spam）会继续进行垃圾检测
+            logger.debug(
+                f"检测到未注册命令格式的消息 [群组:{message.chat.id}] "
+                f"[命令:{command_name}]，将进行垃圾检测"
+            )
 
     # 跳过匿名管理员消息
     if is_anonymous_admin(message):
@@ -173,6 +208,7 @@ async def on_message(message: Message, bot: Bot) -> None:
                     f"处罚: 禁言 10 分钟",
                     reply_markup=keyboard,
                 )
+                await auto_delete_message(alert_msg)
 
                 # 记录原始消息文本用于反馈
                 await detector.add_feedback(
@@ -302,7 +338,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                         ]
                     )
 
-                    await message.answer(
+                    alert_msg = await message.answer(
                         f"🚫 检测到图片垃圾信息并已处理\n\n"
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
@@ -310,6 +346,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                         f"处罚: 禁言 10 分钟",
                         reply_markup=keyboard,
                     )
+                    await auto_delete_message(alert_msg)
 
                     # 记录反馈（可选）
                     if "ocr_text" in result["details"]:
@@ -399,14 +436,16 @@ async def cmd_antispam(message: Message, bot: Bot) -> None:
     """反垃圾配置命令"""
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        reply = await message.answer("❌ 此命令只能在群组中使用")
+        await auto_delete_message(reply)
         return
 
     # 检查权限
     if message.from_user.id not in settings.admin_ids:
         # ✅ P1-10: 使用 Redis 缓存减少 API 调用
         if not await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
-            await message.answer("❌ 只有管理员可以使用此命令")
+            reply = await message.answer("❌ 只有管理员可以使用此命令")
+            await auto_delete_message(reply)
             return
 
     # 显示配置菜单
@@ -439,7 +478,8 @@ async def cmd_antispam(message: Message, bot: Bot) -> None:
         ]
     )
 
-    await message.answer("🛡️ 反垃圾配置", reply_markup=keyboard)
+    reply = await message.answer("🛡️ 反垃圾配置", reply_markup=keyboard)
+    await auto_delete_message(reply)
 
 
 @router.callback_query(F.data.startswith("antispam_toggle:"))
