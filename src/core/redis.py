@@ -72,3 +72,11 @@ class RedisKeys:
         ✅ P1-12: 缓存垃圾消息原始文本，用于管理员反馈
         """
         return f"spam_text:{chat_id}:{message_id}"
+
+    @staticmethod
+    def verification_hint(chat_id: int) -> str:
+        """验证引导消息记录键名
+
+        用于防止多用户同时未启动 Bot 时重复发送引导消息
+        """
+        return f"verification_hint:{chat_id}"
