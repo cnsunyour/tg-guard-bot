@@ -379,7 +379,7 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
 
             # 4. 启动自动删除任务
             asyncio.create_task(
-                delete_hint_message_after_delay(bot, chat_id, hint_msg.message_id, 30)
+                delete_hint_message_after_delay(bot, chat_id, hint_msg.message_id, hint_key, 30)
             )
 
             logger.info(f"群组 {chat_id} 发送入群验证引导消息（30秒内共享）")
@@ -387,8 +387,9 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
         except Exception as e:
             logger.error(f"发送引导消息失败: {e}")
     else:
-        # 已经有引导消息，不重复发送
-        logger.debug(f"群组 {chat_id} 已有引导消息，跳过发送（用户 {user_id}）")
+        # ✅ 已有引导消息，延长 TTL 到 30 秒，让后入群用户有足够时间
+        await redis.expire(hint_key, 30)
+        logger.debug(f"群组 {chat_id} 已有引导消息，延长 TTL 到 30 秒（用户 {user_id}）")
 
     # 5. 踢出当前用户（允许重新加入）
     try:
@@ -399,10 +400,29 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
         logger.error(f"踢出用户失败: {e}")
 
 
-async def delete_hint_message_after_delay(bot: Bot, chat_id: int, message_id: int, delay: int):
-    """延迟删除引导消息"""
+async def delete_hint_message_after_delay(
+    bot: Bot, chat_id: int, message_id: int, hint_key: str, delay: int
+):
+    """延迟删除引导消息
+
+    支持 TTL 延长：如果在等待期间 Redis key 被延长，会继续等待剩余时间
+    """
     try:
         await asyncio.sleep(delay)
+
+        # ✅ 检查 Redis key 是否还存在（可能被延长了）
+        redis = get_redis()
+        remaining_ttl = await redis.ttl(hint_key)
+
+        if remaining_ttl > 0:
+            # Key 还存在且被延长了，继续等待剩余时间
+            logger.debug(f"群组 {chat_id} 的引导消息 TTL 被延长，继续等待 {remaining_ttl} 秒")
+            asyncio.create_task(
+                delete_hint_message_after_delay(bot, chat_id, message_id, hint_key, remaining_ttl)
+            )
+            return
+
+        # TTL 已过期或 key 不存在，删除消息
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logger.info(f"已删除群组 {chat_id} 的引导消息 {message_id}")
     except Exception as e:
