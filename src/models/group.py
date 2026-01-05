@@ -21,7 +21,7 @@ class Group(Base):
         String(20), default="button", comment="验证方式: button/math/slider"
     )
     verification_timeout: Mapped[int] = mapped_column(
-        Integer, default=60, comment="验证超时时间(秒)"
+        Integer, default=120, comment="验证超时时间(秒)"
     )
 
     # 反垃圾配置
