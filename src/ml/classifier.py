@@ -2,10 +2,11 @@
 
 import hashlib
 import hmac
+import io
 import os
-import pickle
 
 import jieba
+import joblib
 import numpy as np
 from loguru import logger
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -200,8 +201,10 @@ class SpamClassifier:
             # 确保目录存在
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-            # 序列化模型
-            model_data = pickle.dumps(self.model)
+            # 序列化模型到字节流
+            buffer = io.BytesIO()
+            joblib.dump(self.model, buffer, compress=3)
+            model_data = buffer.getvalue()
 
             # 生成签名
             signature = hmac.new(
@@ -242,7 +245,8 @@ class SpamClassifier:
                 # 尝试作为旧格式（无签名）加载
                 logger.warning(f"模型文件无签名，可能是旧版本: {load_path}")
                 try:
-                    self.model = pickle.loads(content)
+                    buffer = io.BytesIO(content)
+                    self.model = joblib.load(buffer)
                     self.is_trained = True
                     logger.warning("已加载无签名模型，建议重新训练并保存")
                     return True
@@ -263,7 +267,8 @@ class SpamClassifier:
                 return False
 
             # 反序列化模型
-            self.model = pickle.loads(model_data)
+            buffer = io.BytesIO(model_data)
+            self.model = joblib.load(buffer)
             self.is_trained = True
             logger.info(f"模型已加载: {load_path} (签名验证通过)")
             return True

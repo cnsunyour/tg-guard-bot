@@ -39,8 +39,8 @@ jobs:
     # Safety - 依赖漏洞检查
     - name: 运行 Safety 依赖检查
       run: |
-        safety check --json --output safety-report.json || true
-        safety check || true
+        safety scan --output json > safety-report.json || true
+        safety scan || true
       continue-on-error: true
 
     # Semgrep - 静态代码分析
