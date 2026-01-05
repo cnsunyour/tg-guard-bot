@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     spam_threshold_embedding: float = Field(default=0.75, description="Embedding 阈值")
 
     # 验证配置
-    verification_timeout: int = Field(default=60, description="验证超时时间(秒)")
+    verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数")
 
     # AI 模型路径
