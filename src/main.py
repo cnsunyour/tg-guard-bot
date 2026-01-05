@@ -24,9 +24,10 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     # 注册路由器
-    from src.bot.handlers import admin, antispam, events, moderation, verification
+    from src.bot.handlers import admin, antispam, events, moderation, start, verification
 
     dp.include_router(events.router)  # 系统事件（最高优先级）
+    dp.include_router(start.router)  # 启动命令
     dp.include_router(admin.router)  # 管理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(verification.router)  # 入群验证
