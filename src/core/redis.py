@@ -80,3 +80,19 @@ class RedisKeys:
         用于防止多用户同时未启动 Bot 时重复发送引导消息
         """
         return f"verification_hint:{chat_id}"
+
+    @staticmethod
+    def verification_approved(chat_id: int, user_id: int) -> str:
+        """验证已批准标记键名
+
+        用于标记已通过验证的用户，避免批准加入后重复验证
+        """
+        return f"verification_approved:{chat_id}:{user_id}"
+
+    @staticmethod
+    def verification_type(chat_id: int, user_id: int) -> str:
+        """验证类型标记键名
+
+        用于标记验证是加入请求验证(join_request)还是正常验证(normal)
+        """
+        return f"verification_type:{chat_id}:{user_id}"
