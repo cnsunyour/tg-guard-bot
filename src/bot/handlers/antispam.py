@@ -1,15 +1,19 @@
 """反垃圾消息处理器"""
 
+import gzip
+import json
 import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import imageio.v3 as iio
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
+from PIL import Image
 
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
@@ -315,16 +319,30 @@ async def on_message(message: Message, bot: Bot) -> None:
             # 删除垃圾消息
             await message.delete()
 
-            # 禁言用户 (10分钟)
-            # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
-            success, error_msg = await ModerationService.mute_user(
-                bot=bot,
-                chat_id=message.chat.id,
-                user_id=message.from_user.id,
-                operator_id=bot.id,  # Bot 作为操作者
-                duration=10,  # 10分钟
-                reason=f"垃圾信息: {', '.join(result['reasons'])}",
-            )
+            # 根据置信度决定处罚措施
+            if result["confidence"] >= settings.spam_high_confidence_threshold:
+                # 高置信度：踢出并封禁 1 小时
+                success, error_msg = await ModerationService.ban_user_temporarily(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,
+                    duration=60,  # 60 分钟 = 1 小时
+                    reason=f"垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                )
+                punishment_text = "踢出并封禁 1 小时"
+            else:
+                # 低置信度：禁言 10 分钟
+                # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
+                success, error_msg = await ModerationService.mute_user(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,  # Bot 作为操作者
+                    duration=10,  # 10分钟
+                    reason=f"垃圾信息: {', '.join(result['reasons'])}",
+                )
+                punishment_text = "禁言 10 分钟"
 
             if success:
                 # ✅ P1-12: 缓存原始消息文本，用于管理员反馈
@@ -357,7 +375,7 @@ async def on_message(message: Message, bot: Bot) -> None:
                     f"用户: {format_user_mention(message.from_user)}\n"
                     f"原因: {', '.join(result['reasons'])}\n"
                     f"置信度: {result['confidence']:.2%}\n"
-                    f"处罚: 禁言 10 分钟",
+                    f"处罚: {punishment_text}",
                     reply_markup=keyboard,
                 )
                 await auto_delete_message(alert_msg)
@@ -453,15 +471,29 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                 # 删除垃圾消息
                 await message.delete()
 
-                # 禁言用户 (10分钟)
-                success, error_msg = await ModerationService.mute_user(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,
-                    duration=10,
-                    reason=f"图片垃圾信息: {', '.join(result['reasons'])}",
-                )
+                # 根据置信度决定处罚措施
+                if result["confidence"] >= settings.spam_high_confidence_threshold:
+                    # 高置信度：踢出并封禁 1 小时
+                    success, error_msg = await ModerationService.ban_user_temporarily(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=60,  # 60 分钟 = 1 小时
+                        reason=f"图片垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "踢出并封禁 1 小时"
+                else:
+                    # 低置信度：禁言 10 分钟
+                    success, error_msg = await ModerationService.mute_user(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=10,
+                        reason=f"图片垃圾信息: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "禁言 10 分钟"
 
                 if success:
                     # ✅ P1-12: 缓存原始消息的 OCR 文本，用于管理员反馈
@@ -497,7 +529,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
                         f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: 禁言 10 分钟",
+                        f"处罚: {punishment_text}",
                         reply_markup=keyboard,
                     )
                     await auto_delete_message(alert_msg)
@@ -518,6 +550,385 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"图片检测失败: {e}")
+
+
+@router.message(F.sticker)
+async def on_sticker_message(message: Message, bot: Bot) -> None:
+    """处理贴纸消息，检测垃圾"""
+    # 跳过私聊消息
+    if message.chat.type == "private":
+        return
+
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        logger.debug(f"跳过匿名管理员贴纸消息 [群组:{message.chat.id}]")
+        return
+
+    # 跳过超级管理员消息
+    if message.from_user.id in settings.admin_ids:
+        logger.debug(f"跳过超级管理员贴纸消息 [用户:{message.from_user.id}]")
+        return
+
+    # 跳过群组管理员消息
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        logger.debug(
+            f"跳过群组管理员贴纸消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
+        )
+        return
+
+    # 检查群组是否启用反垃圾
+    try:
+        group = await GroupRepository.get(message.chat.id)
+        if group and not group.antispam_enabled:
+            return
+    except Exception as e:
+        logger.debug(f"检查群组配置失败（非关键）: {e}")
+
+    # 获取检测器
+    detector = get_detector()
+
+    # 检查 OCR 是否可用
+    if not detector.ocr_extractor.is_available:
+        logger.debug("OCR 不可用，跳过贴纸检测")
+        return
+
+    # 使用 context manager 确保临时文件清理
+    try:
+        # 下载贴纸文件
+        sticker = message.sticker
+
+        # ✅ 检查贴纸类型
+        # 处理动画 TGS 贴纸
+        if sticker.is_animated:
+            # 懒加载 lottie（仅在 OCR 启用时可用）
+            try:
+                from lottie.exporters.cairo import export_png
+                from lottie.importers.core import import_tgs
+            except ImportError as e:
+                logger.debug(f"TGS 支持不可用（需要安装 OCR 依赖）: {e}")
+                return
+
+            with managed_temp_file(suffix=".tgs") as tgs_file_path:
+                # 下载贴纸
+                await bot.download(sticker, destination=tgs_file_path)
+                logger.debug(
+                    f"动画贴纸已下载: {tgs_file_path}, "
+                    f"大小: {sticker.width}x{sticker.height}, "
+                    f"文件大小: {sticker.file_size} bytes"
+                )
+
+                # 提取首帧和中间帧进行检测
+                try:
+                    # TGS = gzip-compressed Lottie JSON
+                    tgs_path = Path(tgs_file_path)
+
+                    # ✅ 防止 gzip 炸弹攻击：限制解压后大小为 10MB
+                    MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
+                    compressed_data = tgs_path.read_bytes()
+                    decompressed_data = gzip.decompress(compressed_data)
+
+                    if len(decompressed_data) > MAX_DECOMPRESSED_SIZE:
+                        logger.warning(
+                            f"TGS 文件解压后过大: {len(decompressed_data)} bytes (限制: {MAX_DECOMPRESSED_SIZE})"
+                        )
+                        return
+
+                    meta = json.loads(decompressed_data)
+
+                    # ✅ 使用 float 解析并处理边界情况
+                    ip = float(meta.get("ip", 0))  # in point (起始帧)
+                    op = float(meta.get("op", ip + 1))  # out point (结束帧)
+
+                    # ✅ 验证帧范围
+                    if op <= ip:
+                        logger.warning(f"无效的 TGS 帧范围: ip={ip}, op={op}")
+                        return
+
+                    total_frames = int(op - ip)
+                    logger.debug(f"TGS 动画总帧数: {total_frames} (ip={ip}, op={op})")
+
+                    if total_frames <= 0:
+                        logger.warning("TGS 动画无有效帧")
+                        return
+
+                    # 确定检测帧索引：1/3 帧 + 2/3 帧
+                    frame_1_3 = int(ip) + total_frames // 3  # 1/3 位置的绝对帧号
+                    check_indices = [frame_1_3]
+
+                    if total_frames > 2:
+                        frame_2_3 = int(ip) + total_frames * 2 // 3  # 2/3 位置的绝对帧号
+                        check_indices.append(frame_2_3)
+
+                    logger.debug(
+                        f"将检测第 {check_indices} 帧 "
+                        f"(相对位置: 1/3={total_frames // 3}, 2/3={total_frames * 2 // 3}; "
+                        f"帧范围: {int(ip)}-{int(op)})"
+                    )
+
+                    # 导入 TGS 动画
+                    anim = import_tgs(str(tgs_file_path))
+
+                    # 循环检测每一帧
+                    for frame_idx in check_indices:
+                        relative_pos = frame_idx - int(ip)
+                        logger.debug(
+                            f"渲染第 {frame_idx} 帧 "
+                            f"(相对位置: {relative_pos}/{total_frames}, 进度: {relative_pos/total_frames:.1%})"
+                        )
+
+                        with managed_temp_file(suffix=".png") as png_file_path:
+                            # 渲染当前帧为 PNG
+                            export_png(anim, png_file_path, frame=frame_idx)
+                            logger.debug(f"第 {frame_idx} 帧已渲染为 PNG: {png_file_path}")
+
+                            # ✅ 使用 context manager 打开图片并全面处理颜色模式
+                            with Image.open(png_file_path) as img:
+                                # 转换为 RGB（OCR 需要）
+                                if img.mode in ("RGBA", "LA", "P"):
+                                    # 将透明背景转为白色
+                                    background = Image.new("RGB", img.size, (255, 255, 255))
+                                    if img.mode == "P":
+                                        img = img.convert("RGBA")
+                                    if img.mode in ("RGBA", "LA"):
+                                        background.paste(
+                                            img, mask=img.split()[-1]  # alpha channel
+                                        )
+                                    else:
+                                        background.paste(img)
+                                    background.save(png_file_path, "PNG")
+                                elif img.mode != "RGB":
+                                    # 其他模式直接转 RGB
+                                    img.convert("RGB").save(png_file_path, "PNG")
+
+                            # 检测当前帧中的文字
+                            result = await detector.detect_image(
+                                image_path=png_file_path,
+                                user_id=message.from_user.id,
+                                chat_id=message.chat.id,
+                            )
+
+                            # 如果检测到垃圾，立即停止检测
+                            if result["is_spam"]:
+                                logger.info(f"第 {frame_idx} 帧检测到垃圾，停止后续检测")
+                                break
+
+                except Exception as e:
+                    # ✅ 使用 logger.exception 保留堆栈跟踪
+                    logger.exception(f"TGS 动画帧渲染失败: {e}")
+                    return
+
+        # 处理静态 WebP 贴纸
+        elif not sticker.is_video:
+            with managed_temp_file(suffix=".webp") as webp_file_path:
+                # 下载贴纸到临时文件
+                await bot.download(sticker, destination=webp_file_path)
+                logger.debug(
+                    f"静态贴纸已下载: {webp_file_path}, "
+                    f"大小: {sticker.width}x{sticker.height}, "
+                    f"文件大小: {sticker.file_size} bytes"
+                )
+
+                # 将 WebP 转换为 PNG（PaddleOCR 不支持 WebP）
+                with managed_temp_file(suffix=".png") as png_file_path:
+                    try:
+                        # ✅ 检查文件内容
+                        with open(webp_file_path, "rb") as f:
+                            header = f.read(16)
+                            logger.debug(f"文件头部: {header[:12].hex()}")
+                            # WebP 文件应该以 "RIFF" 开头，并包含 "WEBP"
+                            if not (header[:4] == b"RIFF" and header[8:12] == b"WEBP"):
+                                logger.error(
+                                    f"文件不是有效的 WebP 格式 "
+                                    f"(header: {header[:12].hex()})"
+                                )
+                                return
+
+                        img = Image.open(webp_file_path)
+                        # 转换 RGBA 到 RGB（PNG 不支持透明度）
+                        if img.mode in ("RGBA", "LA", "P"):
+                            background = Image.new("RGB", img.size, (255, 255, 255))
+                            if img.mode == "P":
+                                img = img.convert("RGBA")
+                            background.paste(
+                                img, mask=img.split()[-1] if img.mode == "RGBA" else None
+                            )
+                            img = background
+                        img.save(png_file_path, "PNG")
+                        logger.debug(f"贴纸已转换为 PNG: {png_file_path}")
+                    except Exception as e:
+                        logger.error(f"贴纸格式转换失败: {e}")
+                        return
+
+                    # 检测贴纸图片中的文字
+                    result = await detector.detect_image(
+                        image_path=png_file_path,
+                        user_id=message.from_user.id,
+                        chat_id=message.chat.id,
+                    )
+
+        # 处理视频 WebM 贴纸
+        else:
+            with managed_temp_file(suffix=".webm") as webm_file_path:
+                # 下载视频贴纸
+                await bot.download(sticker, destination=webm_file_path)
+                logger.debug(
+                    f"视频贴纸已下载: {webm_file_path}, "
+                    f"大小: {sticker.width}x{sticker.height}, "
+                    f"文件大小: {sticker.file_size} bytes"
+                )
+
+                # 提取首帧和中间帧进行检测（方案B）
+                try:
+                    # 读取所有帧
+                    frames = list(iio.imiter(webm_file_path, plugin="pyav"))
+                    total_frames = len(frames)
+                    logger.debug(f"视频总帧数: {total_frames}")
+
+                    if total_frames == 0:
+                        logger.warning("视频无有效帧")
+                        return
+
+                    # 确定检测帧索引：1/3 帧 + 2/3 帧
+                    frame_1_3 = total_frames // 3
+                    check_indices = [frame_1_3]
+
+                    if total_frames > 2:
+                        frame_2_3 = total_frames * 2 // 3
+                        check_indices.append(frame_2_3)
+
+                    logger.debug(
+                        f"将检测第 {check_indices} 帧 "
+                        f"(1/3 和 2/3 位置, 总帧数: {total_frames})"
+                    )
+
+                    # 循环检测每一帧
+                    for frame_idx in check_indices:
+                        frame = frames[frame_idx]
+                        logger.debug(
+                            f"检测第 {frame_idx} 帧 "
+                            f"(进度: {frame_idx}/{total_frames}={frame_idx/total_frames:.1%}, shape={frame.shape})"
+                        )
+
+                        with managed_temp_file(suffix=".png") as png_file_path:
+                            # 转换为 PIL Image 并保存
+                            img = Image.fromarray(frame)
+                            # 转换为 RGB（如果需要）
+                            if img.mode != "RGB":
+                                img = img.convert("RGB")
+                            img.save(png_file_path, "PNG")
+                            logger.debug(
+                                f"第 {frame_idx} 帧已保存为 PNG: {png_file_path}"
+                            )
+
+                            # 检测当前帧中的文字
+                            result = await detector.detect_image(
+                                image_path=png_file_path,
+                                user_id=message.from_user.id,
+                                chat_id=message.chat.id,
+                            )
+
+                            # 如果检测到垃圾，立即停止检测
+                            if result["is_spam"]:
+                                logger.info(
+                                    f"第 {frame_idx} 帧检测到垃圾，停止后续检测"
+                                )
+                                break
+
+                except Exception as e:
+                    logger.error(f"视频贴纸帧提取失败: {e}")
+                    return
+
+        # 如果检测到垃圾
+        if result["is_spam"]:
+            logger.warning(
+                f"检测到贴纸垃圾信息 [群组:{message.chat.id}] "
+                f"[用户:{message.from_user.id}] "
+                f"阶段: {result['stage']}, "
+                f"置信度: {result['confidence']:.2f}, "
+                f"原因: {', '.join(result['reasons'])}"
+            )
+
+            try:
+                # 删除垃圾消息
+                await message.delete()
+
+                # 根据置信度决定处罚措施
+                if result["confidence"] >= settings.spam_high_confidence_threshold:
+                    # 高置信度：踢出并封禁 1 小时
+                    success, error_msg = await ModerationService.ban_user_temporarily(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=60,  # 60 分钟 = 1 小时
+                        reason=f"贴纸垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "踢出并封禁 1 小时"
+                else:
+                    # 低置信度：禁言 10 分钟
+                    success, error_msg = await ModerationService.mute_user(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=10,
+                        reason=f"贴纸垃圾信息: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "禁言 10 分钟"
+
+                if success:
+                    # 缓存原始消息的 OCR 文本，用于管理员反馈
+                    if "ocr_text" in result["details"]:
+                        redis = get_redis()
+                        text_cache_key = RedisKeys.spam_message_text(
+                            message.chat.id, message.message_id
+                        )
+                        await redis.setex(text_cache_key, 3600, result["details"]["ocr_text"])
+
+                    # 发送提示消息
+                    message_id_str = str(message.message_id)
+
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="✅ 误判",
+                                    callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
+                                ),
+                                InlineKeyboardButton(
+                                    text="❌ 确认垃圾",
+                                    callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
+                                ),
+                            ]
+                        ]
+                    )
+
+                    alert_msg = await message.answer(
+                        f"🚫 检测到贴纸垃圾信息并已处理\n\n"
+                        f"用户: {format_user_mention(message.from_user)}\n"
+                        f"原因: {', '.join(result['reasons'])}\n"
+                        f"置信度: {result['confidence']:.2%}\n"
+                        f"处罚: {punishment_text}",
+                        reply_markup=keyboard,
+                    )
+                    await auto_delete_message(alert_msg)
+
+                    # 记录反馈
+                    if "ocr_text" in result["details"]:
+                        await detector.add_feedback(
+                            text=result["details"]["ocr_text"],
+                            is_spam=True,
+                            labeled_by=bot.id,
+                            confidence=result["confidence"],
+                        )
+                else:
+                    logger.error(f"禁言用户失败: {error_msg}")
+
+            except Exception as e:
+                logger.error(f"处理贴纸垃圾消息失败: {e}")
+
+    except Exception as e:
+        logger.error(f"贴纸检测失败: {e}")
 
 
 @router.callback_query(F.data.startswith("spam_feedback:"))

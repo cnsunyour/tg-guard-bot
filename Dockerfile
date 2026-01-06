@@ -17,6 +17,8 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
+    libwebp7 \
+    libjpeg62-turbo \
     && rm -rf /var/lib/apt/lists/*
 
 # 如果启用 OCR，安装额外的系统依赖
@@ -28,6 +30,11 @@ RUN if [ "$ENABLE_OCR" = "true" ]; then \
         libxext6 \
         libxrender-dev \
         libgl1 \
+        libcairo2 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*; \
     fi
 
