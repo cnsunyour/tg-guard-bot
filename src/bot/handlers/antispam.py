@@ -520,6 +520,142 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         logger.error(f"图片检测失败: {e}")
 
 
+@router.message(F.sticker)
+async def on_sticker_message(message: Message, bot: Bot) -> None:
+    """处理贴纸消息，检测垃圾"""
+    # 跳过私聊消息
+    if message.chat.type == "private":
+        return
+
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        logger.debug(f"跳过匿名管理员贴纸消息 [群组:{message.chat.id}]")
+        return
+
+    # 跳过超级管理员消息
+    if message.from_user.id in settings.admin_ids:
+        logger.debug(f"跳过超级管理员贴纸消息 [用户:{message.from_user.id}]")
+        return
+
+    # 跳过群组管理员消息
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        logger.debug(
+            f"跳过群组管理员贴纸消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
+        )
+        return
+
+    # 检查群组是否启用反垃圾
+    try:
+        group = await GroupRepository.get(message.chat.id)
+        if group and not group.antispam_enabled:
+            return
+    except Exception as e:
+        logger.debug(f"检查群组配置失败（非关键）: {e}")
+
+    # 获取检测器
+    detector = get_detector()
+
+    # 检查 OCR 是否可用
+    if not detector.ocr_extractor.is_available:
+        logger.debug("OCR 不可用，跳过贴纸检测")
+        return
+
+    # 使用 context manager 确保临时文件清理
+    try:
+        # 下载贴纸文件
+        sticker = message.sticker
+
+        with managed_temp_file(suffix=".webp") as temp_file_path:
+            # 下载贴纸到临时文件
+            await bot.download(sticker, destination=temp_file_path)
+            logger.debug(f"贴纸已下载到临时文件: {temp_file_path}")
+
+            # 检测贴纸图片中的文字
+            result = await detector.detect_image(
+                image_path=temp_file_path,
+                user_id=message.from_user.id,
+                chat_id=message.chat.id,
+            )
+
+        # 如果检测到垃圾
+        if result["is_spam"]:
+            logger.warning(
+                f"检测到贴纸垃圾信息 [群组:{message.chat.id}] "
+                f"[用户:{message.from_user.id}] "
+                f"阶段: {result['stage']}, "
+                f"置信度: {result['confidence']:.2f}, "
+                f"原因: {', '.join(result['reasons'])}"
+            )
+
+            try:
+                # 删除垃圾消息
+                await message.delete()
+
+                # 禁言用户 (10分钟)
+                success, error_msg = await ModerationService.mute_user(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,
+                    duration=10,
+                    reason=f"贴纸垃圾信息: {', '.join(result['reasons'])}",
+                )
+
+                if success:
+                    # 缓存原始消息的 OCR 文本，用于管理员反馈
+                    if "ocr_text" in result["details"]:
+                        redis = get_redis()
+                        text_cache_key = RedisKeys.spam_message_text(
+                            message.chat.id, message.message_id
+                        )
+                        await redis.setex(text_cache_key, 3600, result["details"]["ocr_text"])
+
+                    # 发送提示消息
+                    message_id_str = str(message.message_id)
+
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="✅ 误判",
+                                    callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
+                                ),
+                                InlineKeyboardButton(
+                                    text="❌ 确认垃圾",
+                                    callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
+                                ),
+                            ]
+                        ]
+                    )
+
+                    alert_msg = await message.answer(
+                        f"🚫 检测到贴纸垃圾信息并已处理\n\n"
+                        f"用户: {format_user_mention(message.from_user)}\n"
+                        f"原因: {', '.join(result['reasons'])}\n"
+                        f"置信度: {result['confidence']:.2%}\n"
+                        f"处罚: 禁言 10 分钟",
+                        reply_markup=keyboard,
+                    )
+                    await auto_delete_message(alert_msg)
+
+                    # 记录反馈
+                    if "ocr_text" in result["details"]:
+                        await detector.add_feedback(
+                            text=result["details"]["ocr_text"],
+                            is_spam=True,
+                            labeled_by=bot.id,
+                            confidence=result["confidence"],
+                        )
+                else:
+                    logger.error(f"禁言用户失败: {error_msg}")
+
+            except Exception as e:
+                logger.error(f"处理贴纸垃圾消息失败: {e}")
+
+    except Exception as e:
+        logger.error(f"贴纸检测失败: {e}")
+
+
 @router.callback_query(F.data.startswith("spam_feedback:"))
 async def on_spam_feedback(callback: CallbackQuery) -> None:
     """处理管理员反馈
