@@ -566,14 +566,38 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         # 下载贴纸文件
         sticker = message.sticker
 
+        # ✅ 检查贴纸类型
+        if sticker.is_animated:
+            logger.debug(f"跳过动画贴纸 (TGS 格式): {sticker.file_id}")
+            return
+        if sticker.is_video:
+            logger.debug(f"跳过视频贴纸 (WebM 格式): {sticker.file_id}")
+            return
+
         with managed_temp_file(suffix=".webp") as webp_file_path:
             # 下载贴纸到临时文件
             await bot.download(sticker, destination=webp_file_path)
-            logger.debug(f"贴纸已下载到临时文件: {webp_file_path}")
+            logger.debug(
+                f"贴纸已下载: {webp_file_path}, "
+                f"大小: {sticker.width}x{sticker.height}, "
+                f"文件大小: {sticker.file_size} bytes"
+            )
 
             # 将 WebP 转换为 PNG（PaddleOCR 不支持 WebP）
             with managed_temp_file(suffix=".png") as png_file_path:
                 try:
+                    # ✅ 检查文件内容
+                    with open(webp_file_path, "rb") as f:
+                        header = f.read(16)
+                        logger.debug(f"文件头部: {header[:12].hex()}")
+                        # WebP 文件应该以 "RIFF" 开头，并包含 "WEBP"
+                        if not (header[:4] == b"RIFF" and header[8:12] == b"WEBP"):
+                            logger.error(
+                                f"文件不是有效的 WebP 格式 "
+                                f"(header: {header[:12].hex()})"
+                            )
+                            return
+
                     img = Image.open(webp_file_path)
                     # 转换 RGBA 到 RGB（PNG 不支持透明度）
                     if img.mode in ("RGBA", "LA", "P"):
