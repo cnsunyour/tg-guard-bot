@@ -558,8 +558,8 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
     # 必须回复某条消息
     if not message.reply_to_message:
         reply = await message.answer(
-            "❌ 请回复要删除的消息\\n\\n"
-            "<b>用法</b>: 回复某条消息，然后使用 /delbefore &lt;数量&gt;\\n"
+            "❌ 请回复要删除的消息\n\n"
+            "<b>用法</b>: 回复某条消息，然后使用 /delbefore &lt;数量&gt;\n"
             "<b>示例</b>: /delbefore 10  (删除包含该消息在内往前共10条消息)"
         )
         await auto_delete_message(reply)
@@ -594,7 +594,7 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\\n" f"成功: {success_count} 条\\n" f"失败: {fail_count} 条"
+        f"✅ 删除完成\n" f"成功: {success_count} 条\n" f"失败: {fail_count} 条"
     )
     await auto_delete_message(reply)
 
@@ -618,8 +618,8 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
     # 必须回复某条消息
     if not message.reply_to_message:
         reply = await message.answer(
-            "❌ 请回复要删除的消息\\n\\n"
-            "<b>用法</b>: 回复某条消息，然后使用 /delafter &lt;数量&gt;\\n"
+            "❌ 请回复要删除的消息\n\n"
+            "<b>用法</b>: 回复某条消息，然后使用 /delafter &lt;数量&gt;\n"
             "<b>示例</b>: /delafter 10  (删除包含该消息在内往后共10条消息)"
         )
         await auto_delete_message(reply)
@@ -654,7 +654,7 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\\n" f"成功: {success_count} 条\\n" f"失败: {fail_count} 条"
+        f"✅ 删除完成\n" f"成功: {success_count} 条\n" f"失败: {fail_count} 条"
     )
     await auto_delete_message(reply)
 
@@ -678,10 +678,10 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     # 必须回复某条消息
     if not message.reply_to_message:
         reply = await message.answer(
-            "❌ 请回复起始消息\\n\\n"
-            "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID或链接&gt;\\n\\n"
-            "<b>示例1</b>: /delrange 12345\\n"
-            "<b>示例2</b>: /delrange https://t.me/c/1234567890/12345\\n\\n"
+            "❌ 请回复起始消息\n\n"
+            "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID或链接&gt;\n\n"
+            "<b>示例1</b>: /delrange 12345\n"
+            "<b>示例2</b>: /delrange https://t.me/c/1234567890/12345\n\n"
             '💡 <b>提示</b>: 在电脑端右键点击消息选择"复制消息链接"，然后直接粘贴即可'
         )
         await auto_delete_message(reply)
@@ -699,9 +699,9 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
 
     if end_message_id is None:
         reply = await message.answer(
-            "❌ 无法解析消息ID\\n\\n"
-            "支持的格式：\\n"
-            "1. 纯数字：12345\\n"
+            "❌ 无法解析消息ID\n\n"
+            "支持的格式：\n"
+            "1. 纯数字：12345\n"
             "2. 消息链接：https://t.me/c/1234567890/12345"
         )
         await auto_delete_message(reply)
@@ -714,7 +714,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     message_range = abs(end_message_id - start_message_id) + 1
     if message_range > 1000:
         reply = await message.answer(
-            f"❌ 删除范围过大（{message_range} 条消息）\\n" "为了安全，单次最多删除 1000 条消息"
+            f"❌ 删除范围过大（{message_range} 条消息）\n" "为了安全，单次最多删除 1000 条消息"
         )
         await auto_delete_message(reply)
         return
@@ -728,9 +728,9 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\\n"
-        f"消息范围: {min(start_message_id, end_message_id)} - {max(start_message_id, end_message_id)}\\n"
-        f"成功: {success_count} 条\\n"
+        f"✅ 删除完成\n"
+        f"消息范围: {min(start_message_id, end_message_id)} - {max(start_message_id, end_message_id)}\n"
+        f"成功: {success_count} 条\n"
         f"失败: {fail_count} 条"
     )
     await auto_delete_message(reply)
