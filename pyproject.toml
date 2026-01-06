@@ -50,6 +50,7 @@ dependencies = [
     "fastembed>=0.3.0",
     "numpy>=1.26.0",
     "captcha>=0.5.0",                   # 图片验证码生成
+    "Pillow>=10.0.0",                   # 图片处理（WebP 转换）
 
     # 配置管理
     "python-dotenv>=1.0.0",

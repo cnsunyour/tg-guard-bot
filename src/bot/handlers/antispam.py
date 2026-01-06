@@ -10,6 +10,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
+from PIL import Image
 
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
@@ -565,17 +566,34 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         # 下载贴纸文件
         sticker = message.sticker
 
-        with managed_temp_file(suffix=".webp") as temp_file_path:
+        with managed_temp_file(suffix=".webp") as webp_file_path:
             # 下载贴纸到临时文件
-            await bot.download(sticker, destination=temp_file_path)
-            logger.debug(f"贴纸已下载到临时文件: {temp_file_path}")
+            await bot.download(sticker, destination=webp_file_path)
+            logger.debug(f"贴纸已下载到临时文件: {webp_file_path}")
 
-            # 检测贴纸图片中的文字
-            result = await detector.detect_image(
-                image_path=temp_file_path,
-                user_id=message.from_user.id,
-                chat_id=message.chat.id,
-            )
+            # 将 WebP 转换为 PNG（PaddleOCR 不支持 WebP）
+            with managed_temp_file(suffix=".png") as png_file_path:
+                try:
+                    img = Image.open(webp_file_path)
+                    # 转换 RGBA 到 RGB（PNG 不支持透明度）
+                    if img.mode in ("RGBA", "LA", "P"):
+                        background = Image.new("RGB", img.size, (255, 255, 255))
+                        if img.mode == "P":
+                            img = img.convert("RGBA")
+                        background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+                        img = background
+                    img.save(png_file_path, "PNG")
+                    logger.debug(f"贴纸已转换为 PNG: {png_file_path}")
+                except Exception as e:
+                    logger.error(f"贴纸格式转换失败: {e}")
+                    return
+
+                # 检测贴纸图片中的文字
+                result = await detector.detect_image(
+                    image_path=png_file_path,
+                    user_id=message.from_user.id,
+                    chat_id=message.chat.id,
+                )
 
         # 如果检测到垃圾
         if result["is_spam"]:
