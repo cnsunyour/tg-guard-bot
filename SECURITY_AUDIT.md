@@ -161,7 +161,7 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
                 return
 
         # ✅ 白名单验证参数
-        if verify_type not in ["button", "math", "slider"]:
+        if verify_type not in ["math", "slider", "qa", "emoji", "captcha", "honeypot", "random"]:
             await callback.answer("❌ 无效的验证类型", show_alert=True)
             return
 
