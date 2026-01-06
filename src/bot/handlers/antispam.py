@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import imageio.v3 as iio
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -568,56 +569,94 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 
         # ✅ 检查贴纸类型
         if sticker.is_animated:
-            logger.debug(f"跳过动画贴纸 (TGS 格式): {sticker.file_id}")
-            return
-        if sticker.is_video:
-            logger.debug(f"跳过视频贴纸 (WebM 格式): {sticker.file_id}")
+            logger.debug(f"暂不支持动画贴纸 (TGS 格式): {sticker.file_id}")
             return
 
-        with managed_temp_file(suffix=".webp") as webp_file_path:
-            # 下载贴纸到临时文件
-            await bot.download(sticker, destination=webp_file_path)
-            logger.debug(
-                f"贴纸已下载: {webp_file_path}, "
-                f"大小: {sticker.width}x{sticker.height}, "
-                f"文件大小: {sticker.file_size} bytes"
-            )
-
-            # 将 WebP 转换为 PNG（PaddleOCR 不支持 WebP）
-            with managed_temp_file(suffix=".png") as png_file_path:
-                try:
-                    # ✅ 检查文件内容
-                    with open(webp_file_path, "rb") as f:
-                        header = f.read(16)
-                        logger.debug(f"文件头部: {header[:12].hex()}")
-                        # WebP 文件应该以 "RIFF" 开头，并包含 "WEBP"
-                        if not (header[:4] == b"RIFF" and header[8:12] == b"WEBP"):
-                            logger.error(
-                                f"文件不是有效的 WebP 格式 "
-                                f"(header: {header[:12].hex()})"
-                            )
-                            return
-
-                    img = Image.open(webp_file_path)
-                    # 转换 RGBA 到 RGB（PNG 不支持透明度）
-                    if img.mode in ("RGBA", "LA", "P"):
-                        background = Image.new("RGB", img.size, (255, 255, 255))
-                        if img.mode == "P":
-                            img = img.convert("RGBA")
-                        background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
-                        img = background
-                    img.save(png_file_path, "PNG")
-                    logger.debug(f"贴纸已转换为 PNG: {png_file_path}")
-                except Exception as e:
-                    logger.error(f"贴纸格式转换失败: {e}")
-                    return
-
-                # 检测贴纸图片中的文字
-                result = await detector.detect_image(
-                    image_path=png_file_path,
-                    user_id=message.from_user.id,
-                    chat_id=message.chat.id,
+        # 处理静态 WebP 贴纸
+        if not sticker.is_video:
+            with managed_temp_file(suffix=".webp") as webp_file_path:
+                # 下载贴纸到临时文件
+                await bot.download(sticker, destination=webp_file_path)
+                logger.debug(
+                    f"静态贴纸已下载: {webp_file_path}, "
+                    f"大小: {sticker.width}x{sticker.height}, "
+                    f"文件大小: {sticker.file_size} bytes"
                 )
+
+                # 将 WebP 转换为 PNG（PaddleOCR 不支持 WebP）
+                with managed_temp_file(suffix=".png") as png_file_path:
+                    try:
+                        # ✅ 检查文件内容
+                        with open(webp_file_path, "rb") as f:
+                            header = f.read(16)
+                            logger.debug(f"文件头部: {header[:12].hex()}")
+                            # WebP 文件应该以 "RIFF" 开头，并包含 "WEBP"
+                            if not (header[:4] == b"RIFF" and header[8:12] == b"WEBP"):
+                                logger.error(
+                                    f"文件不是有效的 WebP 格式 "
+                                    f"(header: {header[:12].hex()})"
+                                )
+                                return
+
+                        img = Image.open(webp_file_path)
+                        # 转换 RGBA 到 RGB（PNG 不支持透明度）
+                        if img.mode in ("RGBA", "LA", "P"):
+                            background = Image.new("RGB", img.size, (255, 255, 255))
+                            if img.mode == "P":
+                                img = img.convert("RGBA")
+                            background.paste(
+                                img, mask=img.split()[-1] if img.mode == "RGBA" else None
+                            )
+                            img = background
+                        img.save(png_file_path, "PNG")
+                        logger.debug(f"贴纸已转换为 PNG: {png_file_path}")
+                    except Exception as e:
+                        logger.error(f"贴纸格式转换失败: {e}")
+                        return
+
+                    # 检测贴纸图片中的文字
+                    result = await detector.detect_image(
+                        image_path=png_file_path,
+                        user_id=message.from_user.id,
+                        chat_id=message.chat.id,
+                    )
+
+        # 处理视频 WebM 贴纸
+        else:
+            with managed_temp_file(suffix=".webm") as webm_file_path:
+                # 下载视频贴纸
+                await bot.download(sticker, destination=webm_file_path)
+                logger.debug(
+                    f"视频贴纸已下载: {webm_file_path}, "
+                    f"大小: {sticker.width}x{sticker.height}, "
+                    f"文件大小: {sticker.file_size} bytes"
+                )
+
+                # 提取第一帧
+                with managed_temp_file(suffix=".png") as png_file_path:
+                    try:
+                        # 使用 imageio 读取视频并提取第一帧
+                        frames = iio.imiter(webm_file_path, plugin="pyav")
+                        first_frame = next(frames)
+                        logger.debug(f"提取第一帧: shape={first_frame.shape}")
+
+                        # 转换为 PIL Image 并保存
+                        img = Image.fromarray(first_frame)
+                        # 转换为 RGB（如果需要）
+                        if img.mode != "RGB":
+                            img = img.convert("RGB")
+                        img.save(png_file_path, "PNG")
+                        logger.debug(f"视频贴纸第一帧已保存为 PNG: {png_file_path}")
+                    except Exception as e:
+                        logger.error(f"视频贴纸第一帧提取失败: {e}")
+                        return
+
+                    # 检测第一帧中的文字
+                    result = await detector.detect_image(
+                        image_path=png_file_path,
+                        user_id=message.from_user.id,
+                        chat_id=message.chat.id,
+                    )
 
         # 如果检测到垃圾
         if result["is_spam"]:
