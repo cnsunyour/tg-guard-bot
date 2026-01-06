@@ -632,31 +632,59 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     f"文件大小: {sticker.file_size} bytes"
                 )
 
-                # 提取第一帧
-                with managed_temp_file(suffix=".png") as png_file_path:
-                    try:
-                        # 使用 imageio 读取视频并提取第一帧
-                        frames = iio.imiter(webm_file_path, plugin="pyav")
-                        first_frame = next(frames)
-                        logger.debug(f"提取第一帧: shape={first_frame.shape}")
+                # 提取首帧和中间帧进行检测（方案B）
+                try:
+                    # 读取所有帧
+                    frames = list(iio.imiter(webm_file_path, plugin="pyav"))
+                    total_frames = len(frames)
+                    logger.debug(f"视频总帧数: {total_frames}")
 
-                        # 转换为 PIL Image 并保存
-                        img = Image.fromarray(first_frame)
-                        # 转换为 RGB（如果需要）
-                        if img.mode != "RGB":
-                            img = img.convert("RGB")
-                        img.save(png_file_path, "PNG")
-                        logger.debug(f"视频贴纸第一帧已保存为 PNG: {png_file_path}")
-                    except Exception as e:
-                        logger.error(f"视频贴纸第一帧提取失败: {e}")
+                    if total_frames == 0:
+                        logger.warning("视频无有效帧")
                         return
 
-                    # 检测第一帧中的文字
-                    result = await detector.detect_image(
-                        image_path=png_file_path,
-                        user_id=message.from_user.id,
-                        chat_id=message.chat.id,
-                    )
+                    # 确定检测帧索引：首帧 + 中间帧
+                    check_indices = [0]  # 首帧
+                    if total_frames > 1:
+                        check_indices.append(total_frames // 2)  # 中间帧
+
+                    logger.debug(f"将检测第 {check_indices} 帧")
+
+                    # 循环检测每一帧
+                    for frame_idx in check_indices:
+                        frame = frames[frame_idx]
+                        logger.debug(
+                            f"检测第 {frame_idx} 帧 (共{total_frames}帧): shape={frame.shape}"
+                        )
+
+                        with managed_temp_file(suffix=".png") as png_file_path:
+                            # 转换为 PIL Image 并保存
+                            img = Image.fromarray(frame)
+                            # 转换为 RGB（如果需要）
+                            if img.mode != "RGB":
+                                img = img.convert("RGB")
+                            img.save(png_file_path, "PNG")
+                            logger.debug(
+                                f"第 {frame_idx} 帧已保存为 PNG: {png_file_path}"
+                            )
+
+                            # 检测当前帧中的文字
+                            result = await detector.detect_image(
+                                image_path=png_file_path,
+                                user_id=message.from_user.id,
+                                chat_id=message.chat.id,
+                            )
+
+                            # 如果检测到垃圾，立即停止检测
+                            if result["is_spam"]:
+                                logger.info(
+                                    f"第 {frame_idx} 帧检测到垃圾，停止后续检测"
+                                )
+                                break
+
+                except Exception as e:
+                    logger.error(f"视频贴纸帧提取失败: {e}")
+                    return
 
         # 如果检测到垃圾
         if result["is_spam"]:
