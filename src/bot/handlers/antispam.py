@@ -13,8 +13,6 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
-from lottie.exporters.cairo import export_png
-from lottie.importers.core import import_tgs
 from PIL import Image
 
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
@@ -574,6 +572,14 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         # ✅ 检查贴纸类型
         # 处理动画 TGS 贴纸
         if sticker.is_animated:
+            # 懒加载 lottie（仅在 OCR 启用时可用）
+            try:
+                from lottie.exporters.cairo import export_png
+                from lottie.importers.core import import_tgs
+            except ImportError as e:
+                logger.debug(f"TGS 支持不可用（需要安装 OCR 依赖）: {e}")
+                return
+
             with managed_temp_file(suffix=".tgs") as tgs_file_path:
                 # 下载贴纸
                 await bot.download(sticker, destination=tgs_file_path)
@@ -587,21 +593,40 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                 try:
                     # TGS = gzip-compressed Lottie JSON
                     tgs_path = Path(tgs_file_path)
-                    meta = json.loads(gzip.decompress(tgs_path.read_bytes()))
-                    ip = int(meta.get("ip", 0))  # in point (起始帧)
-                    op = int(meta.get("op", ip + 1))  # out point (结束帧)
-                    total_frames = op - ip
 
+                    # ✅ 防止 gzip 炸弹攻击：限制解压后大小为 10MB
+                    MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
+                    compressed_data = tgs_path.read_bytes()
+                    decompressed_data = gzip.decompress(compressed_data)
+
+                    if len(decompressed_data) > MAX_DECOMPRESSED_SIZE:
+                        logger.warning(
+                            f"TGS 文件解压后过大: {len(decompressed_data)} bytes (限制: {MAX_DECOMPRESSED_SIZE})"
+                        )
+                        return
+
+                    meta = json.loads(decompressed_data)
+
+                    # ✅ 使用 float 解析并处理边界情况
+                    ip = float(meta.get("ip", 0))  # in point (起始帧)
+                    op = float(meta.get("op", ip + 1))  # out point (结束帧)
+
+                    # ✅ 验证帧范围
+                    if op <= ip:
+                        logger.warning(f"无效的 TGS 帧范围: ip={ip}, op={op}")
+                        return
+
+                    total_frames = int(op - ip)
                     logger.debug(f"TGS 动画总帧数: {total_frames} (ip={ip}, op={op})")
 
-                    if total_frames == 0:
+                    if total_frames <= 0:
                         logger.warning("TGS 动画无有效帧")
                         return
 
                     # 确定检测帧索引：首帧 + 中间帧
-                    check_indices = [ip]  # 首帧
+                    check_indices = [int(ip)]  # 首帧
                     if total_frames > 1:
-                        check_indices.append(ip + total_frames // 2)  # 中间帧
+                        check_indices.append(int(ip) + total_frames // 2)  # 中间帧
 
                     logger.debug(f"将检测第 {check_indices} 帧")
 
@@ -617,13 +642,24 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             export_png(anim, png_file_path, frame=frame_idx)
                             logger.debug(f"第 {frame_idx} 帧已渲染为 PNG: {png_file_path}")
 
-                            # 打开并转换为 RGB（OCR 需要）
-                            rgba = Image.open(png_file_path)
-                            if rgba.mode == "RGBA":
-                                # 将透明背景转为白色
-                                rgb = Image.new("RGB", rgba.size, (255, 255, 255))
-                                rgb.paste(rgba, mask=rgba.getchannel("A"))
-                                rgb.save(png_file_path, "PNG")
+                            # ✅ 使用 context manager 打开图片并全面处理颜色模式
+                            with Image.open(png_file_path) as img:
+                                # 转换为 RGB（OCR 需要）
+                                if img.mode in ("RGBA", "LA", "P"):
+                                    # 将透明背景转为白色
+                                    background = Image.new("RGB", img.size, (255, 255, 255))
+                                    if img.mode == "P":
+                                        img = img.convert("RGBA")
+                                    if img.mode in ("RGBA", "LA"):
+                                        background.paste(
+                                            img, mask=img.split()[-1]  # alpha channel
+                                        )
+                                    else:
+                                        background.paste(img)
+                                    background.save(png_file_path, "PNG")
+                                elif img.mode != "RGB":
+                                    # 其他模式直接转 RGB
+                                    img.convert("RGB").save(png_file_path, "PNG")
 
                             # 检测当前帧中的文字
                             result = await detector.detect_image(
@@ -638,7 +674,8 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                                 break
 
                 except Exception as e:
-                    logger.error(f"TGS 动画帧渲染失败: {e}")
+                    # ✅ 使用 logger.exception 保留堆栈跟踪
+                    logger.exception(f"TGS 动画帧渲染失败: {e}")
                     return
 
         # 处理静态 WebP 贴纸

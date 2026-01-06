@@ -52,8 +52,6 @@ dependencies = [
     "captcha>=0.5.0",                   # 图片验证码生成
     "Pillow>=10.0.0",                   # 图片处理（WebP 转换）
     "imageio[ffmpeg]>=2.34.0",          # 视频帧提取（WebM 贴纸）
-    "lottie>=0.7.0",                    # TGS/Lottie 解析（动画贴纸）
-    "cairosvg>=2.7.0",                  # Cairo SVG 渲染（Lottie 栅格化）
 
     # 配置管理
     "python-dotenv>=1.0.0",
@@ -105,6 +103,9 @@ ocr = [
     # ⚠️ ARM 架构兼容性：使用 2.6-2.8 版本，3.x 版本在 ARM 上不稳定
     "paddleocr~=2.8.0",      # 锁定 2.8.x 版本
     "paddlepaddle~=2.6.2",   # 锁定 2.6.x 版本
+    # TGS 动画贴纸支持（依赖 OCR）
+    "lottie>=0.7.0",         # TGS/Lottie 解析
+    "cairosvg>=2.7.0",       # Cairo SVG 渲染（Lottie 栅格化）
 ]
 
 all = [
