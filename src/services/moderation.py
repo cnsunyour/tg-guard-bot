@@ -164,9 +164,17 @@ class ModerationService:
 
     @staticmethod
     async def ban_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: str | None = None
+        bot: Bot,
+        chat_id: int,
+        user_id: int,
+        operator_id: int,
+        reason: str | None = None,
+        revoke_messages: bool = False,
     ) -> tuple[bool, str | None]:
         """永久封禁用户
+
+        Args:
+            revoke_messages: 是否删除该用户的所有消息
 
         Returns:
             (是否成功, 错误消息)
@@ -178,18 +186,27 @@ class ModerationService:
                 return False, error_msg
 
             # 封禁用户
-            await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await bot.ban_chat_member(
+                chat_id=chat_id, user_id=user_id, revoke_messages=revoke_messages
+            )
 
             # 记录日志
+            details = {"reason": reason} if reason else {}
+            if revoke_messages:
+                details["revoke_messages"] = True
+
             await AuditRepository.log_action(
                 group_id=chat_id,
                 operator_id=operator_id,
                 action="ban",
                 target_user_id=user_id,
-                details={"reason": reason} if reason else {},
+                details=details,
             )
 
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} 永久封禁")
+            logger.info(
+                f"用户 {user_id} 被管理员 {operator_id} 永久封禁"
+                + (" (已删除所有消息)" if revoke_messages else "")
+            )
             return True, None
 
         except Exception as e:
