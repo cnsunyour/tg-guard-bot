@@ -59,17 +59,37 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔘 按钮验证", callback_data=f"setverify:{message.chat.id}:button"
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="🔢 数学验证", callback_data=f"setverify:{message.chat.id}:math"
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="🎯 滑块验证", callback_data=f"setverify:{message.chat.id}:slider"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❓ 问答验证", callback_data=f"setverify:{message.chat.id}:qa"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="😊 表情验证", callback_data=f"setverify:{message.chat.id}:emoji"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🖼️ 图片验证码", callback_data=f"setverify:{message.chat.id}:captcha"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🍯 蜜罐验证", callback_data=f"setverify:{message.chat.id}:honeypot"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎲 随机验证", callback_data=f"setverify:{message.chat.id}:random"
                 )
             ],
         ]
@@ -102,7 +122,7 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
                 return
 
         # ✅ 参数白名单验证
-        if verify_type not in ["button", "math", "slider"]:
+        if verify_type not in ["math", "slider", "qa", "emoji", "captcha", "honeypot", "random"]:
             await callback.answer("❌ 无效的验证类型", show_alert=True)
             logger.warning(f"无效的验证类型: {verify_type}")
             return
@@ -110,7 +130,15 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
         # 更新验证方式
         await GroupRepository.update_verification_type(chat_id, verify_type)
 
-        verify_type_names = {"button": "按钮验证", "math": "数学验证", "slider": "滑块验证"}
+        verify_type_names = {
+            "math": "数学验证",
+            "slider": "滑块验证",
+            "qa": "问答验证",
+            "emoji": "表情验证",
+            "captcha": "图片验证码",
+            "honeypot": "蜜罐验证",
+            "random": "随机验证",
+        }
 
         await callback.message.edit_text(
             f"✅ 验证方式已设置为：{verify_type_names.get(verify_type, verify_type)}"
