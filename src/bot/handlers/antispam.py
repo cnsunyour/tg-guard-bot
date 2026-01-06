@@ -624,18 +624,29 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         return
 
                     # 确定检测帧索引：1/3 帧 + 2/3 帧
-                    check_indices = [int(ip) + total_frames // 3]  # 1/3 帧
-                    if total_frames > 2:
-                        check_indices.append(int(ip) + total_frames * 2 // 3)  # 2/3 帧
+                    frame_1_3 = int(ip) + total_frames // 3  # 1/3 位置的绝对帧号
+                    check_indices = [frame_1_3]
 
-                    logger.debug(f"将检测第 {check_indices} 帧 (1/3 和 2/3 位置)")
+                    if total_frames > 2:
+                        frame_2_3 = int(ip) + total_frames * 2 // 3  # 2/3 位置的绝对帧号
+                        check_indices.append(frame_2_3)
+
+                    logger.debug(
+                        f"将检测第 {check_indices} 帧 "
+                        f"(相对位置: 1/3={total_frames // 3}, 2/3={total_frames * 2 // 3}; "
+                        f"帧范围: {int(ip)}-{int(op)})"
+                    )
 
                     # 导入 TGS 动画
                     anim = import_tgs(str(tgs_file_path))
 
                     # 循环检测每一帧
                     for frame_idx in check_indices:
-                        logger.debug(f"渲染第 {frame_idx} 帧 (共{total_frames}帧)")
+                        relative_pos = frame_idx - int(ip)
+                        logger.debug(
+                            f"渲染第 {frame_idx} 帧 "
+                            f"(相对位置: {relative_pos}/{total_frames}, 进度: {relative_pos/total_frames:.1%})"
+                        )
 
                         with managed_temp_file(suffix=".png") as png_file_path:
                             # 渲染当前帧为 PNG
@@ -750,17 +761,24 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         return
 
                     # 确定检测帧索引：1/3 帧 + 2/3 帧
-                    check_indices = [total_frames // 3]  # 1/3 帧
-                    if total_frames > 2:
-                        check_indices.append(total_frames * 2 // 3)  # 2/3 帧
+                    frame_1_3 = total_frames // 3
+                    check_indices = [frame_1_3]
 
-                    logger.debug(f"将检测第 {check_indices} 帧 (1/3 和 2/3 位置)")
+                    if total_frames > 2:
+                        frame_2_3 = total_frames * 2 // 3
+                        check_indices.append(frame_2_3)
+
+                    logger.debug(
+                        f"将检测第 {check_indices} 帧 "
+                        f"(1/3 和 2/3 位置, 总帧数: {total_frames})"
+                    )
 
                     # 循环检测每一帧
                     for frame_idx in check_indices:
                         frame = frames[frame_idx]
                         logger.debug(
-                            f"检测第 {frame_idx} 帧 (共{total_frames}帧): shape={frame.shape}"
+                            f"检测第 {frame_idx} 帧 "
+                            f"(进度: {frame_idx}/{total_frames}={frame_idx/total_frames:.1%}, shape={frame.shape})"
                         )
 
                         with managed_temp_file(suffix=".png") as png_file_path:
