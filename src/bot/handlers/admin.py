@@ -213,7 +213,7 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
         return
 
     # 检查管理员权限
-    if not await check_admin_permission(bot, message):
+    if not await check_admin_permission(message, bot):
         reply = await message.answer("❌ 只有管理员才能设置验证超时时间")
         await auto_delete_message(reply)
         try:
