@@ -52,6 +52,8 @@ dependencies = [
     "captcha>=0.5.0",                   # 图片验证码生成
     "Pillow>=10.0.0",                   # 图片处理（WebP 转换）
     "imageio[ffmpeg]>=2.34.0",          # 视频帧提取（WebM 贴纸）
+    "lottie>=0.7.0",                    # TGS/Lottie 解析（动画贴纸）
+    "cairosvg>=2.7.0",                  # Cairo SVG 渲染（Lottie 栅格化）
 
     # 配置管理
     "python-dotenv>=1.0.0",

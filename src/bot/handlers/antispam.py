@@ -1,5 +1,7 @@
 """反垃圾消息处理器"""
 
+import gzip
+import json
 import re
 import tempfile
 from collections.abc import Iterator
@@ -11,6 +13,8 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
+from lottie.exporters.cairo import export_png
+from lottie.importers.core import import_tgs
 from PIL import Image
 
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
@@ -568,12 +572,77 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         sticker = message.sticker
 
         # ✅ 检查贴纸类型
+        # 处理动画 TGS 贴纸
         if sticker.is_animated:
-            logger.debug(f"暂不支持动画贴纸 (TGS 格式): {sticker.file_id}")
-            return
+            with managed_temp_file(suffix=".tgs") as tgs_file_path:
+                # 下载贴纸
+                await bot.download(sticker, destination=tgs_file_path)
+                logger.debug(
+                    f"动画贴纸已下载: {tgs_file_path}, "
+                    f"大小: {sticker.width}x{sticker.height}, "
+                    f"文件大小: {sticker.file_size} bytes"
+                )
+
+                # 提取首帧和中间帧进行检测
+                try:
+                    # TGS = gzip-compressed Lottie JSON
+                    tgs_path = Path(tgs_file_path)
+                    meta = json.loads(gzip.decompress(tgs_path.read_bytes()))
+                    ip = int(meta.get("ip", 0))  # in point (起始帧)
+                    op = int(meta.get("op", ip + 1))  # out point (结束帧)
+                    total_frames = op - ip
+
+                    logger.debug(f"TGS 动画总帧数: {total_frames} (ip={ip}, op={op})")
+
+                    if total_frames == 0:
+                        logger.warning("TGS 动画无有效帧")
+                        return
+
+                    # 确定检测帧索引：首帧 + 中间帧
+                    check_indices = [ip]  # 首帧
+                    if total_frames > 1:
+                        check_indices.append(ip + total_frames // 2)  # 中间帧
+
+                    logger.debug(f"将检测第 {check_indices} 帧")
+
+                    # 导入 TGS 动画
+                    anim = import_tgs(str(tgs_file_path))
+
+                    # 循环检测每一帧
+                    for frame_idx in check_indices:
+                        logger.debug(f"渲染第 {frame_idx} 帧 (共{total_frames}帧)")
+
+                        with managed_temp_file(suffix=".png") as png_file_path:
+                            # 渲染当前帧为 PNG
+                            export_png(anim, png_file_path, frame=frame_idx)
+                            logger.debug(f"第 {frame_idx} 帧已渲染为 PNG: {png_file_path}")
+
+                            # 打开并转换为 RGB（OCR 需要）
+                            rgba = Image.open(png_file_path)
+                            if rgba.mode == "RGBA":
+                                # 将透明背景转为白色
+                                rgb = Image.new("RGB", rgba.size, (255, 255, 255))
+                                rgb.paste(rgba, mask=rgba.getchannel("A"))
+                                rgb.save(png_file_path, "PNG")
+
+                            # 检测当前帧中的文字
+                            result = await detector.detect_image(
+                                image_path=png_file_path,
+                                user_id=message.from_user.id,
+                                chat_id=message.chat.id,
+                            )
+
+                            # 如果检测到垃圾，立即停止检测
+                            if result["is_spam"]:
+                                logger.info(f"第 {frame_idx} 帧检测到垃圾，停止后续检测")
+                                break
+
+                except Exception as e:
+                    logger.error(f"TGS 动画帧渲染失败: {e}")
+                    return
 
         # 处理静态 WebP 贴纸
-        if not sticker.is_video:
+        elif not sticker.is_video:
             with managed_temp_file(suffix=".webp") as webp_file_path:
                 # 下载贴纸到临时文件
                 await bot.download(sticker, destination=webp_file_path)
