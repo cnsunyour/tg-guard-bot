@@ -623,12 +623,12 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         logger.warning("TGS 动画无有效帧")
                         return
 
-                    # 确定检测帧索引：首帧 + 中间帧
-                    check_indices = [int(ip)]  # 首帧
-                    if total_frames > 1:
-                        check_indices.append(int(ip) + total_frames // 2)  # 中间帧
+                    # 确定检测帧索引：1/3 帧 + 2/3 帧
+                    check_indices = [int(ip) + total_frames // 3]  # 1/3 帧
+                    if total_frames > 2:
+                        check_indices.append(int(ip) + total_frames * 2 // 3)  # 2/3 帧
 
-                    logger.debug(f"将检测第 {check_indices} 帧")
+                    logger.debug(f"将检测第 {check_indices} 帧 (1/3 和 2/3 位置)")
 
                     # 导入 TGS 动画
                     anim = import_tgs(str(tgs_file_path))
@@ -749,12 +749,12 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         logger.warning("视频无有效帧")
                         return
 
-                    # 确定检测帧索引：首帧 + 中间帧
-                    check_indices = [0]  # 首帧
-                    if total_frames > 1:
-                        check_indices.append(total_frames // 2)  # 中间帧
+                    # 确定检测帧索引：1/3 帧 + 2/3 帧
+                    check_indices = [total_frames // 3]  # 1/3 帧
+                    if total_frames > 2:
+                        check_indices.append(total_frames * 2 // 3)  # 2/3 帧
 
-                    logger.debug(f"将检测第 {check_indices} 帧")
+                    logger.debug(f"将检测第 {check_indices} 帧 (1/3 和 2/3 位置)")
 
                     # 循环检测每一帧
                     for frame_idx in check_indices:
