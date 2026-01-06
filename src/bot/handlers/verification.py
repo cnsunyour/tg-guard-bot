@@ -604,10 +604,16 @@ async def on_captcha_input_request(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 设置等待输入状态
+        # 获取群组配置的超时时间
+        group_repo = GroupRepository()
+        async with get_db_session() as session:
+            group_config = await group_repo.get_by_chat_id(session, chat_id)
+            timeout = group_config.verification_timeout if group_config else 120
+
+        # 设置等待输入状态（TTL 稍长一点留缓冲）
         redis = get_redis()
         waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
-        await redis.setex(waiting_key, 120, str(callback.message.message_id))
+        await redis.setex(waiting_key, timeout + 10, str(callback.message.message_id))
 
         await callback.answer("✏️ 请直接发送验证码文本", show_alert=False)
 

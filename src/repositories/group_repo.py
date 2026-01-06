@@ -55,6 +55,17 @@ class GroupRepository:
                 await session.commit()
 
     @staticmethod
+    async def update_verification_timeout(chat_id: int, timeout: int) -> None:
+        """更新验证超时时间"""
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.verification_timeout = timeout
+                await session.commit()
+
+    @staticmethod
     async def update_antispam_settings(
         chat_id: int, enabled: bool, level: int | None = None
     ) -> None:
