@@ -197,6 +197,51 @@ class ModerationService:
             return False, "操作失败，请检查 Bot 权限"
 
     @staticmethod
+    async def ban_user_temporarily(
+        bot: Bot,
+        chat_id: int,
+        user_id: int,
+        operator_id: int,
+        duration: int,
+        reason: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """踢出用户并临时封禁
+
+        Args:
+            duration: 封禁时长（分钟）
+
+        Returns:
+            (是否成功, 错误消息)
+        """
+        try:
+            # ✅ M7: 先验证用户是否在群组中
+            exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
+            if not exists:
+                return False, error_msg
+
+            # 计算封禁到期时间
+            until_date = datetime.utcnow() + timedelta(minutes=duration)
+
+            # 踢出用户并临时封禁
+            await bot.ban_chat_member(chat_id=chat_id, user_id=user_id, until_date=until_date)
+
+            # 记录日志
+            await AuditRepository.log_action(
+                group_id=chat_id,
+                operator_id=operator_id,
+                action="ban_temp",
+                target_user_id=user_id,
+                details={"reason": reason, "duration_minutes": duration} if reason else {"duration_minutes": duration},
+            )
+
+            logger.info(f"用户 {user_id} 被管理员 {operator_id} 踢出并封禁 {duration} 分钟")
+            return True, None
+
+        except Exception as e:
+            logger.error(f"临时封禁用户失败: {e}")
+            return False, "操作失败，请检查 Bot 权限"
+
+    @staticmethod
     async def unban_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
         """解除封禁"""
         try:

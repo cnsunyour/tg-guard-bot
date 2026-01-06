@@ -319,16 +319,30 @@ async def on_message(message: Message, bot: Bot) -> None:
             # 删除垃圾消息
             await message.delete()
 
-            # 禁言用户 (10分钟)
-            # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
-            success, error_msg = await ModerationService.mute_user(
-                bot=bot,
-                chat_id=message.chat.id,
-                user_id=message.from_user.id,
-                operator_id=bot.id,  # Bot 作为操作者
-                duration=10,  # 10分钟
-                reason=f"垃圾信息: {', '.join(result['reasons'])}",
-            )
+            # 根据置信度决定处罚措施
+            if result["confidence"] >= settings.spam_high_confidence_threshold:
+                # 高置信度：踢出并封禁 1 小时
+                success, error_msg = await ModerationService.ban_user_temporarily(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,
+                    duration=60,  # 60 分钟 = 1 小时
+                    reason=f"垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                )
+                punishment_text = "踢出并封禁 1 小时"
+            else:
+                # 低置信度：禁言 10 分钟
+                # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
+                success, error_msg = await ModerationService.mute_user(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,  # Bot 作为操作者
+                    duration=10,  # 10分钟
+                    reason=f"垃圾信息: {', '.join(result['reasons'])}",
+                )
+                punishment_text = "禁言 10 分钟"
 
             if success:
                 # ✅ P1-12: 缓存原始消息文本，用于管理员反馈
@@ -361,7 +375,7 @@ async def on_message(message: Message, bot: Bot) -> None:
                     f"用户: {format_user_mention(message.from_user)}\n"
                     f"原因: {', '.join(result['reasons'])}\n"
                     f"置信度: {result['confidence']:.2%}\n"
-                    f"处罚: 禁言 10 分钟",
+                    f"处罚: {punishment_text}",
                     reply_markup=keyboard,
                 )
                 await auto_delete_message(alert_msg)
@@ -457,15 +471,29 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                 # 删除垃圾消息
                 await message.delete()
 
-                # 禁言用户 (10分钟)
-                success, error_msg = await ModerationService.mute_user(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,
-                    duration=10,
-                    reason=f"图片垃圾信息: {', '.join(result['reasons'])}",
-                )
+                # 根据置信度决定处罚措施
+                if result["confidence"] >= settings.spam_high_confidence_threshold:
+                    # 高置信度：踢出并封禁 1 小时
+                    success, error_msg = await ModerationService.ban_user_temporarily(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=60,  # 60 分钟 = 1 小时
+                        reason=f"图片垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "踢出并封禁 1 小时"
+                else:
+                    # 低置信度：禁言 10 分钟
+                    success, error_msg = await ModerationService.mute_user(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=10,
+                        reason=f"图片垃圾信息: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "禁言 10 分钟"
 
                 if success:
                     # ✅ P1-12: 缓存原始消息的 OCR 文本，用于管理员反馈
@@ -501,7 +529,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
                         f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: 禁言 10 分钟",
+                        f"处罚: {punishment_text}",
                         reply_markup=keyboard,
                     )
                     await auto_delete_message(alert_msg)
@@ -824,15 +852,29 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                 # 删除垃圾消息
                 await message.delete()
 
-                # 禁言用户 (10分钟)
-                success, error_msg = await ModerationService.mute_user(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,
-                    duration=10,
-                    reason=f"贴纸垃圾信息: {', '.join(result['reasons'])}",
-                )
+                # 根据置信度决定处罚措施
+                if result["confidence"] >= settings.spam_high_confidence_threshold:
+                    # 高置信度：踢出并封禁 1 小时
+                    success, error_msg = await ModerationService.ban_user_temporarily(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=60,  # 60 分钟 = 1 小时
+                        reason=f"贴纸垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "踢出并封禁 1 小时"
+                else:
+                    # 低置信度：禁言 10 分钟
+                    success, error_msg = await ModerationService.mute_user(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=10,
+                        reason=f"贴纸垃圾信息: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "禁言 10 分钟"
 
                 if success:
                     # 缓存原始消息的 OCR 文本，用于管理员反馈
@@ -866,7 +908,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
                         f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: 禁言 10 分钟",
+                        f"处罚: {punishment_text}",
                         reply_markup=keyboard,
                     )
                     await auto_delete_message(alert_msg)

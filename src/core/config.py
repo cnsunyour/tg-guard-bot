@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     spam_threshold_rule: float = Field(default=0.8, description="规则引擎阈值")
     spam_threshold_ml: float = Field(default=0.7, description="ML 分类器阈值")
     spam_threshold_embedding: float = Field(default=0.75, description="Embedding 阈值")
+    spam_high_confidence_threshold: float = Field(
+        default=0.9, description="高置信度阈值（>= 此值踢出并封禁，< 此值禁言）"
+    )
 
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
