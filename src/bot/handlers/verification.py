@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+from datetime import datetime, timedelta
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
@@ -206,9 +207,12 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
 
         except Exception as e:
             logger.error(f"发送私聊验证消息失败: {e}")
-            # 踢出用户
-            await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+            # 踢出并封禁 1 小时
+            await bot.ban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                until_date=datetime.now() + timedelta(hours=1),
+            )
 
     except Exception as e:
         logger.error(f"处理用户加入事件失败: {e}")
@@ -286,9 +290,12 @@ async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
                 await redis.delete(type_key)
             else:
-                # 踢出用户
-                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-                await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+                # 踢出并封禁 1 小时
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=1),
+                )
 
             # 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -338,9 +345,12 @@ async def on_slider_verify(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
                 await redis.delete(type_key)
             else:
-                # 踢出用户
-                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-                await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+                # 踢出并封禁 1 小时
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=1),
+                )
 
             # 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -365,9 +375,12 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 踢出用户
-        await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-        await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+        # 踢出并封禁 1 小时
+        await bot.ban_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            until_date=datetime.now() + timedelta(hours=1),
+        )
 
         # 删除私聊中的验证消息
         with contextlib.suppress(Exception):
@@ -482,9 +495,12 @@ async def handle_verification_timeout(
         if await verification_service.is_verification_pending(chat_id, user_id):
             # 验证超时
 
-            # 1. 踢出用户
-            await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+            # 1. 踢出并封禁 1 小时
+            await bot.ban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                until_date=datetime.now() + timedelta(hours=1),
+            )
 
             # 2. ✅ 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -583,11 +599,14 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
         await redis.expire(hint_key, 30)
         logger.debug(f"群组 {chat_id} 已有引导消息，延长 TTL 到 30 秒（用户 {user_id}）")
 
-    # 5. 踢出当前用户（允许重新加入）
+    # 5. 踢出并封禁当前用户 1 小时
     try:
-        await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-        await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
-        logger.info(f"用户 {user_id} 未启动 Bot，已从群组 {chat_id} 踢出")
+        await bot.ban_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            until_date=datetime.now() + timedelta(hours=1),
+        )
+        logger.info(f"用户 {user_id} 未启动 Bot，已从群组 {chat_id} 踢出并封禁 1 小时")
     except Exception as e:
         logger.error(f"踢出用户失败: {e}")
 
