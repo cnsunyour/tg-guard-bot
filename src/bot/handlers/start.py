@@ -5,6 +5,8 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from loguru import logger
 
+from src.core.utils import escape_html
+
 router = Router(name="start")
 
 
@@ -24,16 +26,16 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "群组"
+                chat_title = escape_html(chat.title) if chat.title else "群组"
             except Exception:
                 chat_title = "群组"
 
             # 提示用户重新加入群组
             await message.answer(
-                f"✅ **Bot 已启动成功！**\n\n"
-                f"现在请重新加入群组 **{chat_title}**，您将收到验证消息。\n\n"
+                f"✅ <b>Bot 已启动成功！</b>\n\n"
+                f"现在请重新加入群组 <b>{chat_title}</b>，您将收到验证消息。\n\n"
                 f"💡 验证通过后即可正常发言。",
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
 
             logger.info(f"用户 {user_id} 通过验证链接启动 Bot (群组: {chat_id})")
@@ -49,12 +51,12 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 async def show_welcome_message(message: Message):
     """显示欢迎消息"""
     await message.answer(
-        "👋 **欢迎使用 Guard Bot！**\n\n"
+        "👋 <b>欢迎使用 Guard Bot！</b>\n\n"
         "🤖 本 Bot 提供以下功能：\n"
         "• 入群验证\n"
         "• 智能反垃圾\n"
         "• 群组管理\n\n"
         "加入群组后，我会在私聊中发送验证消息。\n\n"
         "使用 /help 查看更多命令。",
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )

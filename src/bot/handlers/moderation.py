@@ -35,7 +35,11 @@ def parse_user_from_message(message: Message) -> int | None:
     """
     # 1. 检查是否回复了某条消息
     if message.reply_to_message:
-        return message.reply_to_message.from_user.id
+        # ✅ 修复：检查是否为用户消息（排除频道消息）
+        if message.reply_to_message.from_user:
+            return message.reply_to_message.from_user.id
+        # 如果是频道消息，返回 None
+        return None
 
     # 2. 检查 entities 中是否有 text_mention（用户被 @ 提及）
     if message.entities:
@@ -794,6 +798,12 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             "• 普通用户：创建举报记录\n"
             "• 管理员：直接封禁并添加到训练库"
         )
+        await auto_delete_message(reply)
+        return
+
+    # ✅ 修复：检查是否为用户消息（排除频道消息）
+    if not message.reply_to_message.from_user:
+        reply = await message.answer("❌ 无法举报频道消息，请回复用户消息")
         await auto_delete_message(reply)
         return
 
