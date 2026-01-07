@@ -26,6 +26,7 @@
 - **更新频率**: 每周一 03:00 (Asia/Shanghai)
 - **PR 限制**: 最多 5 个
 - **策略**: 仅监控次要版本和补丁（Python 3.12.x）
+- **涵盖范围**: Dockerfile 和 docker-compose.yml
 
 ### 3. GitHub Actions
 - **更新频率**: 每周一 04:00 (Asia/Shanghai)
