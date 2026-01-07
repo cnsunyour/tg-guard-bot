@@ -82,6 +82,28 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return v
 
+    def model_post_init(self, __context) -> None:
+        """模型初始化后验证生产环境安全配置
+
+        ✅ 安全修复：强制生产环境使用安全密码
+        """
+        if not self.debug:
+            # 检查数据库密码
+            if self.db_password == "postgres":
+                raise ValueError(
+                    "🔒 生产环境禁止使用默认数据库密码！\n"
+                    "请在 .env 文件中设置安全的 DB_PASSWORD\n"
+                    "建议：使用至少 16 位的随机密码"
+                )
+
+            # 检查 Redis 密码
+            if not self.redis_password:
+                raise ValueError(
+                    "🔒 生产环境必须设置 Redis 密码！\n"
+                    "请在 .env 文件中设置 REDIS_PASSWORD\n"
+                    "建议：使用至少 16 位的随机密码"
+                )
+
     @property
     def database_url(self) -> str:
         """生成数据库 URL"""
