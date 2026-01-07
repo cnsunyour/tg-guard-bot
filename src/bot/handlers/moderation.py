@@ -112,6 +112,38 @@ def parse_duration(text: str) -> int | None:
     return minutes
 
 
+def parse_spam_args(text: str) -> tuple[bool, str]:
+    """解析 /spam 命令参数
+
+    支持格式:
+        /spam           -> (False, "垃圾消息")
+        /spam 原因       -> (False, "原因")
+        /spam -d        -> (True, "垃圾消息")
+        /spam -d 原因    -> (True, "原因")
+
+    Args:
+        text: 完整的命令文本
+
+    Returns:
+        (delete_all: bool, reason: str)
+        - delete_all: 是否删除用户的所有消息
+        - reason: 原因文本
+    """
+    parts = text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        return False, "垃圾消息"
+
+    args = parts[1].strip()
+
+    # 检查 -d 参数（支持 "-d" 和 "-d原因" 格式）
+    if args.startswith("-d"):
+        remaining = args[2:].strip()
+        return True, remaining if remaining else "垃圾消息"
+
+    return False, args
+
+
 @router.message(Command("kick"))
 async def cmd_kick(message: Message, bot: Bot) -> None:
     """踢出用户"""
@@ -752,8 +784,12 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
     if not message.reply_to_message:
         reply = await message.answer(
             "❌ 请回复要标记为垃圾的消息\n\n"
-            "<b>用法</b>: 回复垃圾消息，然后使用 /spam [原因]\n"
-            "<b>示例</b>: /spam 发送广告\n\n"
+            "<b>用法</b>:\n"
+            "• /spam [原因] - 封禁用户，删除被回复的消息\n"
+            "• /spam -d [原因] - 封禁用户，<b>删除该用户的所有消息</b>\n\n"
+            "<b>示例</b>:\n"
+            "• /spam 发送广告\n"
+            "• /spam -d 大量发送垃圾信息\n\n"
             "💡 <b>说明</b>:\n"
             "• 普通用户：创建举报记录\n"
             "• 管理员：直接封禁并添加到训练库"
@@ -764,9 +800,8 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
     # 获取目标用户ID
     target_user_id = message.reply_to_message.from_user.id
 
-    # 获取原因
-    parts = message.text.split(maxsplit=1)
-    reason = parts[1] if len(parts) > 1 else "垃圾消息"
+    # 解析参数：检测 -d 参数和原因
+    delete_all, reason = parse_spam_args(message.text)
 
     # 获取消息文本内容
     spam_text = ""
@@ -791,15 +826,21 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             user_id=target_user_id,
             operator_id=message.from_user.id,
             reason=f"垃圾消息: {reason}",
+            revoke_messages=delete_all,
         )
 
         if success:
-            # 删除垃圾消息
-            try:
-                await message.reply_to_message.delete()
-                logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
-            except Exception as e:
-                logger.debug(f"删除垃圾消息失败: {e}")
+            # 删除消息
+            # 如果使用 -d，API 已自动删除所有消息
+            # 如果不使用 -d，只删除被回复的消息
+            if not delete_all:
+                try:
+                    await message.reply_to_message.delete()
+                    logger.debug(
+                        f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]"
+                    )
+                except Exception as e:
+                    logger.debug(f"删除垃圾消息失败: {e}")
 
             # 添加到反垃圾训练库
             try:
@@ -816,13 +857,23 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"添加垃圾样本失败: {e}")
 
-            reply = await message.answer(
-                f"✅ 已处理垃圾消息\n"
-                f"• 用户已封禁: {target_user_id}\n"
-                f"• 消息已删除\n"
-                f"• 已添加到训练库\n"
-                f"• 原因: {escape_html(reason)}"
-            )
+            # 发送响应消息
+            if delete_all:
+                reply = await message.answer(
+                    f"✅ 已处理垃圾消息\n"
+                    f"• 用户已封禁: {target_user_id}\n"
+                    f"• 已删除该用户的所有消息\n"
+                    f"• 已添加到训练库\n"
+                    f"• 原因: {escape_html(reason)}"
+                )
+            else:
+                reply = await message.answer(
+                    f"✅ 已处理垃圾消息\n"
+                    f"• 用户已封禁: {target_user_id}\n"
+                    f"• 消息已删除\n"
+                    f"• 已添加到训练库\n"
+                    f"• 原因: {escape_html(reason)}"
+                )
             await auto_delete_message(reply)
         else:
             reply = await message.answer(f"❌ {error_msg}")
