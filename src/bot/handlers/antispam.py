@@ -429,6 +429,7 @@ async def on_message(message: Message, bot: Bot) -> None:
     except Exception as e:
         # ✅ L6: 添加日志，不静默吞掉异常
         logger.debug(f"检查管理员权限失败（非关键）: {e}")
+        group = None  # 设置默认值，避免 UnboundLocalError
 
     # 检查是否是外部转发或带链接的消息（需要活跃度支撑）
     is_special_message = is_external_forward(message) or has_url_entities(message)

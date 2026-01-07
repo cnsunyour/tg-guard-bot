@@ -7,7 +7,7 @@ from loguru import logger
 
 from src.core.config import settings
 from src.core.health import get_health_checker
-from src.core.utils import auto_delete_message, check_admin_permission
+from src.core.utils import auto_delete_message, check_admin_permission, escape_html
 from src.repositories.group_repo import GroupRepository
 
 router = Router(name="admin")
@@ -435,14 +435,18 @@ async def cmd_whitelist_add(message: Message) -> None:
         group = await GroupRepository.get_or_create(chat_id, title)
 
         if group.is_whitelisted:
-            await message.answer(f"ℹ️ 群组 <b>{group.title or chat_id}</b> 已在白名单中")
+            await message.answer(
+                f"ℹ️ 群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 已在白名单中"
+            )
             return
 
         # 添加到白名单
         await GroupRepository.update_whitelist(chat_id, True)
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 添加到白名单")
-        await message.answer(f"✅ 已将群组 <b>{group.title or chat_id}</b> 添加到白名单")
+        await message.answer(
+            f"✅ 已将群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 添加到白名单"
+        )
 
     except ValueError:
         await message.answer("❌ chat_id 格式错误，必须是数字")
@@ -518,7 +522,8 @@ async def cmd_whitelist_list(message: Message) -> None:
         text = f"📋 <b>白名单群组列表</b> (共 {len(groups)} 个)\n\n"
 
         for i, group in enumerate(groups, 1):
-            text += f"{i}. <b>{group.title or '未知群组'}</b>\n"
+            title = escape_html(group.title) if group.title else "未知群组"
+            text += f"{i}. <b>{title}</b>\n"
             text += f"   ID: <code>{group.id}</code>\n"
             if i < len(groups):
                 text += "\n"

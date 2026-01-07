@@ -242,13 +242,27 @@ class SpamClassifier:
             parts = content.split(b"\n", 1)
 
             if len(parts) != 2:
+                # 检查是否允许加载未签名模型
+                if not settings.allow_unsigned_models:
+                    logger.error(
+                        f"🔒 安全警告：模型文件无签名，拒绝加载！\n"
+                        f"文件: {load_path}\n"
+                        f"如需加载旧版本模型，请设置环境变量 ALLOW_UNSIGNED_MODELS=true\n"
+                        f"⚠️  强烈建议：重新训练模型并使用签名保存（防止代码执行攻击）"
+                    )
+                    return False
+
                 # 尝试作为旧格式（无签名）加载
-                logger.warning(f"模型文件无签名，可能是旧版本: {load_path}")
+                logger.warning(
+                    f"⚠️  安全警告：正在加载无签名模型！\n"
+                    f"文件: {load_path}\n"
+                    f"⚠️  这可能存在代码执行（RCE）风险，强烈建议重新训练模型"
+                )
                 try:
                     buffer = io.BytesIO(content)
                     self.model = joblib.load(buffer)
                     self.is_trained = True
-                    logger.warning("已加载无签名模型，建议重新训练并保存")
+                    logger.warning("已加载无签名模型，强烈建议立即重新训练并保存")
                     return True
                 except Exception as e:
                     logger.error(f"加载旧格式模型失败: {e}")

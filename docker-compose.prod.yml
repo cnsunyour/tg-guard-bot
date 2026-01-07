@@ -79,7 +79,7 @@ services:
           memory: 128M
     # 健康检查
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Redis password is required}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -88,7 +88,7 @@ services:
     command: >
       redis-server
       --appendonly yes
-      --requirepass ${REDIS_PASSWORD:-}
+      --requirepass ${REDIS_PASSWORD:?Redis password is required}
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
       --save 900 1

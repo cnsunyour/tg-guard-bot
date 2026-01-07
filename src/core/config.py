@@ -68,6 +68,11 @@ class Settings(BaseSettings):
         description="模型文件签名密钥（必填：防止模型文件被篡改，请使用随机生成的密钥）",
         min_length=32,  # 要求至少 32 个字符以确保安全性
     )
+    # 🔒 安全：是否允许加载未签名的旧模型（默认禁止，防止 RCE 攻击）
+    allow_unsigned_models: bool = Field(
+        default=False,
+        description="是否允许加载未签名的旧版模型（不安全，仅用于兼容旧模型，强烈建议重新训练）",
+    )
 
     @field_validator("admin_ids", mode="before")
     @classmethod

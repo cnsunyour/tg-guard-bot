@@ -21,7 +21,7 @@ from loguru import logger
 
 from src.core.database import get_db_session
 from src.core.redis import RedisKeys, get_redis
-from src.core.utils import format_user_mention
+from src.core.utils import escape_html, format_user_mention
 from src.repositories.group_repo import GroupRepository
 from src.services.spam_detector import SpamDetector
 from src.services.verification import VerificationService
@@ -175,10 +175,12 @@ async def send_verification_message(
     """
     # 获取群组信息
     chat = await bot.get_chat(chat_id)
-    chat_title = chat.title or "群组"
+    chat_title = escape_html(chat.title) if chat.title else "群组"
 
-    # 构造消息文本
-    message_text = f"📢 **{message_title}**\n\n{message_prefix}：**{chat_title}**\n\n{challenge.question}"
+    # 构造消息文本（使用 HTML 格式以防注入）
+    message_text = (
+        f"📢 <b>{message_title}</b>\n\n{message_prefix}：<b>{chat_title}</b>\n\n{challenge.question}"
+    )
 
     # 根据是否有图片选择发送方式
     if challenge.photo:
@@ -188,7 +190,7 @@ async def send_verification_message(
             photo=challenge.photo,
             caption=message_text,
             reply_markup=challenge.keyboard,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
     else:
         # 其他验证：发送文本消息
@@ -196,7 +198,7 @@ async def send_verification_message(
             chat_id=user_id,
             text=message_text,
             reply_markup=challenge.keyboard,
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
 
@@ -298,8 +300,25 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
         is_approved = await redis.get(approved_key)
 
         if is_approved:
-            # 用户已通过验证，直接欢迎（权限已在批准时设置）
+            # 用户已通过验证，恢复权限
             logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
+
+            # ✅ 恢复用户权限（解决权限未恢复问题）
+            try:
+                await bot.restrict_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    permissions=ChatPermissions(
+                        can_send_messages=True,
+                        can_send_media_messages=True,
+                        can_send_polls=True,
+                        can_send_other_messages=True,
+                        can_add_web_page_previews=True,
+                    ),
+                )
+                logger.info(f"已恢复用户 {user_id} 的发言权限")
+            except Exception as e:
+                logger.error(f"恢复用户权限失败: {e}")
 
             # 清除验证标记
             await redis.delete(approved_key)
@@ -692,7 +711,7 @@ async def on_captcha_input_request(callback: CallbackQuery, bot: Bot) -> None:
         # 获取群组配置的超时时间
         group_repo = GroupRepository()
         async with get_db_session() as session:
-            group_config = await group_repo.get_by_chat_id(session, chat_id)
+            group_config = await group_repo.get(session, chat_id)
             timeout = group_config.verification_timeout if group_config else 120
 
         # 设置等待输入状态（TTL 稍长一点留缓冲）
@@ -727,7 +746,7 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         # 获取群组配置获取超时时间
         group_repo = GroupRepository()
         async with get_db_session() as session:
-            group_config = await group_repo.get_by_chat_id(session, chat_id)
+            group_config = await group_repo.get(session, chat_id)
             timeout = group_config.verification_timeout if group_config else 120
 
         challenge = await verification_service.generate_captcha_challenge(
@@ -854,12 +873,14 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                                 )
 
                                 # 30 秒后删除欢迎消息
-                                asyncio.create_task(
-                                    asyncio.sleep(30)
-                                    and bot.delete_message(
-                                        chat_id=chat_id, message_id=welcome_msg.message_id
-                                    )
-                                )
+                                async def delayed_delete():
+                                    await asyncio.sleep(30)
+                                    with contextlib.suppress(Exception):
+                                        await bot.delete_message(
+                                            chat_id=chat_id, message_id=welcome_msg.message_id
+                                        )
+
+                                asyncio.create_task(delayed_delete())
 
                                 logger.info(f"用户 {user_id} 验证成功")
 
