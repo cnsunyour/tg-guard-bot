@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import io
 import os
+import stat
 
 import jieba
 import joblib
@@ -232,6 +233,44 @@ class SpamClassifier:
 
         if not os.path.exists(load_path):
             logger.info(f"模型文件不存在: {load_path}")
+            return False
+
+        # ✅ 安全加固：额外的模型文件安全检查
+        try:
+            # 1. 检查文件大小（防止加载过大文件）
+            MAX_MODEL_SIZE = 100 * 1024 * 1024  # 100MB 上限
+            file_size = os.path.getsize(load_path)
+            if file_size > MAX_MODEL_SIZE:
+                logger.error(
+                    f"🔒 模型文件过大: {file_size} bytes (限制: {MAX_MODEL_SIZE} bytes)\n"
+                    f"文件: {load_path}\n"
+                    f"这可能是恶意文件，拒绝加载"
+                )
+                return False
+
+            # 2. 检查文件权限（只有 owner 应该能写）
+            file_stat = os.stat(load_path)
+            file_mode = file_stat.st_mode
+
+            # 检查是否 group 或 others 可写
+            if file_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                logger.warning(
+                    f"⚠️  模型文件权限不安全：group/others 可写\n"
+                    f"文件: {load_path}\n"
+                    f"建议：chmod 600 {load_path}"
+                )
+
+            # 3. 生产环境强制禁用 allow_unsigned_models
+            if not settings.debug and settings.allow_unsigned_models:
+                logger.error(
+                    f"🔒 生产环境禁止启用 ALLOW_UNSIGNED_MODELS\n"
+                    f"这会允许加载未签名模型，存在 RCE 风险\n"
+                    f"请设置 ALLOW_UNSIGNED_MODELS=false"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"检查模型文件安全性失败: {e}")
             return False
 
         try:
