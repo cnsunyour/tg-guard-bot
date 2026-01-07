@@ -1,5 +1,5 @@
 # Python 3.12 基础镜像
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # 构建参数：是否启用 OCR（默认禁用）
 ARG ENABLE_OCR=false
