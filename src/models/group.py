@@ -30,6 +30,9 @@ class Group(Base):
         Integer, default=2, comment="反垃圾严格程度: 1-宽松, 2-中等, 3-严格"
     )
 
+    # 活跃度系统配置
+    activity_enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否启用活跃度系统")
+
     # 白名单配置
     is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否在白名单中")
 

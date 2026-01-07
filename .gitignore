@@ -55,6 +55,9 @@ logs/
 *.dump
 backup/
 
+# 例外：允许提交数据库迁移文件
+!migrations/*.sql
+
 # AI 模型
 data/models/*.pkl
 data/models/*.bin

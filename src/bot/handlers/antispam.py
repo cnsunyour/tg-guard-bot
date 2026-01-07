@@ -120,7 +120,9 @@ def has_url_entities(message: Message) -> bool:
     return False
 
 
-async def check_non_text_message(message: Message, bot: Bot, message_type: str) -> bool:
+async def check_non_text_message(
+    message: Message, bot: Bot, message_type: str, activity_enabled: bool | None = None
+) -> bool:
     """检查非文本消息是否允许发送（活跃度检查）
 
     注意：调用此函数前应已过滤管理员
@@ -129,12 +131,16 @@ async def check_non_text_message(message: Message, bot: Bot, message_type: str) 
         message: 消息对象
         bot: Bot 实例
         message_type: 消息类型（"photo", "sticker", "video" 等）
+        activity_enabled: 是否启用活跃度检查（None 则使用全局配置）
 
     Returns:
         True 表示消息已被阻止（调用者应直接 return），False 表示允许
     """
     # 检查活跃度系统是否启用
-    if not settings.activity_enabled:
+    if activity_enabled is None:
+        activity_enabled = settings.activity_enabled
+
+    if not activity_enabled:
         return False
 
     # 检查活跃度是否允许发送非文本消息
@@ -427,13 +433,21 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 检查是否是外部转发或带链接的消息（需要活跃度支撑）
     is_special_message = is_external_forward(message) or has_url_entities(message)
 
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 记录活跃度（管理员已在上面跳过，不会记录）
     activity = None
-    if settings.activity_enabled:
+    if activity_system_enabled:
         if is_special_message:
             # 外部转发/带链接消息：按非文本消息处理（-2 活跃度）
             if await check_non_text_message(
-                message, bot, "forward" if is_external_forward(message) else "link"
+                message,
+                bot,
+                "forward" if is_external_forward(message) else "link",
+                activity_enabled=True,  # 已在上面检查过，这里直接传 True
             ):
                 return  # 活跃度不足，消息已被删除
             # 活跃度足够，已扣除，继续垃圾检测
@@ -571,18 +585,25 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         )
         return
 
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # ✅ 活跃度检查（管理员已在上面跳过）
-    if await check_non_text_message(message, bot, "photo"):
+    if await check_non_text_message(message, bot, "photo", activity_enabled=activity_system_enabled):
         return  # 消息已被删除
 
     # 检查群组是否启用反垃圾
-    try:
-        group = await GroupRepository.get(message.chat.id)
-        if group and not group.antispam_enabled:
-            return
-    except Exception as e:
-        # ✅ L6: 添加日志，不静默吞掉异常
-        logger.debug(f"检查管理员权限失败（非关键）: {e}")
+    if group and not group.antispam_enabled:
+        return
 
     # 获取检测器
     detector = get_detector()
@@ -730,17 +751,25 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         )
         return
 
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # ✅ 活跃度检查（管理员已在上面跳过）
-    if await check_non_text_message(message, bot, "sticker"):
+    if await check_non_text_message(message, bot, "sticker", activity_enabled=activity_system_enabled):
         return  # 消息已被删除
 
     # 检查群组是否启用反垃圾
-    try:
-        group = await GroupRepository.get(message.chat.id)
-        if group and not group.antispam_enabled:
-            return
-    except Exception as e:
-        logger.debug(f"检查群组配置失败（非关键）: {e}")
+    if group and not group.antispam_enabled:
+        return
 
     # 获取检测器
     detector = get_detector()
@@ -1098,8 +1127,26 @@ async def on_video_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 活跃度检查
-    if await check_non_text_message(message, bot, "video"):
+    if await check_non_text_message(message, bot, "video", activity_enabled=activity_system_enabled):
         return
 
 
@@ -1112,8 +1159,26 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 活跃度检查
-    if await check_non_text_message(message, bot, "animation"):
+    if await check_non_text_message(message, bot, "animation", activity_enabled=activity_system_enabled):
         return
 
 
@@ -1126,8 +1191,26 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 活跃度检查
-    if await check_non_text_message(message, bot, "voice"):
+    if await check_non_text_message(message, bot, "voice", activity_enabled=activity_system_enabled):
         return
 
 
@@ -1140,8 +1223,26 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 活跃度检查
-    if await check_non_text_message(message, bot, "video_note"):
+    if await check_non_text_message(message, bot, "video_note", activity_enabled=activity_system_enabled):
         return
 
 
@@ -1154,8 +1255,26 @@ async def on_document_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 活跃度检查
-    if await check_non_text_message(message, bot, "document"):
+    if await check_non_text_message(message, bot, "document", activity_enabled=activity_system_enabled):
         return
 
 
@@ -1168,8 +1287,26 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
     # 活跃度检查
-    if await check_non_text_message(message, bot, "audio"):
+    if await check_non_text_message(message, bot, "audio", activity_enabled=activity_system_enabled):
         return
 
 
