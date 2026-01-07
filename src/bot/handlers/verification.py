@@ -107,6 +107,99 @@ async def check_user_spam_info(
     return False  # 通过检测
 
 
+async def generate_verification_challenge(
+    group, chat_id: int, user_id: int, username: str
+):
+    """根据群组配置生成验证挑战
+
+    Args:
+        group: 群组配置对象
+        chat_id: 群组 ID
+        user_id: 用户 ID
+        username: 用户名
+
+    Returns:
+        验证挑战对象
+    """
+    verification_service = VerificationService()
+
+    if group.verification_type == "math":
+        return await verification_service.generate_math_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "slider":
+        return await verification_service.generate_slider_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "qa":
+        return await verification_service.generate_qa_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "emoji":
+        return await verification_service.generate_emoji_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "captcha":
+        return await verification_service.generate_captcha_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "honeypot":
+        return await verification_service.generate_honeypot_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "random":
+        return await verification_service.generate_random_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    else:  # 默认数学验证
+        return await verification_service.generate_math_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+
+
+async def send_verification_message(
+    bot: Bot, chat_id: int, user_id: int, challenge, message_title: str, message_prefix: str
+):
+    """发送验证消息到用户私聊
+
+    Args:
+        bot: Bot 实例
+        chat_id: 群组 ID
+        user_id: 用户 ID
+        challenge: 验证挑战对象
+        message_title: 消息标题（如 "加入请求验证" 或 "群组验证通知"）
+        message_prefix: 消息前缀（如 "您请求加入群组" 或 "您加入了群组"）
+
+    Returns:
+        发送的消息对象
+    """
+    # 获取群组信息
+    chat = await bot.get_chat(chat_id)
+    chat_title = chat.title or "群组"
+
+    # 构造消息文本
+    message_text = f"📢 **{message_title}**\n\n{message_prefix}：**{chat_title}**\n\n{challenge.question}"
+
+    # 根据是否有图片选择发送方式
+    if challenge.photo:
+        # captcha 验证：发送图片
+        return await bot.send_photo(
+            chat_id=user_id,
+            photo=challenge.photo,
+            caption=message_text,
+            reply_markup=challenge.keyboard,
+            parse_mode="Markdown",
+        )
+    else:
+        # 其他验证：发送文本消息
+        return await bot.send_message(
+            chat_id=user_id,
+            text=message_text,
+            reply_markup=challenge.keyboard,
+            parse_mode="Markdown",
+        )
+
+
 @router.chat_join_request()
 async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
     """处理加入请求事件 - 启用 Approve New Members 时触发
@@ -130,70 +223,19 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
         # 根据验证类型生成挑战
-        verification_service = VerificationService()
-
-        if group.verification_type == "math":
-            challenge = await verification_service.generate_math_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "slider":
-            challenge = await verification_service.generate_slider_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "qa":
-            challenge = await verification_service.generate_qa_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "emoji":
-            challenge = await verification_service.generate_emoji_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "captcha":
-            challenge = await verification_service.generate_captcha_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "honeypot":
-            challenge = await verification_service.generate_honeypot_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "random":
-            challenge = await verification_service.generate_random_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        else:  # 默认数学验证
-            challenge = await verification_service.generate_math_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
+        challenge = await generate_verification_challenge(group, chat_id, user_id, username)
 
         # 尝试私聊发送验证消息
         try:
-            # 获取群组信息
-            chat = await bot.get_chat(chat_id)
-            chat_title = chat.title or "群组"
-
             # 标记验证类型为加入请求验证
             redis = get_redis()
             type_key = RedisKeys.verification_type(chat_id, user_id)
             await redis.setex(type_key, group.verification_timeout + 10, "join_request")
 
-            # 根据是否有图片选择发送方式
-            if challenge.photo:
-                # captcha 验证：发送图片
-                sent_message = await bot.send_photo(
-                    chat_id=user_id,
-                    photo=challenge.photo,
-                    caption=f"📢 **加入请求验证**\n\n您请求加入群组：**{chat_title}**\n\n{challenge.question}",
-                    reply_markup=challenge.keyboard,
-                    parse_mode="Markdown",
-                )
-            else:
-                # 其他验证：发送文本消息
-                sent_message = await bot.send_message(
-                    chat_id=user_id,  # 发送到用户私聊
-                    text=f"📢 **加入请求验证**\n\n您请求加入群组：**{chat_title}**\n\n{challenge.question}",
-                    reply_markup=challenge.keyboard,
-                    parse_mode="Markdown",
-                )
+            # 发送验证消息
+            sent_message = await send_verification_message(
+                bot, chat_id, user_id, challenge, "加入请求验证", "您请求加入群组"
+            )
 
             logger.info(f"已向用户 {user_id} 私聊发送加入请求验证消息")
 
@@ -292,65 +334,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
         # 根据验证类型生成挑战
-        verification_service = VerificationService()
-
-        if group.verification_type == "math":
-            challenge = await verification_service.generate_math_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "slider":
-            challenge = await verification_service.generate_slider_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "qa":
-            challenge = await verification_service.generate_qa_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "emoji":
-            challenge = await verification_service.generate_emoji_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "captcha":
-            challenge = await verification_service.generate_captcha_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "honeypot":
-            challenge = await verification_service.generate_honeypot_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        elif group.verification_type == "random":
-            challenge = await verification_service.generate_random_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
-        else:  # 默认数学验证
-            challenge = await verification_service.generate_math_challenge(
-                chat_id, user_id, username, group.verification_timeout
-            )
+        challenge = await generate_verification_challenge(group, chat_id, user_id, username)
 
         # ✅ 尝试私聊发送验证消息
         try:
-            # 获取群组信息
-            chat = await bot.get_chat(chat_id)
-            chat_title = chat.title or "群组"
-
-            # 根据是否有图片选择发送方式
-            if challenge.photo:
-                # captcha 验证：发送图片
-                sent_message = await bot.send_photo(
-                    chat_id=user_id,
-                    photo=challenge.photo,
-                    caption=f"📢 **群组验证通知**\n\n您加入了群组：**{chat_title}**\n\n{challenge.question}",
-                    reply_markup=challenge.keyboard,
-                    parse_mode="Markdown",
-                )
-            else:
-                # 其他验证：发送文本消息
-                sent_message = await bot.send_message(
-                    chat_id=user_id,  # ✅ 发送到用户私聊
-                    text=f"📢 **群组验证通知**\n\n您加入了群组：**{chat_title}**\n\n{challenge.question}",
-                    reply_markup=challenge.keyboard,
-                    parse_mode="Markdown",
-                )
+            # 发送验证消息
+            sent_message = await send_verification_message(
+                bot, chat_id, user_id, challenge, "群组验证通知", "您加入了群组"
+            )
 
             logger.info(f"已向用户 {user_id} 私聊发送验证消息")
 
