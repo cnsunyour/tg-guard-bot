@@ -106,6 +106,34 @@ async def check_admin_permission_strict(bot, chat_id: int, user_id: int) -> bool
         return False
 
 
+async def check_admin_permission_strict_message(message, bot) -> bool:
+    """严格权限检查（Message 版本）
+
+    - 兼容匿名管理员（sender_chat.id == chat.id）
+    - 不使用 Redis 缓存，直接查询 Telegram API
+
+    用于关键操作（踢人、封禁、白名单等），防止 Redis 妥协导致的权限提升攻击
+
+    Args:
+        message: aiogram Message 对象
+        bot: aiogram Bot 对象
+
+    Returns:
+        是否是管理员
+    """
+    # 支持匿名管理员
+    if message.sender_chat is not None and message.sender_chat.id == message.chat.id:
+        masked_text = mask_sensitive_text(getattr(message, "text", None), keep_chars=8)
+        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{masked_text}]")
+        return True
+
+    # 检查是否有 from_user
+    if not getattr(message, "from_user", None):
+        return False
+
+    return await check_admin_permission_strict(bot, message.chat.id, message.from_user.id)
+
+
 def escape_html(text: str | None) -> str:
     """转义 HTML 特殊字符，防止 HTML 注入
 

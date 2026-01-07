@@ -121,7 +121,7 @@ security:
 	-bandit -c pyproject.toml -r src || echo "⚠️  Bandit found security issues (non-blocking)"
 	@echo ""
 	@echo "🔒 运行 Safety 依赖检查..."
-	-safety check || echo "⚠️  Safety found dependency issues (non-blocking)"
+	-safety scan || echo "⚠️  Safety found dependency issues (non-blocking)"
 	@echo ""
 	@echo "🔒 运行 pip-audit 依赖扫描..."
 	-pip-audit --desc || echo "⚠️  pip-audit found dependency issues (non-blocking)"
@@ -131,7 +131,7 @@ security-strict:
 	@echo "🔍 Bandit..."
 	bandit -c pyproject.toml -r src
 	@echo "🔍 Safety..."
-	safety check
+	safety scan
 	@echo "🔍 pip-audit..."
 	pip-audit
 	@echo "✅ 所有安全扫描通过"
@@ -142,7 +142,7 @@ security-report:
 	@echo "🔍 Bandit..."
 	-bandit -c pyproject.toml -r src -f json -o reports/bandit-report.json
 	@echo "🔍 Safety..."
-	-safety check --json --output reports/safety-report.json
+	-safety scan --output json > reports/safety-report.json
 	@echo "🔍 pip-audit..."
 	-pip-audit --format json --output reports/pip-audit-report.json
 	@echo "✅ 报告已生成到 reports/ 目录"
