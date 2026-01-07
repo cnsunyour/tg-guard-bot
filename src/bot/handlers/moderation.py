@@ -10,7 +10,7 @@ from loguru import logger
 from src.core.config import settings
 from src.core.utils import (
     auto_delete_message,
-    check_admin_permission,
+    check_admin_permission_strict_message,
     escape_html,
     parse_message_link,
 )
@@ -157,7 +157,7 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -219,7 +219,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -296,7 +296,7 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -336,7 +336,7 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -398,7 +398,7 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -438,7 +438,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -507,7 +507,7 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     # ✅ 权限检查：只有管理员可以查看其他用户的警告
     if target_user_id != message.from_user.id:
         # 查看他人警告需要管理员权限
-        if not await check_admin_permission(message, bot):
+        if not await check_admin_permission_strict_message(message, bot):
             reply = await message.answer("❌ 只有管理员可以查看其他用户的警告记录")
             await auto_delete_message(reply)
             return
@@ -544,7 +544,7 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -587,7 +587,7 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -647,7 +647,7 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -707,7 +707,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -826,7 +826,7 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
         spam_text = f"[{content_type}消息]"
 
     # 检查是否是管理员
-    is_admin = await check_admin_permission(message, bot)
+    is_admin = await check_admin_permission_strict_message(message, bot)
 
     if is_admin:
         # 管理员模式：直接封禁+删除+训练库
@@ -947,7 +947,7 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
@@ -1004,7 +1004,7 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         return
 
     # 检查权限
-    if not await check_admin_permission(message, bot):
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer("❌ 只有管理员可以使用此命令")
         return
 
