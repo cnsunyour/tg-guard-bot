@@ -31,25 +31,18 @@ updates:
     versioning-strategy: increase
 
     # 分组更新策略
+    # 注意：安全更新由 Dependabot Security Updates 自动处理，无需在此配置
     groups:
-      # 安全更新（高优先级）
-      security-updates:
-        patterns:
-          - "*"
+      # 生产依赖更新（minor + patch，major 版本单独处理）
+      production-dependencies:
+        dependency-type: "production"
         update-types:
-          - "security"
+          - "minor"
+          - "patch"
 
-      # 主要版本更新
-      major-updates:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-
-      # 次要版本和补丁更新
-      minor-and-patch:
-        patterns:
-          - "*"
+      # 开发依赖更新（minor + patch，major 版本单独处理）
+      development-dependencies:
+        dependency-type: "development"
         update-types:
           - "minor"
           - "patch"
