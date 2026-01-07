@@ -325,14 +325,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
 
             # 获取群组信息
             chat = await bot.get_chat(chat_id)
-            chat_title = chat.title or "群组"
+            chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"✅ **验证成功！**\n\n您已成功加入群组：**{chat_title}**\n\n现在可以在群内自由发言了！",
-                    parse_mode="Markdown",
+                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
             # 在群内发送欢迎消息
@@ -954,7 +954,7 @@ async def handle_verification_success(
     try:
         # 获取群组信息
         chat = await bot.get_chat(chat_id)
-        chat_title = chat.title or "群组"
+        chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
         # 清除验证状态
         verification_service = VerificationService()
@@ -979,8 +979,8 @@ async def handle_verification_success(
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"✅ **验证成功！**\n\n您的加入请求已批准，正在加入群组：**{chat_title}**\n\n稍后您将能在群内自由发言！",
-                    parse_mode="Markdown",
+                    text=f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
             await callback.answer("✅ 验证成功！")
@@ -1004,8 +1004,8 @@ async def handle_verification_success(
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"✅ **验证成功！**\n\n您已成功加入群组：**{chat_title}**\n\n现在可以在群内自由发言了！",
-                    parse_mode="Markdown",
+                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
             # 在群内发送欢迎消息（仅此一条群内消息）
@@ -1055,11 +1055,11 @@ async def handle_verification_timeout(
             # 3. ✅ 在私聊中通知用户（可选）
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "群组"
+                chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ **验证超时**\n\n您在群组 **{chat_title}** 的验证已超时，请重新加入并在规定时间内完成验证。",
-                    parse_mode="Markdown",
+                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时，请重新加入并在规定时间内完成验证。",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
             except Exception:
                 pass
@@ -1096,7 +1096,7 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "本群组"
+                chat_title = escape_html(chat.title) if chat.title else "本群组"  # ✅ 安全修复：转义 HTML
             except Exception:
                 chat_title = "本群组"
 
@@ -1116,8 +1116,8 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
             hint_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "⚠️ **入群验证提示**\n\n"
-                    f"欢迎加入 **{chat_title}**！\n\n"
+                    "⚠️ <b>入群验证提示</b>\n\n"
+                    f"欢迎加入 <b>{chat_title}</b>！\n\n"  # ✅ 安全修复：转义 HTML
                     "📱 本群使用 Bot 私聊验证，如果您刚加入但未收到验证消息，"
                     "说明您尚未启动 Bot。\n\n"
                     "👉 请点击下方按钮启动 Bot 进行验证：\n\n"
@@ -1125,7 +1125,7 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
                     "💡 此提示将在 30 秒后自动删除"
                 ),
                 reply_markup=keyboard,
-                parse_mode="Markdown",
+                parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
             )
 
             # 3. 记录到 Redis（30秒过期）
@@ -1214,11 +1214,11 @@ async def handle_join_request_timeout(
             # 3. 在私聊中通知用户（可选）
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "群组"
+                chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ **验证超时**\n\n您加入群组 **{chat_title}** 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
-                    parse_mode="Markdown",
+                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
             except Exception:
                 pass
@@ -1256,7 +1256,7 @@ async def handle_user_not_started_bot_for_join_request(
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "本群组"
+                chat_title = escape_html(chat.title) if chat.title else "本群组"  # ✅ 安全修复：转义 HTML
             except Exception:
                 chat_title = "本群组"
 
@@ -1276,8 +1276,8 @@ async def handle_user_not_started_bot_for_join_request(
             hint_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "⚠️ **入群验证提示**\n\n"
-                    f"欢迎请求加入 **{chat_title}**！\n\n"
+                    "⚠️ <b>入群验证提示</b>\n\n"
+                    f"欢迎请求加入 <b>{chat_title}</b>！\n\n"  # ✅ 安全修复：转义 HTML
                     "📱 本群使用 Bot 私聊验证，如果您发送了加入请求但未收到验证消息，"
                     "说明您尚未启动 Bot。\n\n"
                     "👉 请点击下方按钮启动 Bot 后重新发送加入请求：\n\n"
@@ -1285,7 +1285,7 @@ async def handle_user_not_started_bot_for_join_request(
                     "💡 此提示将在 30 秒后自动删除"
                 ),
                 reply_markup=keyboard,
-                parse_mode="Markdown",
+                parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
             )
 
             # 3. 记录到 Redis（30秒过期）
