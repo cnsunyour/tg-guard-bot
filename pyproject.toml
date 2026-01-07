@@ -44,7 +44,7 @@ dependencies = [
 
     # AI/ML
     "scikit-learn>=1.4.0",
-    "joblib>=1.3.0",                    # ML 模型序列化（安全替代 pickle）
+    "joblib>=1.3.0",                    # ML 模型序列化（基于 pickle；仅加载可信模型/启用签名校验）
     "jieba>=0.42.1",                    # 中文分词
     "onnxruntime>=1.17.0",
     "fastembed>=0.3.0",
@@ -62,7 +62,7 @@ dependencies = [
     "loguru>=0.7.0",
 
     # 工具库
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.13.3",  # ⚠️ 重要：修复 CVE-2025-69223~69230（8个安全漏洞）
     "httpx>=0.26.0",
     "psutil>=5.9.0",  # 系统监控
 ]
@@ -93,6 +93,7 @@ dev = [
     # 安全扫描
     "bandit[toml]>=1.7.0",
     "safety>=3.0.0",
+    "pip-audit>=2.7.0",  # Python 官方依赖漏洞扫描
 
     # 开发工具
     "watchfiles>=0.21.0",  # 文件监控和热重载

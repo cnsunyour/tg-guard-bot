@@ -20,6 +20,7 @@ from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
 from src.core.utils import auto_delete_message, check_admin_permission, format_user_mention
 from src.repositories.group_repo import GroupRepository
+from src.services.activity import ActivityService  # 活跃度服务
 from src.services.moderation import ModerationService
 from src.services.spam_detector import get_detector
 
@@ -59,6 +60,140 @@ def is_anonymous_admin(message: Message) -> bool:
         是否是匿名管理员消息
     """
     return message.sender_chat is not None and message.sender_chat.id == message.chat.id
+
+
+def is_external_forward(message: Message) -> bool:
+    """检查消息是否是从外部群组/频道转发的
+
+    规则：
+    - 转发自其他群组/频道：算外部转发
+    - 转发自本群内用户：不算外部转发
+    - 转发自其他用户：不算外部转发
+
+    Args:
+        message: 消息对象
+
+    Returns:
+        是否是外部转发消息
+    """
+    # 没有转发信息，不是转发消息
+    if not message.forward_origin:
+        return False
+
+    from aiogram.types import MessageOriginChannel, MessageOriginChat
+
+    # 转发自频道：算外部转发
+    if isinstance(message.forward_origin, MessageOriginChannel):
+        return True
+
+    # 转发自群组
+    if isinstance(message.forward_origin, MessageOriginChat):
+        # 如果是转发自本群，不算外部转发
+        if message.forward_origin.sender_chat.id == message.chat.id:
+            return False
+        # 转发自其他群组，算外部转发
+        return True
+
+    # 其他情况（转发自用户、隐藏用户等）：不算外部转发
+    return False
+
+
+def has_url_entities(message: Message) -> bool:
+    """检查消息是否包含 URL 链接
+
+    Args:
+        message: 消息对象
+
+    Returns:
+        是否包含 URL 链接
+    """
+    if not message.entities:
+        return False
+
+    from aiogram.enums import MessageEntityType
+
+    # 检查是否有 URL 或文本链接实体
+    for entity in message.entities:
+        if entity.type in (MessageEntityType.URL, MessageEntityType.TEXT_LINK):
+            return True
+
+    return False
+
+
+async def check_non_text_message(
+    message: Message, bot: Bot, message_type: str, activity_enabled: bool | None = None
+) -> bool:
+    """检查非文本消息是否允许发送（活跃度检查）
+
+    注意：调用此函数前应已过滤管理员
+
+    Args:
+        message: 消息对象
+        bot: Bot 实例
+        message_type: 消息类型（"photo", "sticker", "video" 等）
+        activity_enabled: 是否启用活跃度检查（None 则使用全局配置）
+
+    Returns:
+        True 表示消息已被阻止（调用者应直接 return），False 表示允许
+    """
+    # 检查活跃度系统是否启用
+    if activity_enabled is None:
+        activity_enabled = settings.activity_enabled
+
+    if not activity_enabled:
+        return False
+
+    # 检查活跃度是否允许发送非文本消息
+    allowed, current_activity = await ActivityService.check_non_text_allowed(
+        message.chat.id, message.from_user.id
+    )
+
+    if not allowed:
+        # 删除消息
+        try:
+            await message.delete()
+            logger.info(
+                f"活跃度限制：阻止非文本消息 [群组:{message.chat.id}] "
+                f"[用户:{message.from_user.id}] [类型:{message_type}] [活跃度:{current_activity}]"
+            )
+
+            # 私聊通知用户
+            await notify_activity_restriction(bot, message.from_user.id, current_activity)
+
+        except Exception as e:
+            logger.error(f"删除非文本消息失败: {e}")
+
+        return True  # 消息已被阻止
+
+    # 允许发送，扣除活跃度
+    await ActivityService.record_non_text_message(message.chat.id, message.from_user.id)
+    return False  # 允许通过
+
+
+async def notify_activity_restriction(bot: Bot, user_id: int, current_activity: int) -> None:
+    """私聊通知用户活跃度限制
+
+    Args:
+        bot: Bot 实例
+        user_id: 用户 ID
+        current_activity: 当前活跃度
+    """
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=(
+                "⚠️ **消息被限制**\n\n"
+                f"您当前的活跃度为 **{current_activity}**，无法发送非文本消息。\n\n"
+                "📝 **如何恢复:**\n"
+                "发送文本消息可以增加活跃度，每条文本消息 +1 活跃度。\n\n"
+                "💡 当活跃度 > 0 时，即可发送图片、贴纸等非文本消息。"
+            ),
+            parse_mode="Markdown",
+        )
+        logger.debug(f"已私聊通知用户 {user_id} 活跃度限制")
+    except Exception as e:
+        # 用户可能未启动 Bot，这是正常情况
+        logger.debug(f"通知用户活跃度限制失败（用户可能未启动 Bot）: {e}")
 
 
 @contextmanager
@@ -294,15 +429,45 @@ async def on_message(message: Message, bot: Bot) -> None:
     except Exception as e:
         # ✅ L6: 添加日志，不静默吞掉异常
         logger.debug(f"检查管理员权限失败（非关键）: {e}")
+        group = None  # 设置默认值，避免 UnboundLocalError
+
+    # 检查是否是外部转发或带链接的消息（需要活跃度支撑）
+    is_special_message = is_external_forward(message) or has_url_entities(message)
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 记录活跃度（管理员已在上面跳过，不会记录）
+    activity = None
+    if activity_system_enabled:
+        if is_special_message:
+            # 外部转发/带链接消息：按非文本消息处理（-2 活跃度）
+            if await check_non_text_message(
+                message,
+                bot,
+                "forward" if is_external_forward(message) else "link",
+                activity_enabled=True,  # 已在上面检查过，这里直接传 True
+            ):
+                return  # 活跃度不足，消息已被删除
+            # 活跃度足够，已扣除，继续垃圾检测
+            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        else:
+            # 普通文本消息：增加活跃度（+1）
+            activity = await ActivityService.record_text_message(
+                message.chat.id, message.from_user.id
+            )
 
     # 获取检测器
     detector = get_detector()
 
-    # 检测垃圾
+    # 检测垃圾（传入活跃度）
     result = await detector.detect(
         text=message.text,
         user_id=message.from_user.id,
         chat_id=message.chat.id,
+        activity=activity,
     )
 
     # 如果检测到垃圾
@@ -421,14 +586,25 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         )
         return
 
-    # 检查群组是否启用反垃圾
+    # 检查群组配置
     try:
         group = await GroupRepository.get(message.chat.id)
-        if group and not group.antispam_enabled:
-            return
     except Exception as e:
-        # ✅ L6: 添加日志，不静默吞掉异常
-        logger.debug(f"检查管理员权限失败（非关键）: {e}")
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # ✅ 活跃度检查（管理员已在上面跳过）
+    if await check_non_text_message(message, bot, "photo", activity_enabled=activity_system_enabled):
+        return  # 消息已被删除
+
+    # 检查群组是否启用反垃圾
+    if group and not group.antispam_enabled:
+        return
 
     # 获取检测器
     detector = get_detector()
@@ -576,13 +752,25 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         )
         return
 
-    # 检查群组是否启用反垃圾
+    # 检查群组配置
     try:
         group = await GroupRepository.get(message.chat.id)
-        if group and not group.antispam_enabled:
-            return
     except Exception as e:
-        logger.debug(f"检查群组配置失败（非关键）: {e}")
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # ✅ 活跃度检查（管理员已在上面跳过）
+    if await check_non_text_message(message, bot, "sticker", activity_enabled=activity_system_enabled):
+        return  # 消息已被删除
+
+    # 检查群组是否启用反垃圾
+    if group and not group.antispam_enabled:
+        return
 
     # 获取检测器
     detector = get_detector()
@@ -608,6 +796,14 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                 logger.debug(f"TGS 支持不可用（需要安装 OCR 依赖）: {e}")
                 return
 
+            # ✅ 安全修复：防止 Gzip 炸弹攻击 - 先检查压缩文件大小
+            MAX_COMPRESSED_SIZE = 256 * 1024  # 256KB 压缩文件上限
+            if sticker.file_size and sticker.file_size > MAX_COMPRESSED_SIZE:
+                logger.warning(
+                    f"TGS 文件过大: {sticker.file_size} bytes (限制: {MAX_COMPRESSED_SIZE})"
+                )
+                return
+
             with managed_temp_file(suffix=".tgs") as tgs_file_path:
                 # 下载贴纸
                 await bot.download(sticker, destination=tgs_file_path)
@@ -622,10 +818,40 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     # TGS = gzip-compressed Lottie JSON
                     tgs_path = Path(tgs_file_path)
 
-                    # ✅ 防止 gzip 炸弹攻击：限制解压后大小为 10MB
-                    MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
-                    compressed_data = tgs_path.read_bytes()
-                    decompressed_data = gzip.decompress(compressed_data)
+                    # ✅ 安全修复：使用流式解压防止 Gzip 炸弹攻击
+                    MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024  # 10MB 解压后大小限制
+                    import zlib
+
+                    decompressed_data = b""
+                    with open(tgs_path, "rb") as f:
+                        # 创建 gzip 解压器（16 + MAX_WBITS 表示 gzip 格式）
+                        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                        chunk_size = 65536  # 64KB 块
+
+                        try:
+                            while True:
+                                chunk = f.read(chunk_size)
+                                if not chunk:
+                                    break
+
+                                # 解压当前块
+                                decompressed_chunk = decompressor.decompress(
+                                    chunk, max_length=MAX_DECOMPRESSED_SIZE - len(decompressed_data)
+                                )
+                                decompressed_data += decompressed_chunk
+
+                                # 边解压边检查大小
+                                if len(decompressed_data) >= MAX_DECOMPRESSED_SIZE:
+                                    logger.warning(
+                                        f"TGS 文件解压后过大，停止解压 (限制: {MAX_DECOMPRESSED_SIZE} bytes)"
+                                    )
+                                    return
+
+                            # 处理剩余数据
+                            decompressed_data += decompressor.flush()
+                        except zlib.error as e:
+                            logger.error(f"TGS 文件解压失败: {e}")
+                            return
 
                     if len(decompressed_data) > MAX_DECOMPRESSED_SIZE:
                         logger.warning(
@@ -929,6 +1155,198 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"贴纸检测失败: {e}")
+
+
+@router.message(F.video)
+async def on_video_message(message: Message, bot: Bot) -> None:
+    """处理视频消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "video", activity_enabled=activity_system_enabled):
+        return
+
+
+@router.message(F.animation)
+async def on_animation_message(message: Message, bot: Bot) -> None:
+    """处理 GIF 动画消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "animation", activity_enabled=activity_system_enabled):
+        return
+
+
+@router.message(F.voice)
+async def on_voice_message(message: Message, bot: Bot) -> None:
+    """处理语音消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "voice", activity_enabled=activity_system_enabled):
+        return
+
+
+@router.message(F.video_note)
+async def on_video_note_message(message: Message, bot: Bot) -> None:
+    """处理视频笔记消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "video_note", activity_enabled=activity_system_enabled):
+        return
+
+
+@router.message(F.document)
+async def on_document_message(message: Message, bot: Bot) -> None:
+    """处理文件消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "document", activity_enabled=activity_system_enabled):
+        return
+
+
+@router.message(F.audio)
+async def on_audio_message(message: Message, bot: Bot) -> None:
+    """处理音频消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 检查活跃度系统是否启用（全局 + 群组）
+    activity_system_enabled = settings.activity_enabled and (
+        not group or group.activity_enabled
+    )
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "audio", activity_enabled=activity_system_enabled):
+        return
 
 
 @router.callback_query(F.data.startswith("spam_feedback:"))

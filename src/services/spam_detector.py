@@ -27,13 +27,16 @@ class SpamDetector:
         self.embedder = get_embedder()
         self.ocr_extractor = get_ocr_extractor()
 
-    async def detect(self, text: str, user_id: int, chat_id: int) -> dict[str, Any]:
+    async def detect(
+        self, text: str, user_id: int, chat_id: int, activity: int | None = None
+    ) -> dict[str, Any]:
         """检测文本是否为垃圾信息
 
         Args:
             text: 待检测文本
             user_id: 用户 ID
             chat_id: 群组 ID
+            activity: 用户活跃度（可选），用于置信度调整
 
         Returns:
             检测结果字典
@@ -41,6 +44,8 @@ class SpamDetector:
         result = {
             "is_spam": False,
             "confidence": 0.0,
+            "original_confidence": 0.0,  # 原始置信度
+            "activity_reduction": 0.0,  # 活跃度减少值
             "stage": None,
             "reasons": [],
             "details": {},
@@ -61,6 +66,9 @@ class SpamDetector:
                 f"Stage 1 检测到垃圾信息 [用户:{user_id}] "
                 f"原因: {', '.join(rule_result['reasons'])}"
             )
+
+            # 应用活跃度置信度调整
+            result = self._apply_activity_adjustment(result, activity, user_id)
             return result
 
         # Stage 2: ML 分类器（捕获变体）
@@ -78,6 +86,9 @@ class SpamDetector:
                     logger.info(
                         f"Stage 2 检测到垃圾信息 [用户:{user_id}] " f"置信度: {confidence_ml:.2f}"
                     )
+
+                    # 应用活跃度置信度调整
+                    result = self._apply_activity_adjustment(result, activity, user_id)
                     return result
 
             except Exception as e:
@@ -98,6 +109,9 @@ class SpamDetector:
                     logger.info(
                         f"Stage 3 检测到垃圾信息 [用户:{user_id}] " f"相似度: {similarity:.2f}"
                     )
+
+                    # 应用活跃度置信度调整
+                    result = self._apply_activity_adjustment(result, activity, user_id)
                     return result
 
             except Exception as e:
@@ -105,6 +119,62 @@ class SpamDetector:
 
         # 未检测到垃圾信息
         logger.debug(f"消息通过检测 [用户:{user_id}]")
+        return result
+
+    def _apply_activity_adjustment(
+        self, result: dict[str, Any], activity: int | None, user_id: int
+    ) -> dict[str, Any]:
+        """应用活跃度置信度调整
+
+        Args:
+            result: 检测结果字典
+            activity: 用户活跃度
+            user_id: 用户 ID
+
+        Returns:
+            调整后的检测结果
+        """
+        # 如果未提供活跃度或活跃度过低，不调整
+        if activity is None or activity < 10:
+            return result
+
+        # 如果未检测到垃圾，不调整
+        if not result["is_spam"]:
+            return result
+
+        # 导入 ActivityService（延迟导入避免循环依赖）
+        from src.services.activity import ActivityService
+
+        # 保存原始置信度
+        original_confidence = result["confidence"]
+        result["original_confidence"] = original_confidence
+
+        # 计算置信度减少值
+        reduction = ActivityService.calculate_confidence_reduction(activity)
+        result["activity_reduction"] = reduction
+
+        # 应用调整
+        adjusted_confidence = max(0.0, original_confidence - reduction)
+        result["confidence"] = adjusted_confidence
+
+        # 根据调整后的置信度重新评估是否为垃圾
+        # 使用 ML 阈值作为参考（规则引擎通常置信度更高，不太可能被调整）
+        threshold = settings.spam_threshold_ml
+
+        if adjusted_confidence < threshold:
+            result["is_spam"] = False
+            logger.info(
+                f"活跃度置信度调整 [用户:{user_id}] [活跃度:{activity}] "
+                f"{original_confidence:.2f} -> {adjusted_confidence:.2f} (减少 {reduction:.2f}), "
+                f"不再判定为垃圾"
+            )
+        else:
+            logger.debug(
+                f"活跃度置信度调整 [用户:{user_id}] [活跃度:{activity}] "
+                f"{original_confidence:.2f} -> {adjusted_confidence:.2f} (减少 {reduction:.2f}), "
+                f"仍判定为垃圾"
+            )
+
         return result
 
     async def detect_image(self, image_path: str, user_id: int, chat_id: int) -> dict[str, Any]:

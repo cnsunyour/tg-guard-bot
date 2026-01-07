@@ -7,6 +7,35 @@ import re
 from loguru import logger
 
 
+def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
+    """脱敏处理敏感文本，用于日志记录
+
+    Args:
+        text: 待脱敏的文本
+        keep_chars: 保留前后各多少个字符
+
+    Returns:
+        脱敏后的文本
+
+    Example:
+        >>> mask_sensitive_text("这是一条敏感消息内容", keep_chars=4)
+        "这是一条...息内容"
+        >>> mask_sensitive_text("短", keep_chars=10)
+        "***"
+    """
+    if not text:
+        return "***"
+
+    text_str = str(text)
+
+    # 如果文本很短，完全脱敏
+    if len(text_str) <= keep_chars * 2:
+        return "***"
+
+    # 保留前后各 keep_chars 个字符
+    return f"{text_str[:keep_chars]}...{text_str[-keep_chars:]}"
+
+
 async def check_admin_permission(message, bot) -> bool:
     """检查是否是管理员（统一的权限检查函数）
 
@@ -30,7 +59,9 @@ async def check_admin_permission(message, bot) -> bool:
     # 1. 检查是否是匿名管理员
     # 当管理员以"匿名管理员"身份执行命令时，sender_chat 会被设置为群组本身
     if message.sender_chat is not None and message.sender_chat.id == message.chat.id:
-        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{message.text}]")
+        # ✅ 安全修复：脱敏处理命令内容，避免日志泄露敏感信息
+        masked_text = mask_sensitive_text(message.text, keep_chars=8)
+        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{masked_text}]")
         return True
 
     # 2. 检查是否在配置的超级管理员列表中
@@ -39,6 +70,68 @@ async def check_admin_permission(message, bot) -> bool:
 
     # 3. 使用缓存检查是否是群组管理员
     return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
+
+
+async def check_admin_permission_strict(bot, chat_id: int, user_id: int) -> bool:
+    """严格的管理员权限检查（不信任缓存，直接查询 API）
+
+    用于关键操作（踢人、封禁、白名单等），防止 Redis 妥协导致的权限提升攻击
+
+    Args:
+        bot: aiogram Bot 对象
+        chat_id: 群组 ID
+        user_id: 用户 ID
+
+    Returns:
+        是否是管理员
+
+    ✅ 安全加固：关键操作不信任 Redis 缓存
+    """
+    from src.core.config import settings
+
+    # 1. 检查是否在配置的超级管理员列表中
+    if user_id in settings.admin_ids:
+        return True
+
+    # 2. 直接查询 Telegram API（不使用缓存）
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        is_admin = member.status in ["creator", "administrator"]
+        logger.debug(
+            f"严格权限检查 [群组:{chat_id}] [用户:{user_id}] [结果:{is_admin}] [状态:{member.status}]"
+        )
+        return is_admin
+    except Exception as e:
+        logger.error(f"严格权限检查失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+        return False
+
+
+async def check_admin_permission_strict_message(message, bot) -> bool:
+    """严格权限检查（Message 版本）
+
+    - 兼容匿名管理员（sender_chat.id == chat.id）
+    - 不使用 Redis 缓存，直接查询 Telegram API
+
+    用于关键操作（踢人、封禁、白名单等），防止 Redis 妥协导致的权限提升攻击
+
+    Args:
+        message: aiogram Message 对象
+        bot: aiogram Bot 对象
+
+    Returns:
+        是否是管理员
+    """
+    # 支持匿名管理员
+    if message.sender_chat is not None and message.sender_chat.id == message.chat.id:
+        masked_text = mask_sensitive_text(getattr(message, "text", None), keep_chars=8)
+        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{masked_text}]")
+        return True
+
+    # 检查是否有 from_user
+    if not getattr(message, "from_user", None):
+        return False
+
+    return await check_admin_permission_strict(bot, message.chat.id, message.from_user.id)
 
 
 def escape_html(text: str | None) -> str:
@@ -235,5 +328,7 @@ def parse_message_link(text: str) -> int | None:
                 return message_id
 
     # 解析失败
-    logger.debug(f"无法从文本中解析消息ID: {text}")
+    # ✅ 安全修复：脱敏处理文本内容，避免日志泄露敏感信息
+    masked_text = mask_sensitive_text(text, keep_chars=15)
+    logger.debug(f"无法从文本中解析消息ID: {masked_text}")
     return None

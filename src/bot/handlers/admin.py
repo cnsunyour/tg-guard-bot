@@ -7,7 +7,7 @@ from loguru import logger
 
 from src.core.config import settings
 from src.core.health import get_health_checker
-from src.core.utils import auto_delete_message, check_admin_permission
+from src.core.utils import auto_delete_message, check_admin_permission, escape_html
 from src.repositories.group_repo import GroupRepository
 
 router = Router(name="admin")
@@ -38,6 +38,8 @@ async def cmd_start(message: Message) -> None:
         "• /delrange - 删除消息范围\n\n"
         "🛡️ <b>反垃圾</b>\n"
         "• /antispam - 配置反垃圾\n\n"
+        "📊 <b>活跃度系统</b>\n"
+        "• /activity - 控制活跃度系统开关\n\n"
         "💡 <b>提示</b>：将我添加到群组并设为管理员即可使用所有功能"
     )
 
@@ -180,7 +182,8 @@ async def cmd_verify_config(message: Message) -> None:
             f"验证方式: {verify_type_names.get(group.verification_type, group.verification_type)}\n"
             f"验证超时: {group.verification_timeout} 秒\n"
             f"反垃圾: {'已启用' if group.antispam_enabled else '已禁用'}\n"
-            f"反垃圾级别: {group.antispam_level}/3"
+            f"反垃圾级别: {group.antispam_level}/3\n"
+            f"活跃度系统: {'已启用' if group.activity_enabled else '已禁用'}"
         )
 
         reply = await message.answer(config_text)
@@ -432,14 +435,18 @@ async def cmd_whitelist_add(message: Message) -> None:
         group = await GroupRepository.get_or_create(chat_id, title)
 
         if group.is_whitelisted:
-            await message.answer(f"ℹ️ 群组 <b>{group.title or chat_id}</b> 已在白名单中")
+            await message.answer(
+                f"ℹ️ 群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 已在白名单中"
+            )
             return
 
         # 添加到白名单
         await GroupRepository.update_whitelist(chat_id, True)
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 添加到白名单")
-        await message.answer(f"✅ 已将群组 <b>{group.title or chat_id}</b> 添加到白名单")
+        await message.answer(
+            f"✅ 已将群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 添加到白名单"
+        )
 
     except ValueError:
         await message.answer("❌ chat_id 格式错误，必须是数字")
@@ -480,14 +487,18 @@ async def cmd_whitelist_remove(message: Message) -> None:
             return
 
         if not group.is_whitelisted:
-            await message.answer(f"ℹ️ 群组 <b>{group.title or chat_id}</b> 不在白名单中")
+            # ✅ 安全修复：转义群组标题防止 HTML 注入
+            title_safe = escape_html(group.title) if group.title else chat_id
+            await message.answer(f"ℹ️ 群组 <b>{title_safe}</b> 不在白名单中")
             return
 
         # 从白名单移除
         await GroupRepository.update_whitelist(chat_id, False)
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
-        await message.answer(f"✅ 已将群组 <b>{group.title or chat_id}</b> 从白名单移除")
+        # ✅ 安全修复：转义群组标题防止 HTML 注入
+        title_safe = escape_html(group.title) if group.title else chat_id
+        await message.answer(f"✅ 已将群组 <b>{title_safe}</b> 从白名单移除")
 
     except ValueError:
         await message.answer("❌ chat_id 格式错误，必须是数字")
@@ -515,7 +526,8 @@ async def cmd_whitelist_list(message: Message) -> None:
         text = f"📋 <b>白名单群组列表</b> (共 {len(groups)} 个)\n\n"
 
         for i, group in enumerate(groups, 1):
-            text += f"{i}. <b>{group.title or '未知群组'}</b>\n"
+            title = escape_html(group.title) if group.title else "未知群组"
+            text += f"{i}. <b>{title}</b>\n"
             text += f"   ID: <code>{group.id}</code>\n"
             if i < len(groups):
                 text += "\n"
@@ -525,3 +537,145 @@ async def cmd_whitelist_list(message: Message) -> None:
     except Exception as e:
         logger.error(f"获取白名单列表失败: {e}")
         await message.answer("❌ 获取白名单列表失败，请重试")
+
+
+@router.message(Command("activity"))
+async def cmd_activity(message: Message, bot: Bot) -> None:
+    """控制群组活跃度系统开关"""
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 显示活跃度控制面板
+    try:
+        group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+
+        status_text = "已启用 ✅" if group.activity_enabled else "已禁用 ❌"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ 启用活跃度系统",
+                        callback_data=f"activity:{message.chat.id}:enable",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ 禁用活跃度系统",
+                        callback_data=f"activity:{message.chat.id}:disable",
+                    )
+                ],
+            ]
+        )
+
+        text = (
+            f"<b>📊 活跃度系统设置</b>\n\n"
+            f"当前状态: {status_text}\n\n"
+            f"<b>说明：</b>\n"
+            f"• 启用后，新用户需通过发送文本消息积累活跃度\n"
+            f"• 活跃度 > 0 才能发送图片、贴纸、转发等非文本消息\n"
+            f"• 发送文本消息 +1，发送非文本消息 -2\n"
+            f"• 每日无消息自动衰减 -1"
+        )
+
+        reply = await message.answer(text, reply_markup=keyboard)
+        await auto_delete_message(reply)
+
+        # 删除管理员的命令消息
+        try:
+            await message.delete()
+        except Exception as e:
+            logger.debug(f"删除命令消息失败: {e}")
+
+    except Exception as e:
+        logger.error(f"获取群组配置失败: {e}")
+        await message.answer("❌ 获取配置失败，请重试")
+
+
+@router.callback_query(F.data.startswith("activity:"))
+async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
+    """处理活跃度设置回调"""
+    try:
+        # 解析回调数据
+        _, chat_id_str, action = callback.data.split(":")
+        chat_id = int(chat_id_str)
+
+        # 检查权限（回调来自同一用户）
+        if callback.message.chat.id != chat_id:
+            await callback.answer("❌ 无效的操作", show_alert=True)
+            return
+
+        # 检查是否是管理员
+        if callback.from_user.id not in settings.admin_ids:
+            if not await PermissionCache.is_admin(bot, chat_id, callback.from_user.id):
+                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                return
+
+        # 获取群组配置
+        group = await GroupRepository.get_or_create(chat_id)
+
+        # 更新设置
+        if action == "enable":
+            if group.activity_enabled:
+                await callback.answer("ℹ️ 活跃度系统已经是启用状态", show_alert=True)
+                return
+
+            group.activity_enabled = True
+            await GroupRepository.update(group)
+            logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 启用了活跃度系统")
+            await callback.answer("✅ 活跃度系统已启用", show_alert=True)
+
+        elif action == "disable":
+            if not group.activity_enabled:
+                await callback.answer("ℹ️ 活跃度系统已经是禁用状态", show_alert=True)
+                return
+
+            group.activity_enabled = False
+            await GroupRepository.update(group)
+            logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 禁用了活跃度系统")
+            await callback.answer("✅ 活跃度系统已禁用", show_alert=True)
+
+        # 更新消息
+        status_text = "已启用 ✅" if group.activity_enabled else "已禁用 ❌"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ 启用活跃度系统",
+                        callback_data=f"activity:{chat_id}:enable",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ 禁用活跃度系统",
+                        callback_data=f"activity:{chat_id}:disable",
+                    )
+                ],
+            ]
+        )
+
+        text = (
+            f"<b>📊 活跃度系统设置</b>\n\n"
+            f"当前状态: {status_text}\n\n"
+            f"<b>说明：</b>\n"
+            f"• 启用后，新用户需通过发送文本消息积累活跃度\n"
+            f"• 活跃度 > 0 才能发送图片、贴纸、转发等非文本消息\n"
+            f"• 发送文本消息 +1，发送非文本消息 -2\n"
+            f"• 每日无消息自动衰减 -1"
+        )
+
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
+    except ValueError:
+        await callback.answer("❌ 无效的回调数据", show_alert=True)
+    except Exception as e:
+        logger.error(f"处理活跃度设置回调失败: {e}")
+        await callback.answer("❌ 操作失败，请重试", show_alert=True)

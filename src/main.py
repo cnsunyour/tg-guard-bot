@@ -116,13 +116,13 @@ async def main() -> None:
         colorize=True,
     )
 
-    # 添加文件输出（所有级别）
+    # 添加文件输出（使用配置的日志级别，生产环境避免记录 DEBUG）
     logger.add(
         "logs/bot_{time:YYYY-MM-DD}.log",
         rotation="00:00",  # 每天午夜轮转
         retention="7 days",  # 保留 7 天
         compression="zip",  # 压缩旧日志
-        level="DEBUG",
+        level=settings.log_level,  # ✅ 安全修复：使用配置的日志级别而非固定 DEBUG
         encoding="utf-8",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
     )

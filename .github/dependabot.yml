@@ -1,0 +1,156 @@
+# Dependabot 配置文件
+# 文档: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # ============================================================================
+  # Python 依赖更新（pip）
+  # ============================================================================
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Asia/Shanghai"
+
+    # 开启安全更新
+    open-pull-requests-limit: 10
+
+    # PR 配置
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+    labels:
+      - "dependencies"
+      - "python"
+      - "security"
+
+    # 版本更新策略
+    versioning-strategy: increase
+
+    # 分组更新策略
+    groups:
+      # 安全更新（高优先级）
+      security-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "security"
+
+      # 主要版本更新
+      major-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+      # 次要版本和补丁更新
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+    # 忽略特定依赖（如果需要固定版本）
+    ignore:
+      # PaddleOCR 锁定在 2.8.x（ARM 兼容性）
+      - dependency-name: "paddleocr"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "paddlepaddle"
+        update-types: ["version-update:semver-major"]
+
+  # ============================================================================
+  # Docker 基础镜像更新
+  # ============================================================================
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+
+    open-pull-requests-limit: 5
+
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+
+    labels:
+      - "dependencies"
+      - "docker"
+
+    # 仅监控次要版本和补丁（避免 Python 3.12 → 3.13）
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
+
+  # ============================================================================
+  # GitHub Actions 工作流更新
+  # ============================================================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Shanghai"
+
+    open-pull-requests-limit: 5
+
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "ci"
+
+    groups:
+      # 分组更新所有 Actions
+      github-actions:
+        patterns:
+          - "*"
+
+  # ============================================================================
+  # Docker Compose 依赖更新
+  # ============================================================================
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Asia/Shanghai"
+
+    open-pull-requests-limit: 3
+
+    commit-message:
+      prefix: "chore(docker-compose)"
+      include: "scope"
+
+    labels:
+      - "dependencies"
+      - "docker-compose"
+
+# ============================================================================
+# Dependabot 自动合并策略建议
+# ============================================================================
+#
+# 可在 GitHub 仓库设置中启用自动合并（推荐配置）：
+#
+# 1. Settings → Code security and analysis → Dependabot security updates: ✅ Enable
+# 2. Settings → Code security and analysis → Dependabot alerts: ✅ Enable
+# 3. Settings → Code security and analysis → Dependabot version updates: ✅ Enable
+#
+# 自动合并规则（GitHub Actions）：
+# - 安全更新（security）: 自动合并到 dev
+# - 补丁更新（patch）: 需要审查后合并
+# - 次要更新（minor）: 需要审查后合并
+# - 主要更新（major）: 需要手动审查和测试
+#
+# ============================================================================

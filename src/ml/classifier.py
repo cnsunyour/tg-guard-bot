@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import io
 import os
+import stat
 
 import jieba
 import joblib
@@ -234,21 +235,90 @@ class SpamClassifier:
             logger.info(f"模型文件不存在: {load_path}")
             return False
 
+        # ✅ 安全加固：额外的模型文件安全检查
+        try:
+            # 1. 检查文件大小（防止加载过大文件）
+            MAX_MODEL_SIZE = 100 * 1024 * 1024  # 100MB 上限
+            # 拒绝符号链接，避免路径劫持/TOCTOU
+            if os.path.islink(load_path):
+                logger.error(f"模型文件是符号链接，拒绝加载: {load_path}")
+                return False
+
+            file_stat = os.stat(load_path)
+            file_mode = file_stat.st_mode
+
+            if not stat.S_ISREG(file_mode):
+                logger.error(f"模型路径不是普通文件，拒绝加载: {load_path}")
+                return False
+
+            file_size = file_stat.st_size
+            if file_size > MAX_MODEL_SIZE:
+                logger.error(
+                    f"🔒 模型文件过大: {file_size} bytes (限制: {MAX_MODEL_SIZE} bytes)\n"
+                    f"文件: {load_path}\n"
+                    f"这可能是恶意文件，拒绝加载"
+                )
+                return False
+
+            # 2. 检查文件权限（只有 owner 应该能写）
+            # 检查是否 group 或 others 可写
+            if file_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                logger.warning(
+                    f"⚠️  模型文件权限不安全：group/others 可写\n"
+                    f"文件: {load_path}\n"
+                    f"建议：chmod 600 {load_path}"
+                )
+
+            # 3. 生产环境强制禁用 allow_unsigned_models
+            if not settings.debug and settings.allow_unsigned_models:
+                logger.error(
+                    f"🔒 生产环境禁止启用 ALLOW_UNSIGNED_MODELS\n"
+                    f"这会允许加载未签名模型，存在 RCE 风险\n"
+                    f"请设置 ALLOW_UNSIGNED_MODELS=false"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"检查模型文件安全性失败: {e}")
+            return False
+
         try:
             with open(load_path, "rb") as f:
-                content = f.read()
+                # 兜底：即使存在 TOCTOU，也避免读取超大文件导致内存 DoS
+                content = f.read(MAX_MODEL_SIZE + 1)
+
+            if len(content) > MAX_MODEL_SIZE:
+                logger.error(
+                    f"模型文件读取超出限制: {len(content)} bytes (限制: {MAX_MODEL_SIZE} bytes)\n"
+                    f"文件: {load_path}"
+                )
+                return False
 
             # 分离签名和数据
             parts = content.split(b"\n", 1)
 
             if len(parts) != 2:
+                # 检查是否允许加载未签名模型
+                if not settings.allow_unsigned_models:
+                    logger.error(
+                        f"🔒 安全警告：模型文件无签名，拒绝加载！\n"
+                        f"文件: {load_path}\n"
+                        f"如需加载旧版本模型，请设置环境变量 ALLOW_UNSIGNED_MODELS=true\n"
+                        f"⚠️  强烈建议：重新训练模型并使用签名保存（防止代码执行攻击）"
+                    )
+                    return False
+
                 # 尝试作为旧格式（无签名）加载
-                logger.warning(f"模型文件无签名，可能是旧版本: {load_path}")
+                logger.warning(
+                    f"⚠️  安全警告：正在加载无签名模型！\n"
+                    f"文件: {load_path}\n"
+                    f"⚠️  这可能存在代码执行（RCE）风险，强烈建议重新训练模型"
+                )
                 try:
                     buffer = io.BytesIO(content)
                     self.model = joblib.load(buffer)
                     self.is_trained = True
-                    logger.warning("已加载无签名模型，建议重新训练并保存")
+                    logger.warning("已加载无签名模型，强烈建议立即重新训练并保存")
                     return True
                 except Exception as e:
                     logger.error(f"加载旧格式模型失败: {e}")

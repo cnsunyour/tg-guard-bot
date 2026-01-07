@@ -52,6 +52,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 # 复制项目代码
 COPY src/ ./src/
 COPY scripts/ ./scripts/
+COPY migrations/ ./migrations/
 
 # 创建日志和数据目录
 RUN mkdir -p /app/logs /app/data/models

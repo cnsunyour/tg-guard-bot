@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数")
 
+    # 活跃度系统配置
+    activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
+    activity_max_confidence_reduction: float = Field(
+        default=0.15, description="活跃度最大置信度减少值（用于反垃圾检测）"
+    )
+
     # AI 模型路径
     ml_model_path: str = Field(default="data/models/spam_classifier.pkl", description="ML 模型路径")
     embedding_model_name: str = Field(
@@ -62,6 +68,11 @@ class Settings(BaseSettings):
         description="模型文件签名密钥（必填：防止模型文件被篡改，请使用随机生成的密钥）",
         min_length=32,  # 要求至少 32 个字符以确保安全性
     )
+    # 🔒 安全：是否允许加载未签名的旧模型（默认禁止，防止 RCE 攻击）
+    allow_unsigned_models: bool = Field(
+        default=False,
+        description="是否允许加载未签名的旧版模型（不安全，仅用于兼容旧模型，强烈建议重新训练）",
+    )
 
     @field_validator("admin_ids", mode="before")
     @classmethod
@@ -70,6 +81,28 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return v
+
+    def model_post_init(self, __context) -> None:
+        """模型初始化后验证生产环境安全配置
+
+        ✅ 安全修复：强制生产环境使用安全密码
+        """
+        if not self.debug:
+            # 检查数据库密码
+            if self.db_password == "postgres":
+                raise ValueError(
+                    "🔒 生产环境禁止使用默认数据库密码！\n"
+                    "请在 .env 文件中设置安全的 DB_PASSWORD\n"
+                    "建议：使用至少 16 位的随机密码"
+                )
+
+            # 检查 Redis 密码
+            if not self.redis_password:
+                raise ValueError(
+                    "🔒 生产环境必须设置 Redis 密码！\n"
+                    "请在 .env 文件中设置 REDIS_PASSWORD\n"
+                    "建议：使用至少 16 位的随机密码"
+                )
 
     @property
     def database_url(self) -> str:
