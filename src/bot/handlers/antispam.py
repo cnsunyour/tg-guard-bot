@@ -20,6 +20,7 @@ from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
 from src.core.utils import auto_delete_message, check_admin_permission, format_user_mention
 from src.repositories.group_repo import GroupRepository
+from src.services.activity import ActivityService  # 活跃度服务
 from src.services.moderation import ModerationService
 from src.services.spam_detector import get_detector
 
@@ -59,6 +60,134 @@ def is_anonymous_admin(message: Message) -> bool:
         是否是匿名管理员消息
     """
     return message.sender_chat is not None and message.sender_chat.id == message.chat.id
+
+
+def is_external_forward(message: Message) -> bool:
+    """检查消息是否是从外部群组/频道转发的
+
+    规则：
+    - 转发自其他群组/频道：算外部转发
+    - 转发自本群内用户：不算外部转发
+    - 转发自其他用户：不算外部转发
+
+    Args:
+        message: 消息对象
+
+    Returns:
+        是否是外部转发消息
+    """
+    # 没有转发信息，不是转发消息
+    if not message.forward_origin:
+        return False
+
+    from aiogram.types import MessageOriginChannel, MessageOriginChat
+
+    # 转发自频道：算外部转发
+    if isinstance(message.forward_origin, MessageOriginChannel):
+        return True
+
+    # 转发自群组
+    if isinstance(message.forward_origin, MessageOriginChat):
+        # 如果是转发自本群，不算外部转发
+        if message.forward_origin.sender_chat.id == message.chat.id:
+            return False
+        # 转发自其他群组，算外部转发
+        return True
+
+    # 其他情况（转发自用户、隐藏用户等）：不算外部转发
+    return False
+
+
+def has_url_entities(message: Message) -> bool:
+    """检查消息是否包含 URL 链接
+
+    Args:
+        message: 消息对象
+
+    Returns:
+        是否包含 URL 链接
+    """
+    if not message.entities:
+        return False
+
+    from aiogram.enums import MessageEntityType
+
+    # 检查是否有 URL 或文本链接实体
+    for entity in message.entities:
+        if entity.type in (MessageEntityType.URL, MessageEntityType.TEXT_LINK):
+            return True
+
+    return False
+
+
+async def check_non_text_message(message: Message, bot: Bot, message_type: str) -> bool:
+    """检查非文本消息是否允许发送（活跃度检查）
+
+    注意：调用此函数前应已过滤管理员
+
+    Args:
+        message: 消息对象
+        bot: Bot 实例
+        message_type: 消息类型（"photo", "sticker", "video" 等）
+
+    Returns:
+        True 表示消息已被阻止（调用者应直接 return），False 表示允许
+    """
+    # 检查活跃度系统是否启用
+    if not settings.activity_enabled:
+        return False
+
+    # 检查活跃度是否允许发送非文本消息
+    allowed, current_activity = await ActivityService.check_non_text_allowed(
+        message.chat.id, message.from_user.id
+    )
+
+    if not allowed:
+        # 删除消息
+        try:
+            await message.delete()
+            logger.info(
+                f"活跃度限制：阻止非文本消息 [群组:{message.chat.id}] "
+                f"[用户:{message.from_user.id}] [类型:{message_type}] [活跃度:{current_activity}]"
+            )
+
+            # 私聊通知用户
+            await notify_activity_restriction(bot, message.from_user.id, current_activity)
+
+        except Exception as e:
+            logger.error(f"删除非文本消息失败: {e}")
+
+        return True  # 消息已被阻止
+
+    # 允许发送，扣除活跃度
+    await ActivityService.record_non_text_message(message.chat.id, message.from_user.id)
+    return False  # 允许通过
+
+
+async def notify_activity_restriction(bot: Bot, user_id: int, current_activity: int) -> None:
+    """私聊通知用户活跃度限制
+
+    Args:
+        bot: Bot 实例
+        user_id: 用户 ID
+        current_activity: 当前活跃度
+    """
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=(
+                "⚠️ **消息被限制**\n\n"
+                f"您当前的活跃度为 **{current_activity}**，无法发送非文本消息。\n\n"
+                "📝 **如何恢复:**\n"
+                "发送文本消息可以增加活跃度，每条文本消息 +1 活跃度。\n\n"
+                "💡 当活跃度 > 0 时，即可发送图片、贴纸等非文本消息。"
+            ),
+            parse_mode="Markdown",
+        )
+        logger.debug(f"已私聊通知用户 {user_id} 活跃度限制")
+    except Exception as e:
+        # 用户可能未启动 Bot，这是正常情况
+        logger.debug(f"通知用户活跃度限制失败（用户可能未启动 Bot）: {e}")
 
 
 @contextmanager
@@ -295,14 +424,35 @@ async def on_message(message: Message, bot: Bot) -> None:
         # ✅ L6: 添加日志，不静默吞掉异常
         logger.debug(f"检查管理员权限失败（非关键）: {e}")
 
+    # 检查是否是外部转发或带链接的消息（需要活跃度支撑）
+    is_special_message = is_external_forward(message) or has_url_entities(message)
+
+    # 记录活跃度（管理员已在上面跳过，不会记录）
+    activity = None
+    if settings.activity_enabled:
+        if is_special_message:
+            # 外部转发/带链接消息：按非文本消息处理（-2 活跃度）
+            if await check_non_text_message(
+                message, bot, "forward" if is_external_forward(message) else "link"
+            ):
+                return  # 活跃度不足，消息已被删除
+            # 活跃度足够，已扣除，继续垃圾检测
+            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        else:
+            # 普通文本消息：增加活跃度（+1）
+            activity = await ActivityService.record_text_message(
+                message.chat.id, message.from_user.id
+            )
+
     # 获取检测器
     detector = get_detector()
 
-    # 检测垃圾
+    # 检测垃圾（传入活跃度）
     result = await detector.detect(
         text=message.text,
         user_id=message.from_user.id,
         chat_id=message.chat.id,
+        activity=activity,
     )
 
     # 如果检测到垃圾
@@ -420,6 +570,10 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
             f"跳过群组管理员图片消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
         )
         return
+
+    # ✅ 活跃度检查（管理员已在上面跳过）
+    if await check_non_text_message(message, bot, "photo"):
+        return  # 消息已被删除
 
     # 检查群组是否启用反垃圾
     try:
@@ -575,6 +729,10 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
             f"跳过群组管理员贴纸消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
         )
         return
+
+    # ✅ 活跃度检查（管理员已在上面跳过）
+    if await check_non_text_message(message, bot, "sticker"):
+        return  # 消息已被删除
 
     # 检查群组是否启用反垃圾
     try:
@@ -929,6 +1087,90 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"贴纸检测失败: {e}")
+
+
+@router.message(F.video)
+async def on_video_message(message: Message, bot: Bot) -> None:
+    """处理视频消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "video"):
+        return
+
+
+@router.message(F.animation)
+async def on_animation_message(message: Message, bot: Bot) -> None:
+    """处理 GIF 动画消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "animation"):
+        return
+
+
+@router.message(F.voice)
+async def on_voice_message(message: Message, bot: Bot) -> None:
+    """处理语音消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "voice"):
+        return
+
+
+@router.message(F.video_note)
+async def on_video_note_message(message: Message, bot: Bot) -> None:
+    """处理视频笔记消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "video_note"):
+        return
+
+
+@router.message(F.document)
+async def on_document_message(message: Message, bot: Bot) -> None:
+    """处理文件消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "document"):
+        return
+
+
+@router.message(F.audio)
+async def on_audio_message(message: Message, bot: Bot) -> None:
+    """处理音频消息（活跃度检查）"""
+    if message.chat.type == "private":
+        return
+
+    if is_anonymous_admin(message):
+        return
+
+    # 活跃度检查
+    if await check_non_text_message(message, bot, "audio"):
+        return
 
 
 @router.callback_query(F.data.startswith("spam_feedback:"))

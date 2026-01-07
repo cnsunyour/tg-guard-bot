@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数")
 
+    # 活跃度系统配置
+    activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
+    activity_max_confidence_reduction: float = Field(
+        default=0.15, description="活跃度最大置信度减少值（用于反垃圾检测）"
+    )
+
     # AI 模型路径
     ml_model_path: str = Field(default="data/models/spam_classifier.pkl", description="ML 模型路径")
     embedding_model_name: str = Field(

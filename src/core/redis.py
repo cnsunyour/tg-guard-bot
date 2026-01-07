@@ -104,3 +104,19 @@ class RedisKeys:
         用于标记用户正在等待输入验证码，存储验证消息 ID
         """
         return f"captcha_waiting:{chat_id}:{user_id}"
+
+    @staticmethod
+    def user_activity(chat_id: int, user_id: int) -> str:
+        """用户活跃度键名
+
+        存储用户的活跃度分数（整数），用于限制非文本消息发送
+        """
+        return f"activity:{chat_id}:{user_id}"
+
+    @staticmethod
+    def activity_last_date(chat_id: int, user_id: int) -> str:
+        """用户最后消息日期键名
+
+        存储最后发送消息的日期（YYYY-MM-DD），用于每日衰减计算
+        """
+        return f"activity_date:{chat_id}:{user_id}"
