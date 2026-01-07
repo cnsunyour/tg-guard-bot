@@ -67,8 +67,10 @@ data/models/*.onnx
 *-report.json
 *.sarif
 security-reports/
+reports/
 bandit-report.json
 safety-report.json
+pip-audit-report.json
 trivy-results.sarif
 
 # 测试

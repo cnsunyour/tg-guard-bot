@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs clean backup restore migrate test lint format check security install
+.PHONY: help build up down restart logs clean backup restore migrate test lint format check security security-strict security-report install
 
 # 默认目标
 help:
@@ -20,7 +20,11 @@ help:
 	@echo "  make format          - 格式化代码（black + isort）"
 	@echo "  make format-check    - 检查代码格式"
 	@echo "  make check           - 运行所有检查（格式化 + lint + 测试）"
-	@echo "  make security        - 运行安全扫描（bandit + safety）"
+	@echo ""
+	@echo "🔒 安全扫描:"
+	@echo "  make security        - 运行安全扫描（bandit + safety + pip-audit）"
+	@echo "  make security-strict - 严格安全扫描（失败则退出）"
+	@echo "  make security-report - 生成安全扫描报告到 reports/"
 	@echo ""
 	@echo "🐳 开发环境（支持热更新）:"
 	@echo "  make dev-up          - 启动开发环境（自动监控文件变化）"
@@ -115,8 +119,33 @@ check: format-check lint test
 security:
 	@echo "🔒 运行 Bandit 安全扫描..."
 	-bandit -c pyproject.toml -r src || echo "⚠️  Bandit found security issues (non-blocking)"
-	@echo "🔒 检查依赖漏洞..."
+	@echo ""
+	@echo "🔒 运行 Safety 依赖检查..."
 	-safety check || echo "⚠️  Safety found dependency issues (non-blocking)"
+	@echo ""
+	@echo "🔒 运行 pip-audit 依赖扫描..."
+	-pip-audit --desc || echo "⚠️  pip-audit found dependency issues (non-blocking)"
+
+security-strict:
+	@echo "🔒 运行严格安全扫描（失败则退出）..."
+	@echo "🔍 Bandit..."
+	bandit -c pyproject.toml -r src
+	@echo "🔍 Safety..."
+	safety check
+	@echo "🔍 pip-audit..."
+	pip-audit
+	@echo "✅ 所有安全扫描通过"
+
+security-report:
+	@echo "📊 生成安全扫描报告..."
+	@mkdir -p reports
+	@echo "🔍 Bandit..."
+	-bandit -c pyproject.toml -r src -f json -o reports/bandit-report.json
+	@echo "🔍 Safety..."
+	-safety check --json --output reports/safety-report.json
+	@echo "🔍 pip-audit..."
+	-pip-audit --format json --output reports/pip-audit-report.json
+	@echo "✅ 报告已生成到 reports/ 目录"
 
 # ============================================================================
 # CI/CD
