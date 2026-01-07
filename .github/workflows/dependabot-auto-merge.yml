@@ -16,7 +16,7 @@ jobs:
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: 获取 Dependabot 元数据
       id: metadata
@@ -25,7 +25,7 @@ jobs:
         github-token: "${{ secrets.GITHUB_TOKEN }}"
 
     - name: 设置 Python 3.12
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.12'
         cache: 'pip'
@@ -107,10 +107,10 @@ jobs:
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: 设置 Python 3.12
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.12'
         cache: 'pip'
