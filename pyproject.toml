@@ -93,6 +93,7 @@ dev = [
     # 安全扫描
     "bandit[toml]>=1.7.0",
     "safety>=3.0.0",
+    "pip-audit>=2.7.0",  # Python 官方依赖漏洞扫描
 
     # 开发工具
     "watchfiles>=0.21.0",  # 文件监控和热重载

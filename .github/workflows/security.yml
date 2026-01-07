@@ -43,6 +43,13 @@ jobs:
         safety scan || true
       continue-on-error: true
 
+    # pip-audit - Python 官方依赖漏洞扫描
+    - name: 运行 pip-audit 依赖扫描
+      run: |
+        pip-audit --format json --output pip-audit-report.json || true
+        pip-audit --desc || true
+      continue-on-error: true
+
     # Semgrep - 静态代码分析
     - name: 运行 Semgrep 扫描
       uses: semgrep/semgrep-action@v1
@@ -82,6 +89,7 @@ jobs:
         path: |
           bandit-report.json
           safety-report.json
+          pip-audit-report.json
           trivy-results.sarif
         retention-days: 30
 
