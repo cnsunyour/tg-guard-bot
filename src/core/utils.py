@@ -72,6 +72,40 @@ async def check_admin_permission(message, bot) -> bool:
     return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
 
 
+async def check_admin_permission_strict(bot, chat_id: int, user_id: int) -> bool:
+    """严格的管理员权限检查（不信任缓存，直接查询 API）
+
+    用于关键操作（踢人、封禁、白名单等），防止 Redis 妥协导致的权限提升攻击
+
+    Args:
+        bot: aiogram Bot 对象
+        chat_id: 群组 ID
+        user_id: 用户 ID
+
+    Returns:
+        是否是管理员
+
+    ✅ 安全加固：关键操作不信任 Redis 缓存
+    """
+    from src.core.config import settings
+
+    # 1. 检查是否在配置的超级管理员列表中
+    if user_id in settings.admin_ids:
+        return True
+
+    # 2. 直接查询 Telegram API（不使用缓存）
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        is_admin = member.status in ["creator", "administrator"]
+        logger.debug(
+            f"严格权限检查 [群组:{chat_id}] [用户:{user_id}] [结果:{is_admin}] [状态:{member.status}]"
+        )
+        return is_admin
+    except Exception as e:
+        logger.error(f"严格权限检查失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+        return False
+
+
 def escape_html(text: str | None) -> str:
     """转义 HTML 特殊字符，防止 HTML 注入
 
