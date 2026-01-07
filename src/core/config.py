@@ -45,8 +45,11 @@ class Settings(BaseSettings):
 
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
-    max_warnings: int = Field(default=3, description="最大警告次数")
+    max_warnings: int = Field(default=3, description="最大警告次数（触发禁言）")
     warning_expiration_days: int = Field(default=7, description="警告有效期（天）")
+    warning_mute_duration_hours: int = Field(default=24, description="警告达到阈值后的禁言时长（小时）")
+    warning_kick_threshold: int = Field(default=5, description="踢出群组阈值（次）")
+    warning_ban_threshold: int = Field(default=7, description="封禁阈值（次，踢出+拉黑）")
 
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
