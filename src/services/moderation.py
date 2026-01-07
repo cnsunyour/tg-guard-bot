@@ -299,8 +299,10 @@ class ModerationService:
                 group_id=chat_id, user_id=user_id, reason=reason, issued_by=operator_id
             )
 
-            # 统计警告次数
-            warning_count = await UserRepository.count_warnings(chat_id, user_id)
+            # 统计最近N天内的警告次数（使用配置的有效期）
+            warning_count = await UserRepository.count_recent_warnings(
+                chat_id, user_id, days=settings.warning_expiration_days
+            )
 
             # 记录日志
             await AuditRepository.log_action(

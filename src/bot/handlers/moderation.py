@@ -1,6 +1,7 @@
 """群管理命令处理器"""
 
 import re
+from datetime import datetime, timedelta
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -474,7 +475,9 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
 
     if success:
         response = (
-            f"⚠️ 已警告用户 {target_user_id}\n" f"累计警告: {warning_count}/{settings.max_warnings}"
+            f"⚠️ 已警告用户 {target_user_id}\n"
+            f"有效警告: {warning_count}/{settings.max_warnings} "
+            f"({settings.warning_expiration_days}天内)"
         )
         if reason:
             # ✅ P1-8: 转义用户输入的原因，防止 HTML 注入
@@ -520,13 +523,31 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
         return
 
+    # 统计有效期内的警告次数
+    recent_count = await UserRepository.count_recent_warnings(
+        message.chat.id, target_user_id, days=settings.warning_expiration_days
+    )
+
     # 格式化警告列表
-    response = f"⚠️ 用户 {target_user_id} 的警告记录（共 {len(warnings)} 次）:\n\n"
+    response = (
+        f"⚠️ 用户 {target_user_id} 的警告记录:\n"
+        f"有效警告: {recent_count}/{settings.max_warnings} "
+        f"({settings.warning_expiration_days}天内)\n"
+        f"历史记录: {len(warnings)} 次\n\n"
+    )
 
     for idx, warning in enumerate(warnings[:10], 1):  # 只显示最近10条
         date = warning.created_at.strftime("%Y-%m-%d %H:%M")
         reason = escape_html(warning.reason) if warning.reason else "无原因"
-        response += f"{idx}. [{date}] {reason}\n"
+
+        # 判断警告是否在有效期内
+        days_ago = (datetime.utcnow() - warning.created_at).days
+        if days_ago < settings.warning_expiration_days:
+            # 有效警告标记为 ✅
+            response += f"{idx}. ✅ [{date}] {reason}\n"
+        else:
+            # 过期警告标记为 ⏱️
+            response += f"{idx}. ⏱️ [{date}] {reason} (已过期)\n"
 
     if len(warnings) > 10:
         response += f"\n... 还有 {len(warnings) - 10} 条历史记录"
