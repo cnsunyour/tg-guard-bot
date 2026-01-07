@@ -44,7 +44,7 @@ dependencies = [
 
     # AI/ML
     "scikit-learn>=1.4.0",
-    "joblib>=1.3.0",                    # ML 模型序列化（安全替代 pickle）
+    "joblib>=1.3.0",                    # ML 模型序列化（基于 pickle；仅加载可信模型/启用签名校验）
     "jieba>=0.42.1",                    # 中文分词
     "onnxruntime>=1.17.0",
     "fastembed>=0.3.0",

@@ -239,7 +239,19 @@ class SpamClassifier:
         try:
             # 1. 检查文件大小（防止加载过大文件）
             MAX_MODEL_SIZE = 100 * 1024 * 1024  # 100MB 上限
-            file_size = os.path.getsize(load_path)
+            # 拒绝符号链接，避免路径劫持/TOCTOU
+            if os.path.islink(load_path):
+                logger.error(f"模型文件是符号链接，拒绝加载: {load_path}")
+                return False
+
+            file_stat = os.stat(load_path)
+            file_mode = file_stat.st_mode
+
+            if not stat.S_ISREG(file_mode):
+                logger.error(f"模型路径不是普通文件，拒绝加载: {load_path}")
+                return False
+
+            file_size = file_stat.st_size
             if file_size > MAX_MODEL_SIZE:
                 logger.error(
                     f"🔒 模型文件过大: {file_size} bytes (限制: {MAX_MODEL_SIZE} bytes)\n"
@@ -249,9 +261,6 @@ class SpamClassifier:
                 return False
 
             # 2. 检查文件权限（只有 owner 应该能写）
-            file_stat = os.stat(load_path)
-            file_mode = file_stat.st_mode
-
             # 检查是否 group 或 others 可写
             if file_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 logger.warning(
@@ -275,7 +284,15 @@ class SpamClassifier:
 
         try:
             with open(load_path, "rb") as f:
-                content = f.read()
+                # 兜底：即使存在 TOCTOU，也避免读取超大文件导致内存 DoS
+                content = f.read(MAX_MODEL_SIZE + 1)
+
+            if len(content) > MAX_MODEL_SIZE:
+                logger.error(
+                    f"模型文件读取超出限制: {len(content)} bytes (限制: {MAX_MODEL_SIZE} bytes)\n"
+                    f"文件: {load_path}"
+                )
+                return False
 
             # 分离签名和数据
             parts = content.split(b"\n", 1)
