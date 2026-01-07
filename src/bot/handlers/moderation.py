@@ -1,6 +1,7 @@
 """群管理命令处理器"""
 
 import re
+from datetime import datetime, timedelta
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -289,7 +290,10 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
 
 @router.message(Command("unmute"))
 async def cmd_unmute(message: Message, bot: Bot) -> None:
-    """解除禁言"""
+    """解除禁言/封禁（与 /unban 等价）
+
+    统一解除用户的所有限制，无论是禁言还是封禁
+    """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -304,14 +308,15 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请指定要解除禁言的用户：\n\n"
+            "❌ 请指定要解除限制的用户：\n\n"
             "方式1: 回复用户的消息\n"
             "方式2: /unmute <用户ID>\n"
-            "方式3: /unmute @用户"
+            "方式3: /unmute @用户\n\n"
+            "💡 提示：/unmute 和 /unban 功能完全相同"
         )
         return
 
-    # 执行解除禁言
+    # 执行解除禁言/封禁
     success = await ModerationService.unmute_user(
         bot=bot,
         chat_id=message.chat.id,
@@ -320,7 +325,7 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的禁言")
+        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的所有限制（禁言/封禁）")
         await auto_delete_message(reply)
     else:
         reply = await message.answer("❌ 操作失败，请检查Bot权限")
@@ -391,7 +396,10 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
 
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, bot: Bot) -> None:
-    """解除封禁"""
+    """解除封禁/禁言（与 /unmute 等价）
+
+    统一解除用户的所有限制，无论是禁言还是封禁
+    """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -406,14 +414,15 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请指定要解除封禁的用户：\n\n"
+            "❌ 请指定要解除限制的用户：\n\n"
             "方式1: 回复用户的消息\n"
             "方式2: /unban <用户ID>\n"
-            "方式3: /unban @用户"
+            "方式3: /unban @用户\n\n"
+            "💡 提示：/unban 和 /unmute 功能完全相同"
         )
         return
 
-    # 执行解除封禁
+    # 执行解除封禁/禁言
     success = await ModerationService.unban_user(
         bot=bot,
         chat_id=message.chat.id,
@@ -422,7 +431,7 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的封禁")
+        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的所有限制（禁言/封禁）")
         await auto_delete_message(reply)
     else:
         reply = await message.answer("❌ 操作失败，请检查Bot权限或用户未被封禁")
@@ -464,7 +473,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         reason = parts[2] if len(parts) > 2 else None
 
     # 执行警告
-    success, warning_count, auto_muted = await ModerationService.warn_user(
+    success, warning_count, auto_punished = await ModerationService.warn_user(
         bot=bot,
         chat_id=message.chat.id,
         user_id=target_user_id,
@@ -474,14 +483,41 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
 
     if success:
         response = (
-            f"⚠️ 已警告用户 {target_user_id}\n" f"累计警告: {warning_count}/{settings.max_warnings}"
+            f"⚠️ 已警告用户 {target_user_id}\n"
+            f"有效警告: {warning_count} "
+            f"({settings.warning_expiration_days}天内)"
         )
         if reason:
             # ✅ P1-8: 转义用户输入的原因，防止 HTML 注入
             response += f"\n原因: {escape_html(reason)}"
 
-        if auto_muted:
-            response += f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，自动禁言 24 小时"
+        # 根据警告次数显示处罚提示
+        if auto_punished:
+            if warning_count >= settings.warning_ban_threshold:
+                response += (
+                    f"\n\n🚫 用户已达到 {settings.warning_ban_threshold} 次警告，已被封禁"
+                )
+            elif warning_count >= settings.warning_kick_threshold:
+                response += (
+                    f"\n\n👢 用户已达到 {settings.warning_kick_threshold} 次警告，已被踢出"
+                )
+            elif warning_count >= settings.max_warnings:
+                response += (
+                    f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，"
+                    f"自动禁言 {settings.warning_mute_duration_hours} 小时"
+                )
+
+        # 显示下一阶段处罚提示
+        else:
+            if warning_count == settings.max_warnings - 1:
+                response += (
+                    f"\n\n💡 提示：再 1 次警告将自动禁言 "
+                    f"{settings.warning_mute_duration_hours} 小时"
+                )
+            elif warning_count == settings.warning_kick_threshold - 1:
+                response += f"\n\n💡 提示：再 1 次警告将被踢出群组"
+            elif warning_count == settings.warning_ban_threshold - 1:
+                response += f"\n\n💡 提示：再 1 次警告将被封禁"
 
         reply = await message.answer(response)
         await auto_delete_message(reply)
@@ -520,13 +556,34 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
         return
 
+    # 统计有效期内的警告次数
+    recent_count = await UserRepository.count_recent_warnings(
+        message.chat.id, target_user_id, days=settings.warning_expiration_days
+    )
+
     # 格式化警告列表
-    response = f"⚠️ 用户 {target_user_id} 的警告记录（共 {len(warnings)} 次）:\n\n"
+    response = (
+        f"⚠️ 用户 {target_user_id} 的警告记录:\n"
+        f"有效警告: {recent_count} ({settings.warning_expiration_days}天内)\n"
+        f"历史记录: {len(warnings)} 次\n\n"
+        f"📋 处罚阶梯:\n"
+        f"• {settings.max_warnings} 次 → 禁言 {settings.warning_mute_duration_hours} 小时\n"
+        f"• {settings.warning_kick_threshold} 次 → 踢出群组\n"
+        f"• {settings.warning_ban_threshold} 次 → 封禁（拉黑）\n\n"
+    )
 
     for idx, warning in enumerate(warnings[:10], 1):  # 只显示最近10条
         date = warning.created_at.strftime("%Y-%m-%d %H:%M")
         reason = escape_html(warning.reason) if warning.reason else "无原因"
-        response += f"{idx}. [{date}] {reason}\n"
+
+        # 判断警告是否在有效期内
+        days_ago = (datetime.utcnow() - warning.created_at).days
+        if days_ago < settings.warning_expiration_days:
+            # 有效警告标记为 ✅
+            response += f"{idx}. ✅ [{date}] {reason}\n"
+        else:
+            # 过期警告标记为 ⏱️
+            response += f"{idx}. ⏱️ [{date}] {reason} (已过期)\n"
 
     if len(warnings) > 10:
         response += f"\n... 还有 {len(warnings) - 10} 条历史记录"

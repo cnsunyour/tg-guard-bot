@@ -303,20 +303,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             # 用户已通过验证，恢复权限
             logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
 
-            # ✅ 恢复用户权限（解决权限未恢复问题）
+            # ✅ 恢复用户权限（从限制列表中完全移除）
             try:
-                await bot.restrict_chat_member(
+                await bot.unban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    permissions=ChatPermissions(
-                        can_send_messages=True,
-                        can_send_media_messages=True,
-                        can_send_polls=True,
-                        can_send_other_messages=True,
-                        can_add_web_page_previews=True,
-                    ),
+                    only_if_banned=False,  # 即使只是 restrict 也解除
                 )
-                logger.info(f"已恢复用户 {user_id} 的发言权限")
+                logger.info(f"已将用户 {user_id} 从限制列表中移除并恢复权限")
             except Exception as e:
                 logger.error(f"恢复用户权限失败: {e}")
 
@@ -838,20 +832,11 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
                 logger.info(f"用户 {user_id} 验证成功，已批准加入请求")
             else:
-                # 解除限制
-                await bot.restrict_chat_member(
+                # 解除限制（从限制列表中完全移除）
+                await bot.unban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    permissions=ChatPermissions(
-                        can_send_messages=True,
-                        can_send_media_messages=True,
-                        can_send_polls=True,
-                        can_send_other_messages=True,
-                        can_add_web_page_previews=True,
-                        can_change_info=False,
-                        can_invite_users=True,
-                        can_pin_messages=False,
-                    ),
+                    only_if_banned=False,  # 即使只是 restrict 也解除
                 )
 
                 # 发送欢迎消息到群组
@@ -987,17 +972,11 @@ async def handle_verification_success(
             logger.info(f"用户 {user_id} 加入请求验证成功，已批准加入群组 {chat_id}")
 
         else:
-            # 正常入群模式：恢复群组权限
-            await bot.restrict_chat_member(
+            # 正常入群模式：恢复群组权限（从限制列表中完全移除）
+            await bot.unban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                permissions=ChatPermissions(
-                    can_send_messages=True,
-                    can_send_photos=True,
-                    can_send_videos=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                ),
+                only_if_banned=False,  # 即使只是 restrict 也解除
             )
 
             # 在私聊中通知用户

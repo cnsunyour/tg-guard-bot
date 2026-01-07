@@ -99,11 +99,26 @@ class ModerationService:
             if duration is not None:
                 until_date = datetime.utcnow() + timedelta(minutes=duration)
 
-            # 限制用户权限
+            # 限制用户权限（禁用所有权限）
             await bot.restrict_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                permissions=ChatPermissions(can_send_messages=False),
+                permissions=ChatPermissions(
+                    can_send_messages=False,
+                    can_send_audios=False,
+                    can_send_documents=False,
+                    can_send_photos=False,
+                    can_send_videos=False,
+                    can_send_video_notes=False,
+                    can_send_voice_notes=False,
+                    can_send_polls=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False,
+                    can_change_info=False,
+                    can_invite_users=False,
+                    can_pin_messages=False,
+                    can_manage_topics=False,
+                ),
                 until_date=until_date,
             )
 
@@ -131,36 +146,61 @@ class ModerationService:
             return False, "操作失败，请检查 Bot 权限"
 
     @staticmethod
-    async def unmute_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
-        """解除禁言"""
+    async def _unban_or_unmute_user(
+        bot: Bot, chat_id: int, user_id: int, operator_id: int, action: str
+    ) -> bool:
+        """解除封禁或禁言（统一实现）
+
+        Args:
+            action: 'unmute' 或 'unban'，仅用于日志记录
+
+        无论用户是被封禁(ban)还是被限制(restrict)，统一解除所有限制
+        """
         try:
-            # 恢复用户权限
-            await bot.restrict_chat_member(
+            # 使用 unban_chat_member 将用户从任何限制状态中移除
+            # only_if_banned=False 表示无论是 ban 还是 restrict 都解除
+            await bot.unban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                permissions=ChatPermissions(
-                    can_send_messages=True,
-                    can_send_photos=True,
-                    can_send_videos=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                ),
+                only_if_banned=False,  # 关键：解除所有限制
             )
 
             # 记录日志
             await AuditRepository.log_action(
                 group_id=chat_id,
                 operator_id=operator_id,
-                action="unmute",
+                action=action,
                 target_user_id=user_id,
             )
 
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} 解除禁言")
+            action_text = "解除禁言" if action == "unmute" else "解除封禁"
+            logger.info(f"用户 {user_id} 被管理员 {operator_id} {action_text}并从限制列表中移除")
             return True
 
         except Exception as e:
-            logger.error(f"解除禁言失败: {e}")
+            action_text = "解除禁言" if action == "unmute" else "解除封禁"
+            logger.error(f"{action_text}失败: {e}")
             return False
+
+    @staticmethod
+    async def unmute_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
+        """解除禁言
+
+        注：实际上会解除用户的所有限制（包括封禁和禁言），与 unban_user 完全相同
+        """
+        return await ModerationService._unban_or_unmute_user(
+            bot, chat_id, user_id, operator_id, "unmute"
+        )
+
+    @staticmethod
+    async def unban_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
+        """解除封禁
+
+        注：实际上会解除用户的所有限制（包括封禁和禁言），与 unmute_user 完全相同
+        """
+        return await ModerationService._unban_or_unmute_user(
+            bot, chat_id, user_id, operator_id, "unban"
+        )
 
     @staticmethod
     async def ban_user(
@@ -259,28 +299,6 @@ class ModerationService:
             return False, "操作失败，请检查 Bot 权限"
 
     @staticmethod
-    async def unban_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
-        """解除封禁"""
-        try:
-            # 解除封禁
-            await bot.unban_chat_member(chat_id=chat_id, user_id=user_id, only_if_banned=True)
-
-            # 记录日志
-            await AuditRepository.log_action(
-                group_id=chat_id,
-                operator_id=operator_id,
-                action="unban",
-                target_user_id=user_id,
-            )
-
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} 解除封禁")
-            return True
-
-        except Exception as e:
-            logger.error(f"解除封禁失败: {e}")
-            return False
-
-    @staticmethod
     async def warn_user(
         bot: Bot,
         chat_id: int,
@@ -291,7 +309,7 @@ class ModerationService:
         """警告用户
 
         Returns:
-            (是否成功, 累计警告次数, 是否自动禁言)
+            (是否成功, 累计警告次数, 是否触发自动处罚)
         """
         try:
             # 添加警告
@@ -299,8 +317,10 @@ class ModerationService:
                 group_id=chat_id, user_id=user_id, reason=reason, issued_by=operator_id
             )
 
-            # 统计警告次数
-            warning_count = await UserRepository.count_warnings(chat_id, user_id)
+            # 统计最近N天内的警告次数（使用配置的有效期）
+            warning_count = await UserRepository.count_recent_warnings(
+                chat_id, user_id, days=settings.warning_expiration_days
+            )
 
             # 记录日志
             await AuditRepository.log_action(
@@ -315,27 +335,62 @@ class ModerationService:
                 f"用户 {user_id} 被管理员 {operator_id} 警告，" f"累计警告次数: {warning_count}"
             )
 
-            # 检查是否达到自动禁言阈值
-            auto_muted = False
-            if warning_count >= settings.max_warnings:
-                # 自动禁言 24 小时
-                # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
+            # 检查是否触发自动处罚（处罚升级机制）
+            auto_punished = False
+
+            # 阶段3: 封禁（踢出+拉黑）
+            if warning_count >= settings.warning_ban_threshold:
+                success, error_msg = await ModerationService.ban_user(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    operator_id=operator_id,
+                    reason=f"累计警告达到 {warning_count} 次",
+                )
+                auto_punished = success
+
+                if success:
+                    logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动封禁")
+                else:
+                    logger.error(f"自动封禁失败: {error_msg}")
+
+            # 阶段2: 踢出群组
+            elif warning_count >= settings.warning_kick_threshold:
+                success, error_msg = await ModerationService.kick_user(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    operator_id=operator_id,
+                    reason=f"累计警告达到 {warning_count} 次",
+                )
+                auto_punished = success
+
+                if success:
+                    logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动踢出")
+                else:
+                    logger.error(f"自动踢出失败: {error_msg}")
+
+            # 阶段1: 禁言
+            elif warning_count >= settings.max_warnings:
                 success, error_msg = await ModerationService.mute_user(
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
                     operator_id=operator_id,
-                    duration=24 * 60,  # 24小时
+                    duration=settings.warning_mute_duration_hours * 60,  # 转换为分钟
                     reason=f"累计警告达到 {warning_count} 次",
                 )
-                auto_muted = success
+                auto_punished = success
 
                 if success:
-                    logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动禁言")
+                    logger.info(
+                        f"用户 {user_id} 因累计 {warning_count} 次警告被自动禁言 "
+                        f"{settings.warning_mute_duration_hours} 小时"
+                    )
                 else:
                     logger.error(f"自动禁言失败: {error_msg}")
 
-            return True, warning_count, auto_muted
+            return True, warning_count, auto_punished
 
         except Exception as e:
             logger.error(f"警告用户失败: {e}")
