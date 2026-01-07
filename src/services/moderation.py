@@ -132,19 +132,18 @@ class ModerationService:
 
     @staticmethod
     async def unmute_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
-        """解除禁言"""
+        """解除禁言
+
+        使用 unban_chat_member 将用户从限制列表中完全移除，
+        而不是仅仅恢复权限（后者用户仍在受限列表中）
+        """
         try:
-            # 恢复用户权限
-            await bot.restrict_chat_member(
+            # 使用 unban_chat_member 将用户从限制列表中移除
+            # only_if_banned=False 表示即使用户只是被 restrict 也可以解除
+            await bot.unban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                permissions=ChatPermissions(
-                    can_send_messages=True,
-                    can_send_photos=True,
-                    can_send_videos=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                ),
+                only_if_banned=False,  # 关键：即使只是 restrict 也解除
             )
 
             # 记录日志
@@ -155,7 +154,7 @@ class ModerationService:
                 target_user_id=user_id,
             )
 
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} 解除禁言")
+            logger.info(f"用户 {user_id} 被管理员 {operator_id} 解除禁言并从限制列表中移除")
             return True
 
         except Exception as e:
