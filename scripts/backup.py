@@ -1,6 +1,7 @@
 """数据库备份脚本 - 自动备份和清理"""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -48,8 +49,9 @@ class DatabaseBackup:
                 "-f", str(backup_file),
             ]
 
-            # 设置密码环境变量
-            env = {"PGPASSWORD": settings.db_password}
+            # ✅ 修复：复制当前环境变量，避免丢失 PATH 等
+            env = os.environ.copy()
+            env["PGPASSWORD"] = settings.db_password
 
             result = subprocess.run(
                 cmd,
@@ -102,7 +104,9 @@ class DatabaseBackup:
                 "-f", str(backup_file),
             ]
 
-            env = {"PGPASSWORD": settings.db_password}
+            # ✅ 修复：复制当前环境变量，避免丢失 PATH 等
+            env = os.environ.copy()
+            env["PGPASSWORD"] = settings.db_password
 
             result = subprocess.run(
                 cmd,
