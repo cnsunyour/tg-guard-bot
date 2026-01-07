@@ -23,6 +23,7 @@ from src.core.database import get_db_session
 from src.core.redis import RedisKeys, get_redis
 from src.core.utils import format_user_mention
 from src.repositories.group_repo import GroupRepository
+from src.services.spam_detector import SpamDetector
 from src.services.verification import VerificationService
 
 router = Router(name="verification")
@@ -40,6 +41,64 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
     username = user.username or user.full_name
 
     logger.info(f"收到加入请求: 用户 {username} ({user_id}) 请求加入群组 {chat_id}")
+
+    # ==================== 用户信息反垃圾检测 ====================
+    # 在验证前先检测用户名字和 bio 是否为垃圾信息
+    try:
+        user_info = await bot.get_chat(user_id)
+
+        # 构建检测文本：名字 + bio
+        check_texts = []
+        if user_info.first_name:
+            check_texts.append(user_info.first_name)
+        if user_info.last_name:
+            check_texts.append(user_info.last_name)
+        if hasattr(user_info, "bio") and user_info.bio:
+            check_texts.append(user_info.bio)
+
+        if check_texts:
+            check_text = " ".join(check_texts)
+
+            # 使用反垃圾检测器检测
+            detector = SpamDetector()
+            result = await detector.detect(
+                text=check_text,
+                user_id=user_id,
+                chat_id=chat_id,
+            )
+
+            if result["is_spam"]:
+                logger.warning(
+                    f"加入请求用户 {username} ({user_id}) 信息疑似垃圾，拒绝请求并封禁 1 小时\n"
+                    f"检测内容: {check_text[:100]}...\n"  # 只记录前 100 字符，保护隐私
+                    f"置信度: {result['confidence']:.2f}\n"
+                    f"原因: {', '.join(result.get('reasons', ['未知']))}"
+                )
+
+                # 拒绝加入请求
+                try:
+                    await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                    logger.info(f"已拒绝垃圾用户 {user_id} 的加入请求")
+                except Exception as decline_error:
+                    logger.error(f"拒绝加入请求失败: {decline_error}")
+
+                # 封禁 1 小时（防止重复请求）
+                try:
+                    await bot.ban_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        until_date=datetime.now() + timedelta(hours=1),
+                    )
+                    logger.info(f"已封禁垃圾用户 {user_id} 1 小时")
+                except Exception as ban_error:
+                    logger.error(f"封禁用户失败: {ban_error}")
+
+                return  # 直接返回，不继续验证流程
+
+    except Exception as e:
+        logger.error(f"检测用户信息失败: {e}")
+        # 检测失败不影响正常流程，继续验证
+    # ==================== 用户信息反垃圾检测结束 ====================
 
     try:
         # 获取群组配置
@@ -148,6 +207,70 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     logger.info(f"用户 {username} ({user_id}) 加入群组 {chat_id}")
 
     try:
+        # ⚠️ 立即限制新用户权限（防止在检测/验证期间发送垃圾消息）
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=ChatPermissions(can_send_messages=False),
+        )
+        logger.info(f"已限制用户 {user_id} 的发言权限")
+
+    except Exception as e:
+        logger.error(f"限制用户权限失败: {e}")
+        # 权限限制失败，可能是 Bot 没有管理权限，记录日志但继续流程
+
+    # ==================== 用户信息反垃圾检测 ====================
+    # 在验证前先检测用户名字和 bio 是否为垃圾信息
+    try:
+        user_info = await bot.get_chat(user_id)
+
+        # 构建检测文本：名字 + bio
+        check_texts = []
+        if user_info.first_name:
+            check_texts.append(user_info.first_name)
+        if user_info.last_name:
+            check_texts.append(user_info.last_name)
+        if hasattr(user_info, "bio") and user_info.bio:
+            check_texts.append(user_info.bio)
+
+        if check_texts:
+            check_text = " ".join(check_texts)
+
+            # 使用反垃圾检测器检测
+            detector = SpamDetector()
+            result = await detector.detect(
+                text=check_text,
+                user_id=user_id,
+                chat_id=chat_id,
+            )
+
+            if result["is_spam"]:
+                logger.warning(
+                    f"用户 {username} ({user_id}) 信息疑似垃圾，拒绝入群并封禁 1 小时\n"
+                    f"检测内容: {check_text[:100]}...\n"  # 只记录前 100 字符，保护隐私
+                    f"置信度: {result['confidence']:.2f}\n"
+                    f"原因: {', '.join(result.get('reasons', ['未知']))}"
+                )
+
+                # 封禁 1 小时
+                try:
+                    await bot.ban_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        until_date=datetime.now() + timedelta(hours=1),
+                    )
+                    logger.info(f"已封禁垃圾用户 {user_id} 1 小时")
+                except Exception as ban_error:
+                    logger.error(f"封禁用户失败: {ban_error}")
+
+                return  # 直接返回，不继续验证流程
+
+    except Exception as e:
+        logger.error(f"检测用户信息失败: {e}")
+        # 检测失败不影响正常流程，继续验证
+    # ==================== 用户信息反垃圾检测结束 ====================
+
+    try:
         # 检查用户是否已通过加入请求验证
         redis = get_redis()
         approved_key = RedisKeys.verification_approved(chat_id, user_id)
@@ -188,14 +311,6 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
         # 用户未通过加入请求验证（未启用 Approve New Members），执行正常验证流程
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
-
-        # 限制新用户权限
-        await bot.restrict_chat_member(
-            chat_id=chat_id,
-            user_id=user_id,
-            permissions=ChatPermissions(can_send_messages=False),
-        )
-        logger.info(f"已限制用户 {user_id} 的发言权限")
 
         # 根据验证类型生成挑战
         verification_service = VerificationService()
