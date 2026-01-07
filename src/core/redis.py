@@ -106,6 +106,15 @@ class RedisKeys:
         return f"captcha_waiting:{chat_id}:{user_id}"
 
     @staticmethod
+    def captcha_waiting_user(user_id: int) -> str:
+        """验证码等待反向索引键名
+
+        用于从用户 ID 快速查找等待的验证码所属群组，避免 Redis SCAN 操作
+        存储格式: "{chat_id}"
+        """
+        return f"captcha_waiting_user:{user_id}"
+
+    @staticmethod
     def user_activity(chat_id: int, user_id: int) -> str:
         """用户活跃度键名
 

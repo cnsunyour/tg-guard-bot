@@ -7,6 +7,35 @@ import re
 from loguru import logger
 
 
+def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
+    """脱敏处理敏感文本，用于日志记录
+
+    Args:
+        text: 待脱敏的文本
+        keep_chars: 保留前后各多少个字符
+
+    Returns:
+        脱敏后的文本
+
+    Example:
+        >>> mask_sensitive_text("这是一条敏感消息内容", keep_chars=4)
+        "这是一条...息内容"
+        >>> mask_sensitive_text("短", keep_chars=10)
+        "***"
+    """
+    if not text:
+        return "***"
+
+    text_str = str(text)
+
+    # 如果文本很短，完全脱敏
+    if len(text_str) <= keep_chars * 2:
+        return "***"
+
+    # 保留前后各 keep_chars 个字符
+    return f"{text_str[:keep_chars]}...{text_str[-keep_chars:]}"
+
+
 async def check_admin_permission(message, bot) -> bool:
     """检查是否是管理员（统一的权限检查函数）
 
@@ -30,7 +59,9 @@ async def check_admin_permission(message, bot) -> bool:
     # 1. 检查是否是匿名管理员
     # 当管理员以"匿名管理员"身份执行命令时，sender_chat 会被设置为群组本身
     if message.sender_chat is not None and message.sender_chat.id == message.chat.id:
-        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{message.text}]")
+        # ✅ 安全修复：脱敏处理命令内容，避免日志泄露敏感信息
+        masked_text = mask_sensitive_text(message.text, keep_chars=8)
+        logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{masked_text}]")
         return True
 
     # 2. 检查是否在配置的超级管理员列表中
@@ -235,5 +266,7 @@ def parse_message_link(text: str) -> int | None:
                 return message_id
 
     # 解析失败
-    logger.debug(f"无法从文本中解析消息ID: {text}")
+    # ✅ 安全修复：脱敏处理文本内容，避免日志泄露敏感信息
+    masked_text = mask_sensitive_text(text, keep_chars=15)
+    logger.debug(f"无法从文本中解析消息ID: {masked_text}")
     return None

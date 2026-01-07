@@ -325,14 +325,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
 
             # 获取群组信息
             chat = await bot.get_chat(chat_id)
-            chat_title = chat.title or "群组"
+            chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"✅ **验证成功！**\n\n您已成功加入群组：**{chat_title}**\n\n现在可以在群内自由发言了！",
-                    parse_mode="Markdown",
+                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
             # 在群内发送欢迎消息
@@ -719,6 +719,10 @@ async def on_captcha_input_request(callback: CallbackQuery, bot: Bot) -> None:
         waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
         await redis.setex(waiting_key, timeout + 10, str(callback.message.message_id))
 
+        # ✅ 安全修复：设置反向索引，避免 Redis SCAN DoS 攻击
+        waiting_user_key = RedisKeys.captcha_waiting_user(user_id)
+        await redis.setex(waiting_user_key, timeout + 10, str(chat_id))
+
         await callback.answer("✏️ 请直接发送验证码文本", show_alert=False)
 
     except Exception as e:
@@ -782,144 +786,123 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
         # 检查是否在等待验证码输入
         redis = get_redis()
 
-        # 查找所有等待该用户输入的验证
-        # 遍历可能的群组（通过 RedisKeys 模式匹配）
-        # 由于 Redis keys 模式匹配可能影响性能，这里采用更简单的方案：
-        # 用户输入后，检查所有验证状态
-        pattern = f"verification:*:{user_id}"
-        verification_keys = []
-        cursor = 0
-        while True:
-            cursor, keys = await redis.scan(cursor, match=pattern, count=100)
-            verification_keys.extend(keys)
-            if cursor == 0:
-                break
+        # ✅ 安全修复：使用反向索引直接获取 chat_id，避免 Redis SCAN DoS 攻击
+        waiting_user_key = RedisKeys.captcha_waiting_user(user_id)
+        chat_id_str = await redis.get(waiting_user_key)
 
-        if not verification_keys:
+        if not chat_id_str:
             # 没有待验证状态，忽略消息
             return
 
-        # 检查是否有 captcha 类型的验证
-        for key in verification_keys:
-            stored_value = await redis.get(key)
-            if stored_value and stored_value.startswith("captcha:"):
-                # 提取 chat_id
-                parts = key.split(":")
-                if len(parts) >= 3:
-                    chat_id = int(parts[1])
+        chat_id = int(chat_id_str)
 
-                    # 检查是否在等待输入状态
-                    waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
-                    message_id_str = await redis.get(waiting_key)
+        # 检查验证状态是否存在
+        verification_key = RedisKeys.verification(chat_id, user_id)
+        stored_value = await redis.get(verification_key)
+        if not stored_value or not stored_value.startswith("captcha:"):
+            # 不是 captcha 验证或已过期
+            return
 
-                    if message_id_str:
-                        # 验证答案
-                        verification_service = VerificationService()
-                        if await verification_service.verify_answer(chat_id, user_id, text_input):
-                            # 验证成功
-                            await redis.delete(waiting_key)
+        # 检查是否在等待输入状态
+        waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
+        message_id_str = await redis.get(waiting_key)
 
-                            # 检查验证类型
-                            type_key = RedisKeys.verification_type(chat_id, user_id)
-                            verification_type = await redis.get(type_key)
-                            is_join_request = verification_type == "join_request"
+        if not message_id_str:
+            # 未点击"输入验证码"按钮
+            return
 
-                            # 清除类型标记
-                            await redis.delete(type_key)
+        # 验证答案
+        verification_service = VerificationService()
+        if await verification_service.verify_answer(chat_id, user_id, text_input):
+            # 验证成功 - 清理所有相关键
+            await redis.delete(waiting_key)
+            await redis.delete(waiting_user_key)  # ✅ 删除反向索引
 
-                            # 删除验证消息
-                            with contextlib.suppress(Exception):
-                                await bot.delete_message(
-                                    chat_id=user_id, message_id=int(message_id_str)
-                                )
+            # 检查验证类型
+            type_key = RedisKeys.verification_type(chat_id, user_id)
+            verification_type = await redis.get(type_key)
+            is_join_request = verification_type == "join_request"
 
-                            await message.answer("✅ 验证成功！")
+            # 清除类型标记
+            await redis.delete(type_key)
 
-                            # 调用成功处理（需要创建一个 fake callback）
-                            # 由于这里是消息处理器，没有 callback，需要直接处理
-                            redis = get_redis()
-                            type_key = RedisKeys.verification_type(chat_id, user_id)
-                            verification_type = await redis.get(type_key)
-                            is_join_request = verification_type == "join_request"
+            # 删除验证消息
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=int(message_id_str))
 
-                            if is_join_request:
-                                # 批准加入请求
-                                await bot.approve_chat_join_request(
-                                    chat_id=chat_id, user_id=user_id
-                                )
-                                logger.info(f"用户 {user_id} 验证成功，已批准加入请求")
-                            else:
-                                # 解除限制
-                                await bot.restrict_chat_member(
-                                    chat_id=chat_id,
-                                    user_id=user_id,
-                                    permissions=ChatPermissions(
-                                        can_send_messages=True,
-                                        can_send_media_messages=True,
-                                        can_send_polls=True,
-                                        can_send_other_messages=True,
-                                        can_add_web_page_previews=True,
-                                        can_change_info=False,
-                                        can_invite_users=True,
-                                        can_pin_messages=False,
-                                    ),
-                                )
+            await message.answer("✅ 验证成功！")
 
-                                # 发送欢迎消息到群组
-                                welcome_msg = await bot.send_message(
-                                    chat_id=chat_id,
-                                    text=f"✅ 欢迎 {message.from_user.mention_html()} 加入群组！",
-                                    parse_mode="HTML",
-                                )
+            # 处理验证成功逻辑
+            if is_join_request:
+                # 批准加入请求
+                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+                logger.info(f"用户 {user_id} 验证成功，已批准加入请求")
+            else:
+                # 解除限制
+                await bot.restrict_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    permissions=ChatPermissions(
+                        can_send_messages=True,
+                        can_send_media_messages=True,
+                        can_send_polls=True,
+                        can_send_other_messages=True,
+                        can_add_web_page_previews=True,
+                        can_change_info=False,
+                        can_invite_users=True,
+                        can_pin_messages=False,
+                    ),
+                )
 
-                                # 30 秒后删除欢迎消息
-                                async def delayed_delete():
-                                    await asyncio.sleep(30)
-                                    with contextlib.suppress(Exception):
-                                        await bot.delete_message(
-                                            chat_id=chat_id, message_id=welcome_msg.message_id
-                                        )
+                # 发送欢迎消息到群组
+                welcome_msg = await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"✅ 欢迎 {message.from_user.mention_html()} 加入群组！",
+                    parse_mode="HTML",
+                )
 
-                                asyncio.create_task(delayed_delete())
+                # 30 秒后删除欢迎消息
+                async def delayed_delete():
+                    await asyncio.sleep(30)
+                    with contextlib.suppress(Exception):
+                        await bot.delete_message(
+                            chat_id=chat_id, message_id=welcome_msg.message_id
+                        )
 
-                                logger.info(f"用户 {user_id} 验证成功")
+                asyncio.create_task(delayed_delete())
 
-                            # 清除验证状态
-                            await verification_service.clear_verification(chat_id, user_id)
+                logger.info(f"用户 {user_id} 验证成功")
 
-                        else:
-                            # 验证失败
-                            await message.answer("❌ 验证码错误，请重试")
-                            await redis.delete(waiting_key)
+            # 清除验证状态
+            await verification_service.clear_verification(chat_id, user_id)
 
-                            # 根据验证类型决定踢出或拒绝
-                            type_key = RedisKeys.verification_type(chat_id, user_id)
-                            verification_type = await redis.get(type_key)
+        else:
+            # 验证失败 - 清理所有相关键
+            await message.answer("❌ 验证码错误，请重试")
+            await redis.delete(waiting_key)
+            await redis.delete(waiting_user_key)  # ✅ 删除反向索引
 
-                            if verification_type == "join_request":
-                                # 拒绝加入请求
-                                await bot.decline_chat_join_request(
-                                    chat_id=chat_id, user_id=user_id
-                                )
-                                await redis.delete(type_key)
-                            else:
-                                # 踢出并封禁 1 小时
-                                await bot.ban_chat_member(
-                                    chat_id=chat_id,
-                                    user_id=user_id,
-                                    until_date=datetime.now() + timedelta(hours=1),
-                                )
+            # 根据验证类型决定踢出或拒绝
+            type_key = RedisKeys.verification_type(chat_id, user_id)
+            verification_type = await redis.get(type_key)
 
-                            # 删除验证消息
-                            with contextlib.suppress(Exception):
-                                await bot.delete_message(
-                                    chat_id=user_id, message_id=int(message_id_str)
-                                )
+            if verification_type == "join_request":
+                # 拒绝加入请求
+                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await redis.delete(type_key)
+            else:
+                # 踢出并封禁 1 小时
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=1),
+                )
 
-                            logger.info(f"用户 {user_id} 验证码验证失败")
+                # 删除验证消息
+                with contextlib.suppress(Exception):
+                    await bot.delete_message(chat_id=user_id, message_id=int(message_id_str))
 
-                        # 找到并处理了，退出循环
-                        return
+                logger.info(f"用户 {user_id} 验证码验证失败")
 
     except Exception as e:
         logger.error(f"处理验证码文本输入失败: {e}")
@@ -971,7 +954,7 @@ async def handle_verification_success(
     try:
         # 获取群组信息
         chat = await bot.get_chat(chat_id)
-        chat_title = chat.title or "群组"
+        chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
         # 清除验证状态
         verification_service = VerificationService()
@@ -996,8 +979,8 @@ async def handle_verification_success(
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"✅ **验证成功！**\n\n您的加入请求已批准，正在加入群组：**{chat_title}**\n\n稍后您将能在群内自由发言！",
-                    parse_mode="Markdown",
+                    text=f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
             await callback.answer("✅ 验证成功！")
@@ -1021,8 +1004,8 @@ async def handle_verification_success(
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"✅ **验证成功！**\n\n您已成功加入群组：**{chat_title}**\n\n现在可以在群内自由发言了！",
-                    parse_mode="Markdown",
+                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
             # 在群内发送欢迎消息（仅此一条群内消息）
@@ -1072,11 +1055,11 @@ async def handle_verification_timeout(
             # 3. ✅ 在私聊中通知用户（可选）
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "群组"
+                chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ **验证超时**\n\n您在群组 **{chat_title}** 的验证已超时，请重新加入并在规定时间内完成验证。",
-                    parse_mode="Markdown",
+                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时，请重新加入并在规定时间内完成验证。",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
             except Exception:
                 pass
@@ -1113,7 +1096,7 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "本群组"
+                chat_title = escape_html(chat.title) if chat.title else "本群组"  # ✅ 安全修复：转义 HTML
             except Exception:
                 chat_title = "本群组"
 
@@ -1133,8 +1116,8 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
             hint_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "⚠️ **入群验证提示**\n\n"
-                    f"欢迎加入 **{chat_title}**！\n\n"
+                    "⚠️ <b>入群验证提示</b>\n\n"
+                    f"欢迎加入 <b>{chat_title}</b>！\n\n"  # ✅ 安全修复：转义 HTML
                     "📱 本群使用 Bot 私聊验证，如果您刚加入但未收到验证消息，"
                     "说明您尚未启动 Bot。\n\n"
                     "👉 请点击下方按钮启动 Bot 进行验证：\n\n"
@@ -1142,7 +1125,7 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
                     "💡 此提示将在 30 秒后自动删除"
                 ),
                 reply_markup=keyboard,
-                parse_mode="Markdown",
+                parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
             )
 
             # 3. 记录到 Redis（30秒过期）
@@ -1231,11 +1214,11 @@ async def handle_join_request_timeout(
             # 3. 在私聊中通知用户（可选）
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "群组"
+                chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ **验证超时**\n\n您加入群组 **{chat_title}** 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
-                    parse_mode="Markdown",
+                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
+                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
             except Exception:
                 pass
@@ -1273,7 +1256,7 @@ async def handle_user_not_started_bot_for_join_request(
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = chat.title or "本群组"
+                chat_title = escape_html(chat.title) if chat.title else "本群组"  # ✅ 安全修复：转义 HTML
             except Exception:
                 chat_title = "本群组"
 
@@ -1293,8 +1276,8 @@ async def handle_user_not_started_bot_for_join_request(
             hint_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "⚠️ **入群验证提示**\n\n"
-                    f"欢迎请求加入 **{chat_title}**！\n\n"
+                    "⚠️ <b>入群验证提示</b>\n\n"
+                    f"欢迎请求加入 <b>{chat_title}</b>！\n\n"  # ✅ 安全修复：转义 HTML
                     "📱 本群使用 Bot 私聊验证，如果您发送了加入请求但未收到验证消息，"
                     "说明您尚未启动 Bot。\n\n"
                     "👉 请点击下方按钮启动 Bot 后重新发送加入请求：\n\n"
@@ -1302,7 +1285,7 @@ async def handle_user_not_started_bot_for_join_request(
                     "💡 此提示将在 30 秒后自动删除"
                 ),
                 reply_markup=keyboard,
-                parse_mode="Markdown",
+                parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
             )
 
             # 3. 记录到 Redis（30秒过期）
