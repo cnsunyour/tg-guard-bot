@@ -131,35 +131,61 @@ class ModerationService:
             return False, "操作失败，请检查 Bot 权限"
 
     @staticmethod
-    async def unmute_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
-        """解除禁言
+    async def _unban_or_unmute_user(
+        bot: Bot, chat_id: int, user_id: int, operator_id: int, action: str
+    ) -> bool:
+        """解除封禁或禁言（统一实现）
 
-        使用 unban_chat_member 将用户从限制列表中完全移除，
-        而不是仅仅恢复权限（后者用户仍在受限列表中）
+        Args:
+            action: 'unmute' 或 'unban'，仅用于日志记录
+
+        无论用户是被封禁(ban)还是被限制(restrict)，统一解除所有限制
         """
         try:
-            # 使用 unban_chat_member 将用户从限制列表中移除
-            # only_if_banned=False 表示即使用户只是被 restrict 也可以解除
+            # 使用 unban_chat_member 将用户从任何限制状态中移除
+            # only_if_banned=False 表示无论是 ban 还是 restrict 都解除
             await bot.unban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                only_if_banned=False,  # 关键：即使只是 restrict 也解除
+                only_if_banned=False,  # 关键：解除所有限制
             )
 
             # 记录日志
             await AuditRepository.log_action(
                 group_id=chat_id,
                 operator_id=operator_id,
-                action="unmute",
+                action=action,
                 target_user_id=user_id,
             )
 
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} 解除禁言并从限制列表中移除")
+            action_text = "解除禁言" if action == "unmute" else "解除封禁"
+            logger.info(f"用户 {user_id} 被管理员 {operator_id} {action_text}并从限制列表中移除")
             return True
 
         except Exception as e:
-            logger.error(f"解除禁言失败: {e}")
+            action_text = "解除禁言" if action == "unmute" else "解除封禁"
+            logger.error(f"{action_text}失败: {e}")
             return False
+
+    @staticmethod
+    async def unmute_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
+        """解除禁言
+
+        注：实际上会解除用户的所有限制（包括封禁和禁言），与 unban_user 完全相同
+        """
+        return await ModerationService._unban_or_unmute_user(
+            bot, chat_id, user_id, operator_id, "unmute"
+        )
+
+    @staticmethod
+    async def unban_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
+        """解除封禁
+
+        注：实际上会解除用户的所有限制（包括封禁和禁言），与 unmute_user 完全相同
+        """
+        return await ModerationService._unban_or_unmute_user(
+            bot, chat_id, user_id, operator_id, "unban"
+        )
 
     @staticmethod
     async def ban_user(
@@ -256,28 +282,6 @@ class ModerationService:
         except Exception as e:
             logger.error(f"临时封禁用户失败: {e}")
             return False, "操作失败，请检查 Bot 权限"
-
-    @staticmethod
-    async def unban_user(bot: Bot, chat_id: int, user_id: int, operator_id: int) -> bool:
-        """解除封禁"""
-        try:
-            # 解除封禁
-            await bot.unban_chat_member(chat_id=chat_id, user_id=user_id, only_if_banned=True)
-
-            # 记录日志
-            await AuditRepository.log_action(
-                group_id=chat_id,
-                operator_id=operator_id,
-                action="unban",
-                target_user_id=user_id,
-            )
-
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} 解除封禁")
-            return True
-
-        except Exception as e:
-            logger.error(f"解除封禁失败: {e}")
-            return False
 
     @staticmethod
     async def warn_user(

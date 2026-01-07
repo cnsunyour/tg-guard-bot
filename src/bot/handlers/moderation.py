@@ -290,7 +290,10 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
 
 @router.message(Command("unmute"))
 async def cmd_unmute(message: Message, bot: Bot) -> None:
-    """解除禁言"""
+    """解除禁言/封禁（与 /unban 等价）
+
+    统一解除用户的所有限制，无论是禁言还是封禁
+    """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -305,14 +308,15 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请指定要解除禁言的用户：\n\n"
+            "❌ 请指定要解除限制的用户：\n\n"
             "方式1: 回复用户的消息\n"
             "方式2: /unmute <用户ID>\n"
-            "方式3: /unmute @用户"
+            "方式3: /unmute @用户\n\n"
+            "💡 提示：/unmute 和 /unban 功能完全相同"
         )
         return
 
-    # 执行解除禁言
+    # 执行解除禁言/封禁
     success = await ModerationService.unmute_user(
         bot=bot,
         chat_id=message.chat.id,
@@ -321,7 +325,7 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的禁言")
+        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的所有限制（禁言/封禁）")
         await auto_delete_message(reply)
     else:
         reply = await message.answer("❌ 操作失败，请检查Bot权限")
@@ -392,7 +396,10 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
 
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, bot: Bot) -> None:
-    """解除封禁"""
+    """解除封禁/禁言（与 /unmute 等价）
+
+    统一解除用户的所有限制，无论是禁言还是封禁
+    """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -407,14 +414,15 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     target_user_id = parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
-            "❌ 请指定要解除封禁的用户：\n\n"
+            "❌ 请指定要解除限制的用户：\n\n"
             "方式1: 回复用户的消息\n"
             "方式2: /unban <用户ID>\n"
-            "方式3: /unban @用户"
+            "方式3: /unban @用户\n\n"
+            "💡 提示：/unban 和 /unmute 功能完全相同"
         )
         return
 
-    # 执行解除封禁
+    # 执行解除封禁/禁言
     success = await ModerationService.unban_user(
         bot=bot,
         chat_id=message.chat.id,
@@ -423,7 +431,7 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的封禁")
+        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的所有限制（禁言/封禁）")
         await auto_delete_message(reply)
     else:
         reply = await message.answer("❌ 操作失败，请检查Bot权限或用户未被封禁")
