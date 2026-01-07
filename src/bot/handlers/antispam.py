@@ -796,6 +796,14 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                 logger.debug(f"TGS 支持不可用（需要安装 OCR 依赖）: {e}")
                 return
 
+            # ✅ 安全修复：防止 Gzip 炸弹攻击 - 先检查压缩文件大小
+            MAX_COMPRESSED_SIZE = 256 * 1024  # 256KB 压缩文件上限
+            if sticker.file_size and sticker.file_size > MAX_COMPRESSED_SIZE:
+                logger.warning(
+                    f"TGS 文件过大: {sticker.file_size} bytes (限制: {MAX_COMPRESSED_SIZE})"
+                )
+                return
+
             with managed_temp_file(suffix=".tgs") as tgs_file_path:
                 # 下载贴纸
                 await bot.download(sticker, destination=tgs_file_path)
@@ -810,10 +818,40 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     # TGS = gzip-compressed Lottie JSON
                     tgs_path = Path(tgs_file_path)
 
-                    # ✅ 防止 gzip 炸弹攻击：限制解压后大小为 10MB
-                    MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024
-                    compressed_data = tgs_path.read_bytes()
-                    decompressed_data = gzip.decompress(compressed_data)
+                    # ✅ 安全修复：使用流式解压防止 Gzip 炸弹攻击
+                    MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024  # 10MB 解压后大小限制
+                    import zlib
+
+                    decompressed_data = b""
+                    with open(tgs_path, "rb") as f:
+                        # 创建 gzip 解压器（16 + MAX_WBITS 表示 gzip 格式）
+                        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                        chunk_size = 65536  # 64KB 块
+
+                        try:
+                            while True:
+                                chunk = f.read(chunk_size)
+                                if not chunk:
+                                    break
+
+                                # 解压当前块
+                                decompressed_chunk = decompressor.decompress(
+                                    chunk, max_length=MAX_DECOMPRESSED_SIZE - len(decompressed_data)
+                                )
+                                decompressed_data += decompressed_chunk
+
+                                # 边解压边检查大小
+                                if len(decompressed_data) >= MAX_DECOMPRESSED_SIZE:
+                                    logger.warning(
+                                        f"TGS 文件解压后过大，停止解压 (限制: {MAX_DECOMPRESSED_SIZE} bytes)"
+                                    )
+                                    return
+
+                            # 处理剩余数据
+                            decompressed_data += decompressor.flush()
+                        except zlib.error as e:
+                            logger.error(f"TGS 文件解压失败: {e}")
+                            return
 
                     if len(decompressed_data) > MAX_DECOMPRESSED_SIZE:
                         logger.warning(
