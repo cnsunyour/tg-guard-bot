@@ -487,14 +487,18 @@ async def cmd_whitelist_remove(message: Message) -> None:
             return
 
         if not group.is_whitelisted:
-            await message.answer(f"ℹ️ 群组 <b>{group.title or chat_id}</b> 不在白名单中")
+            # ✅ 安全修复：转义群组标题防止 HTML 注入
+            title_safe = escape_html(group.title) if group.title else chat_id
+            await message.answer(f"ℹ️ 群组 <b>{title_safe}</b> 不在白名单中")
             return
 
         # 从白名单移除
         await GroupRepository.update_whitelist(chat_id, False)
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
-        await message.answer(f"✅ 已将群组 <b>{group.title or chat_id}</b> 从白名单移除")
+        # ✅ 安全修复：转义群组标题防止 HTML 注入
+        title_safe = escape_html(group.title) if group.title else chat_id
+        await message.answer(f"✅ 已将群组 <b>{title_safe}</b> 从白名单移除")
 
     except ValueError:
         await message.answer("❌ chat_id 格式错误，必须是数字")
