@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数")
+    warning_expiration_days: int = Field(default=7, description="警告有效期（天）")
 
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
