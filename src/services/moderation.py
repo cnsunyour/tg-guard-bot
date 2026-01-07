@@ -291,7 +291,7 @@ class ModerationService:
         """警告用户
 
         Returns:
-            (是否成功, 累计警告次数, 是否自动禁言)
+            (是否成功, 累计警告次数, 是否触发自动处罚)
         """
         try:
             # 添加警告
@@ -317,27 +317,62 @@ class ModerationService:
                 f"用户 {user_id} 被管理员 {operator_id} 警告，" f"累计警告次数: {warning_count}"
             )
 
-            # 检查是否达到自动禁言阈值
-            auto_muted = False
-            if warning_count >= settings.max_warnings:
-                # 自动禁言 24 小时
-                # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
+            # 检查是否触发自动处罚（处罚升级机制）
+            auto_punished = False
+
+            # 阶段3: 封禁（踢出+拉黑）
+            if warning_count >= settings.warning_ban_threshold:
+                success, error_msg = await ModerationService.ban_user(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    operator_id=operator_id,
+                    reason=f"累计警告达到 {warning_count} 次",
+                )
+                auto_punished = success
+
+                if success:
+                    logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动封禁")
+                else:
+                    logger.error(f"自动封禁失败: {error_msg}")
+
+            # 阶段2: 踢出群组
+            elif warning_count >= settings.warning_kick_threshold:
+                success, error_msg = await ModerationService.kick_user(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    operator_id=operator_id,
+                    reason=f"累计警告达到 {warning_count} 次",
+                )
+                auto_punished = success
+
+                if success:
+                    logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动踢出")
+                else:
+                    logger.error(f"自动踢出失败: {error_msg}")
+
+            # 阶段1: 禁言
+            elif warning_count >= settings.max_warnings:
                 success, error_msg = await ModerationService.mute_user(
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
                     operator_id=operator_id,
-                    duration=24 * 60,  # 24小时
+                    duration=settings.warning_mute_duration_hours * 60,  # 转换为分钟
                     reason=f"累计警告达到 {warning_count} 次",
                 )
-                auto_muted = success
+                auto_punished = success
 
                 if success:
-                    logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动禁言")
+                    logger.info(
+                        f"用户 {user_id} 因累计 {warning_count} 次警告被自动禁言 "
+                        f"{settings.warning_mute_duration_hours} 小时"
+                    )
                 else:
                     logger.error(f"自动禁言失败: {error_msg}")
 
-            return True, warning_count, auto_muted
+            return True, warning_count, auto_punished
 
         except Exception as e:
             logger.error(f"警告用户失败: {e}")

@@ -465,7 +465,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         reason = parts[2] if len(parts) > 2 else None
 
     # 执行警告
-    success, warning_count, auto_muted = await ModerationService.warn_user(
+    success, warning_count, auto_punished = await ModerationService.warn_user(
         bot=bot,
         chat_id=message.chat.id,
         user_id=target_user_id,
@@ -476,15 +476,40 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
     if success:
         response = (
             f"⚠️ 已警告用户 {target_user_id}\n"
-            f"有效警告: {warning_count}/{settings.max_warnings} "
+            f"有效警告: {warning_count} "
             f"({settings.warning_expiration_days}天内)"
         )
         if reason:
             # ✅ P1-8: 转义用户输入的原因，防止 HTML 注入
             response += f"\n原因: {escape_html(reason)}"
 
-        if auto_muted:
-            response += f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，自动禁言 24 小时"
+        # 根据警告次数显示处罚提示
+        if auto_punished:
+            if warning_count >= settings.warning_ban_threshold:
+                response += (
+                    f"\n\n🚫 用户已达到 {settings.warning_ban_threshold} 次警告，已被封禁"
+                )
+            elif warning_count >= settings.warning_kick_threshold:
+                response += (
+                    f"\n\n👢 用户已达到 {settings.warning_kick_threshold} 次警告，已被踢出"
+                )
+            elif warning_count >= settings.max_warnings:
+                response += (
+                    f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，"
+                    f"自动禁言 {settings.warning_mute_duration_hours} 小时"
+                )
+
+        # 显示下一阶段处罚提示
+        else:
+            if warning_count == settings.max_warnings - 1:
+                response += (
+                    f"\n\n💡 提示：再 1 次警告将自动禁言 "
+                    f"{settings.warning_mute_duration_hours} 小时"
+                )
+            elif warning_count == settings.warning_kick_threshold - 1:
+                response += f"\n\n💡 提示：再 1 次警告将被踢出群组"
+            elif warning_count == settings.warning_ban_threshold - 1:
+                response += f"\n\n💡 提示：再 1 次警告将被封禁"
 
         reply = await message.answer(response)
         await auto_delete_message(reply)
@@ -531,9 +556,12 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     # 格式化警告列表
     response = (
         f"⚠️ 用户 {target_user_id} 的警告记录:\n"
-        f"有效警告: {recent_count}/{settings.max_warnings} "
-        f"({settings.warning_expiration_days}天内)\n"
+        f"有效警告: {recent_count} ({settings.warning_expiration_days}天内)\n"
         f"历史记录: {len(warnings)} 次\n\n"
+        f"📋 处罚阶梯:\n"
+        f"• {settings.max_warnings} 次 → 禁言 {settings.warning_mute_duration_hours} 小时\n"
+        f"• {settings.warning_kick_threshold} 次 → 踢出群组\n"
+        f"• {settings.warning_ban_threshold} 次 → 封禁（拉黑）\n\n"
     )
 
     for idx, warning in enumerate(warnings[:10], 1):  # 只显示最近10条
