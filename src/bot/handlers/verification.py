@@ -19,6 +19,7 @@ from aiogram.types import (
 )
 from loguru import logger
 
+from src.core.cache import PermissionCache
 from src.core.database import get_db_session
 from src.core.redis import RedisKeys, get_redis
 from src.core.utils import escape_html, format_user_mention
@@ -263,6 +264,7 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     """处理用户加入群组事件 - 私聊验证模式
 
     如果用户已通过加入请求验证，直接欢迎加入，跳过重复验证
+    如果是管理员邀请进群，直接通过验证
     """
     chat_id = event.chat.id
     user = event.new_chat_member.user
@@ -270,6 +272,33 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     username = user.username or user.full_name
 
     logger.info(f"用户 {username} ({user_id}) 加入群组 {chat_id}")
+
+    # ✅ 检查是否为管理员邀请（from_user 是邀请者）
+    if event.from_user:
+        inviter_id = event.from_user.id
+        inviter_name = event.from_user.username or event.from_user.full_name
+
+        # 检查邀请者是否是管理员
+        is_admin_invite = await PermissionCache.is_admin(bot, chat_id, inviter_id)
+
+        if is_admin_invite:
+            logger.info(
+                f"用户 {user_id} 由管理员 {inviter_name} ({inviter_id}) 邀请，" f"跳过验证直接通过"
+            )
+
+            # 直接发送欢迎消息（不需要限制权限）
+            welcome_msg = await bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！\n\n"
+                f"由管理员 {format_user_mention(event.from_user)} 邀请加入。",
+            )
+
+            # 5秒后删除欢迎消息
+            await asyncio.sleep(5)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
+
+            return  # 管理员邀请，跳过后续验证流程
 
     try:
         # ⚠️ 立即限制新用户权限（防止在检测/验证期间发送垃圾消息）
