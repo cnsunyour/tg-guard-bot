@@ -37,6 +37,28 @@ class ModerationService:
             return False, "无法验证用户信息，请检查用户 ID 是否正确"
 
     @staticmethod
+    async def verify_not_admin(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
+        """验证目标用户不是管理员
+
+        Args:
+            bot: Bot 实例
+            chat_id: 群组 ID
+            user_id: 用户 ID
+
+        Returns:
+            (是否通过检查, 错误消息) - True 表示不是管理员可以操作，False 表示是管理员不能操作
+        """
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            # 检查是否是群主或管理员
+            if member.status in ["creator", "administrator"]:
+                return False, "无法对群组管理员执行此操作"
+            return True, ""
+        except Exception as e:
+            logger.debug(f"验证管理员身份失败: {e}")
+            return False, "无法验证用户权限信息"
+
+    @staticmethod
     async def kick_user(
         bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: str | None = None
     ) -> tuple[bool, str | None]:
@@ -49,6 +71,11 @@ class ModerationService:
             # ✅ M7: 先验证用户是否在群组中
             exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
             if not exists:
+                return False, error_msg
+
+            # 验证目标用户不是管理员
+            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not not_admin:
                 return False, error_msg
 
             # 踢出用户（临时封禁后立即解封）
@@ -92,6 +119,11 @@ class ModerationService:
             # ✅ M7: 先验证用户是否在群组中
             exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
             if not exists:
+                return False, error_msg
+
+            # 验证目标用户不是管理员
+            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not not_admin:
                 return False, error_msg
 
             # 计算禁言到期时间
@@ -225,6 +257,11 @@ class ModerationService:
             if not exists:
                 return False, error_msg
 
+            # 验证目标用户不是管理员
+            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not not_admin:
+                return False, error_msg
+
             # 封禁用户
             await bot.ban_chat_member(
                 chat_id=chat_id, user_id=user_id, revoke_messages=revoke_messages
@@ -274,6 +311,11 @@ class ModerationService:
             # ✅ M7: 先验证用户是否在群组中
             exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
             if not exists:
+                return False, error_msg
+
+            # 验证目标用户不是管理员
+            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not not_admin:
                 return False, error_msg
 
             # 计算封禁到期时间
