@@ -21,6 +21,11 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    # ✅ 注册 Session 层中间件：处理 Telegram API 速率限制 (429)
+    from src.bot.middlewares import RetryAfterMiddleware
+
+    bot.session.middleware(RetryAfterMiddleware(max_retries=3))
+
     dp = Dispatcher()
 
     # 注册路由器
