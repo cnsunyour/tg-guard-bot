@@ -22,6 +22,7 @@ class BackupType(Enum):
 
     DAILY = "daily"  # 每日备份（保留 7 天）
     WEEKLY = "weekly"  # 每周备份（保留 4 周）
+    MONTHLY = "monthly"  # 月备份（保留 6 个月）
 
 
 class BackupManager:
@@ -30,6 +31,7 @@ class BackupManager:
     实现 GFS (Grandfather-Father-Son) 轮转策略：
     - Daily: 保留最近 7 天的每日备份
     - Weekly: 保留最近 4 周的每周备份（周日）
+    - Monthly: 保留最近 6 个月的月备份（每月第一个周日）
     """
 
     def __init__(self, backup_dir: str = "backups"):
@@ -41,23 +43,35 @@ class BackupManager:
         self.backup_dir = Path(backup_dir)
         self.daily_dir = self.backup_dir / "daily"
         self.weekly_dir = self.backup_dir / "weekly"
+        self.monthly_dir = self.backup_dir / "monthly"
 
         # 创建备份目录
         self.daily_dir.mkdir(parents=True, exist_ok=True)
         self.weekly_dir.mkdir(parents=True, exist_ok=True)
+        self.monthly_dir.mkdir(parents=True, exist_ok=True)
 
     def backup_postgres(self, backup_type: BackupType) -> Path | None:
         """备份 PostgreSQL 数据库
 
         Args:
-            backup_type: 备份类型（daily/weekly）
+            backup_type: 备份类型（daily/weekly/monthly）
 
         Returns:
             备份文件路径，失败返回 None
         """
         timestamp = datetime.now().strftime("%Y%m%d")
-        target_dir = self.daily_dir if backup_type == BackupType.DAILY else self.weekly_dir
-        suffix = "" if backup_type == BackupType.DAILY else "_weekly"
+
+        # 确定目标目录和文件后缀
+        if backup_type == BackupType.DAILY:
+            target_dir = self.daily_dir
+            suffix = ""
+        elif backup_type == BackupType.WEEKLY:
+            target_dir = self.weekly_dir
+            suffix = "_weekly"
+        else:  # MONTHLY
+            target_dir = self.monthly_dir
+            suffix = "_monthly"
+
         backup_file = target_dir / f"postgres_{timestamp}{suffix}.sql"
 
         logger.info(f"开始备份 PostgreSQL 到: {backup_file}")
@@ -117,14 +131,24 @@ class BackupManager:
         通过 Docker 容器触发 BGSAVE 并复制 dump.rdb 文件
 
         Args:
-            backup_type: 备份类型（daily/weekly）
+            backup_type: 备份类型（daily/weekly/monthly）
 
         Returns:
             备份文件路径，失败返回 None
         """
         timestamp = datetime.now().strftime("%Y%m%d")
-        target_dir = self.daily_dir if backup_type == BackupType.DAILY else self.weekly_dir
-        suffix = "" if backup_type == BackupType.DAILY else "_weekly"
+
+        # 确定目标目录和文件后缀
+        if backup_type == BackupType.DAILY:
+            target_dir = self.daily_dir
+            suffix = ""
+        elif backup_type == BackupType.WEEKLY:
+            target_dir = self.weekly_dir
+            suffix = "_weekly"
+        else:  # MONTHLY
+            target_dir = self.monthly_dir
+            suffix = "_monthly"
+
         backup_file = target_dir / f"redis_{timestamp}{suffix}.rdb"
 
         logger.info(f"开始备份 Redis 到: {backup_file}")
@@ -279,20 +303,87 @@ class BackupManager:
         logger.info(f"Weekly 提升完成，共提升 {promoted_count} 个备份")
         return {"promoted": promoted_count, "errors": errors}
 
+    def promote_to_monthly(self) -> dict:
+        """提升当日备份为月备份
+
+        在每月第一个周日执行时，将 daily 备份复制到 monthly 目录
+
+        Returns:
+            {"promoted": int, "errors": list} 统计信息
+        """
+        today = datetime.now()
+
+        # 判断是否是每月第一个周日
+        if today.weekday() != 6:  # 6 = 周日
+            logger.debug(f"今天是 {today.strftime('%A')}，不是周日，跳过 monthly 提升")
+            return {"promoted": 0, "errors": []}
+
+        # 检查是否是本月第一个周日（日期 <= 7）
+        if today.day > 7:
+            logger.debug(f"今天是本月第 {today.day} 天，不是第一个周日，跳过 monthly 提升")
+            return {"promoted": 0, "errors": []}
+
+        logger.info("今天是本月第一个周日，开始提升当日备份为 monthly 备份...")
+
+        timestamp = today.strftime("%Y%m%d")
+        promoted_count = 0
+        errors = []
+
+        # 提升 PostgreSQL 备份
+        daily_pg = self.daily_dir / f"postgres_{timestamp}.sql"
+        monthly_pg = self.monthly_dir / f"postgres_{timestamp}_monthly.sql"
+
+        if daily_pg.exists():
+            try:
+                import shutil
+
+                shutil.copy2(daily_pg, monthly_pg)
+                logger.info(f"✅ 提升 PostgreSQL 月备份: {monthly_pg.name}")
+                promoted_count += 1
+            except Exception as e:
+                error_msg = f"提升 PostgreSQL 月备份失败: {e}"
+                logger.error(f"❌ {error_msg}")
+                errors.append(error_msg)
+        else:
+            logger.warning(f"⚠️ 当日 PostgreSQL 备份不存在: {daily_pg}")
+
+        # 提升 Redis 备份
+        daily_redis = self.daily_dir / f"redis_{timestamp}.rdb"
+        monthly_redis = self.monthly_dir / f"redis_{timestamp}_monthly.rdb"
+
+        if daily_redis.exists():
+            try:
+                import shutil
+
+                shutil.copy2(daily_redis, monthly_redis)
+                logger.info(f"✅ 提升 Redis 月备份: {monthly_redis.name}")
+                promoted_count += 1
+            except Exception as e:
+                error_msg = f"提升 Redis 月备份失败: {e}"
+                logger.error(f"❌ {error_msg}")
+                errors.append(error_msg)
+        else:
+            logger.warning(f"⚠️ 当日 Redis 备份不存在: {daily_redis}")
+
+        logger.info(f"Monthly 提升完成，共提升 {promoted_count} 个备份")
+        return {"promoted": promoted_count, "errors": errors}
+
     def cleanup_expired(self) -> dict:
         """清理过期备份
 
         - daily/: 删除超过 7 天的备份
         - weekly/: 删除超过 28 天（4 周）的备份
+        - monthly/: 删除超过 180 天（6 个月）的备份
 
         Returns:
-            {"deleted_daily": int, "deleted_weekly": int} 统计信息
+            {"deleted_daily": int, "deleted_weekly": int, "deleted_monthly": int} 统计信息
         """
         logger.info("开始清理过期备份...")
 
         now = datetime.now()
         deleted_daily = 0
         deleted_weekly = 0
+        deleted_monthly = 0
 
         # 清理 daily 备份（保留 7 天）
         daily_cutoff = now - timedelta(days=7)
@@ -324,15 +415,38 @@ class BackupManager:
                 except Exception as e:
                     logger.error(f"删除 {backup_file.name} 失败: {e}")
 
-        logger.info(f"✅ 清理完成，删除 {deleted_daily} 个 daily 备份，{deleted_weekly} 个 weekly 备份")
-        return {"deleted_daily": deleted_daily, "deleted_weekly": deleted_weekly}
+        # 清理 monthly 备份（保留 180 天 = 6 个月）
+        monthly_cutoff = now - timedelta(days=180)
+        for backup_file in self.monthly_dir.glob("*"):
+            if not backup_file.is_file():
+                continue
+
+            file_time = datetime.fromtimestamp(backup_file.stat().st_mtime)
+            if file_time < monthly_cutoff:
+                try:
+                    backup_file.unlink()
+                    deleted_monthly += 1
+                    logger.info(f"删除过期 monthly 备份: {backup_file.name}")
+                except Exception as e:
+                    logger.error(f"删除 {backup_file.name} 失败: {e}")
+
+        logger.info(
+            f"✅ 清理完成，删除 {deleted_daily} 个 daily 备份，"
+            f"{deleted_weekly} 个 weekly 备份，{deleted_monthly} 个 monthly 备份"
+        )
+        return {
+            "deleted_daily": deleted_daily,
+            "deleted_weekly": deleted_weekly,
+            "deleted_monthly": deleted_monthly,
+        }
 
     def run_backup(self) -> dict:
         """执行完整备份流程
 
         1. 创建 daily 备份（PostgreSQL + Redis）
         2. 如果是周日，提升为 weekly 备份
-        3. 清理过期备份
+        3. 如果是每月第一个周日，提升为 monthly 备份
+        4. 清理过期备份
 
         Returns:
             备份统计信息字典
@@ -344,9 +458,11 @@ class BackupManager:
             "success": True,
             "postgres_backup": None,
             "redis_backup": None,
-            "promoted": 0,
+            "promoted_weekly": 0,
+            "promoted_monthly": 0,
             "deleted_daily": 0,
             "deleted_weekly": 0,
+            "deleted_monthly": 0,
             "errors": [],
         }
 
@@ -367,14 +483,20 @@ class BackupManager:
             stats["errors"].append("Redis 备份失败")
 
         # 3. 提升为 weekly（如果是周日）
-        promote_result = self.promote_to_weekly()
-        stats["promoted"] = promote_result["promoted"]
-        stats["errors"].extend(promote_result["errors"])
+        promote_weekly_result = self.promote_to_weekly()
+        stats["promoted_weekly"] = promote_weekly_result["promoted"]
+        stats["errors"].extend(promote_weekly_result["errors"])
 
-        # 4. 清理过期备份
+        # 4. 提升为 monthly（如果是每月第一个周日）
+        promote_monthly_result = self.promote_to_monthly()
+        stats["promoted_monthly"] = promote_monthly_result["promoted"]
+        stats["errors"].extend(promote_monthly_result["errors"])
+
+        # 5. 清理过期备份
         cleanup_result = self.cleanup_expired()
         stats["deleted_daily"] = cleanup_result["deleted_daily"]
         stats["deleted_weekly"] = cleanup_result["deleted_weekly"]
+        stats["deleted_monthly"] = cleanup_result["deleted_monthly"]
 
         # 统计耗时
         elapsed = time.time() - start_time
@@ -392,7 +514,7 @@ class BackupManager:
         """列出所有备份文件
 
         Returns:
-            {"daily": list, "weekly": list} 备份文件列表
+            {"daily": list, "weekly": list, "monthly": list} 备份文件列表
         """
         daily_backups = sorted(
             [f for f in self.daily_dir.glob("*") if f.is_file()],
@@ -406,7 +528,13 @@ class BackupManager:
             reverse=True,
         )
 
-        return {"daily": daily_backups, "weekly": weekly_backups}
+        monthly_backups = sorted(
+            [f for f in self.monthly_dir.glob("*") if f.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        return {"daily": daily_backups, "weekly": weekly_backups, "monthly": monthly_backups}
 
     def show_backups(self):
         """显示所有备份信息（格式化输出）"""
@@ -422,6 +550,13 @@ class BackupManager:
         # 显示 weekly 备份
         logger.info(f"=== Weekly 备份（保留 4 周，共 {len(backups['weekly'])} 个）===")
         for i, backup in enumerate(backups["weekly"], 1):
+            self._print_backup_info(i, backup)
+
+        logger.info("")
+
+        # 显示 monthly 备份
+        logger.info(f"=== Monthly 备份（保留 6 个月，共 {len(backups['monthly'])} 个）===")
+        for i, backup in enumerate(backups["monthly"], 1):
             self._print_backup_info(i, backup)
 
     def _print_backup_info(self, index: int, backup: Path):

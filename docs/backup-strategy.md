@@ -12,6 +12,7 @@
 |------|---------|----------|---------|------|
 | **Daily** | 7 天 | 最多 7 个 | 每日凌晨 3:00 | `backups/daily/` |
 | **Weekly** | 28 天 (4 周) | 最多 4 个 | 每周日凌晨 3:00 | `backups/weekly/` |
+| **Monthly** | 180 天 (6 个月) | 最多 6 个 | 每月第一个周日凌晨 3:00 | `backups/monthly/` |
 
 ### 轮转流程
 
@@ -22,9 +23,13 @@
 ├─ 3. 如果是周日 → 复制当日备份到 weekly/
 │   ├─ backups/daily/postgres_20260105.sql
 │   └─ backups/weekly/postgres_20260105_weekly.sql
-└─ 4. 清理过期备份
+├─ 4. 如果是每月第一个周日 → 复制当日备份到 monthly/
+│   ├─ backups/daily/postgres_20260105.sql
+│   └─ backups/monthly/postgres_20260105_monthly.sql
+└─ 5. 清理过期备份
     ├─ daily/: 删除超过 7 天的备份
-    └─ weekly/: 删除超过 28 天的备份
+    ├─ weekly/: 删除超过 28 天的备份
+    └─ monthly/: 删除超过 180 天的备份
 ```
 
 ## 目录结构
@@ -38,11 +43,16 @@ backups/
 │   ├── redis_20260109.rdb
 │   ├── redis_20260108.rdb
 │   └── redis_20260107.rdb
-└── weekly/                   # 每周备份（4 周，周日）
-    ├── postgres_20260105_weekly.sql
-    ├── postgres_20251229_weekly.sql
-    ├── redis_20260105_weekly.rdb
-    └── redis_20251229_weekly.rdb
+├── weekly/                   # 每周备份（4 周，周日）
+│   ├── postgres_20260105_weekly.sql
+│   ├── postgres_20251229_weekly.sql
+│   ├── redis_20260105_weekly.rdb
+│   └── redis_20251229_weekly.rdb
+└── monthly/                  # 月备份（6 个月，每月第一个周日）
+    ├── postgres_20260105_monthly.sql
+    ├── postgres_20251201_monthly.sql
+    ├── redis_20260105_monthly.rdb
+    └── redis_20251201_monthly.rdb
 ```
 
 ## 使用方法
@@ -77,6 +87,9 @@ make backup-list
 # === Weekly 备份（保留 4 周，共 4 个）===
 # 1. postgres_20260105_weekly.sql - 2.10 MB - 4天前 (2026-01-05 03:00:00)
 # ...
+# === Monthly 备份（保留 6 个月，共 3 个）===
+# 1. postgres_20260105_monthly.sql - 2.05 MB - 4天前 (2026-01-05 03:00:00)
+# ...
 ```
 
 ### 恢复备份
@@ -89,6 +102,9 @@ make backup-restore-postgres FILE=backups/daily/postgres_20260109.sql
 
 # 从 weekly 备份恢复
 make backup-restore-postgres FILE=backups/weekly/postgres_20260105_weekly.sql
+
+# 从 monthly 备份恢复
+make backup-restore-postgres FILE=backups/monthly/postgres_20260105_monthly.sql
 ```
 
 #### 恢复 Redis
@@ -96,6 +112,8 @@ make backup-restore-postgres FILE=backups/weekly/postgres_20260105_weekly.sql
 ```bash
 # 恢复 Redis（会自动重启容器）
 make backup-restore-redis FILE=backups/daily/redis_20260109.rdb
+make backup-restore-redis FILE=backups/weekly/redis_20260105_weekly.rdb
+make backup-restore-redis FILE=backups/monthly/redis_20260105_monthly.rdb
 
 # 注意：Redis 恢复会短暂中断服务（约 1-2 秒）
 ```
@@ -187,8 +205,9 @@ docker cp tg-guard-redis:/data/dump.rdb backups/daily/redis_20260109.rdb
 ```
 Daily (7 天) × 2 份（PG + Redis） = 14 个文件 × 3MB ≈ 42 MB
 Weekly (4 周) × 2 份（PG + Redis） = 8 个文件 × 3MB ≈ 24 MB
+Monthly (6 个月) × 2 份（PG + Redis） = 12 个文件 × 3MB ≈ 36 MB
 -----------------------------------------------------------
-总计: 约 66 MB (建议预留 100 MB)
+总计: 约 102 MB (建议预留 150 MB)
 ```
 
 ## 监控与日志
