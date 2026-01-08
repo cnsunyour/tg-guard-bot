@@ -1047,7 +1047,7 @@ async def handle_verification_timeout(
                 await bot.delete_message(chat_id=user_id, message_id=message_id)
 
             # 3. ✅ 在私聊中通知用户（可选）
-            try:
+            with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
@@ -1055,8 +1055,6 @@ async def handle_verification_timeout(
                     text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时，请重新加入并在规定时间内完成验证。",
                     parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
-            except Exception:
-                pass
 
             # 4. ✅ 群内不发送任何消息
 
@@ -1206,7 +1204,7 @@ async def handle_join_request_timeout(
                 await bot.delete_message(chat_id=user_id, message_id=message_id)
 
             # 3. 在私聊中通知用户（可选）
-            try:
+            with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
@@ -1214,8 +1212,6 @@ async def handle_join_request_timeout(
                     text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
                     parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
-            except Exception:
-                pass
 
             # 4. 清除验证状态
             await verification_service.clear_verification(chat_id, user_id)
