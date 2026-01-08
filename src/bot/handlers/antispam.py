@@ -1,6 +1,6 @@
 """反垃圾消息处理器"""
 
-import gzip
+import contextlib
 import json
 import re
 import tempfile
@@ -62,6 +62,31 @@ def is_anonymous_admin(message: Message) -> bool:
     return message.sender_chat is not None and message.sender_chat.id == message.chat.id
 
 
+def is_channel_as_sender(message: Message) -> bool:
+    """检查消息是否使用频道身份发送(频道马甲)
+
+    当用户以频道身份发言时：
+    - message.sender_chat 不为 None
+    - message.sender_chat.id != message.chat.id (发送者是外部频道)
+    - message.sender_chat.type == "channel"
+
+    Args:
+        message: 消息对象
+
+    Returns:
+        是否是频道马甲消息
+    """
+    if message.sender_chat is None:
+        return False
+
+    # 排除匿名管理员(sender_chat 是群组本身)
+    if message.sender_chat.id == message.chat.id:
+        return False
+
+    # 检查是否是频道类型
+    return message.sender_chat.type == "channel"
+
+
 def is_external_forward(message: Message) -> bool:
     """检查消息是否是从外部群组/频道转发的
 
@@ -88,11 +113,8 @@ def is_external_forward(message: Message) -> bool:
 
     # 转发自群组
     if isinstance(message.forward_origin, MessageOriginChat):
-        # 如果是转发自本群，不算外部转发
-        if message.forward_origin.sender_chat.id == message.chat.id:
-            return False
-        # 转发自其他群组，算外部转发
-        return True
+        # 如果是转发自本群，不算外部转发；转发自其他群组，算外部转发
+        return message.forward_origin.sender_chat.id != message.chat.id
 
     # 其他情况（转发自用户、隐藏用户等）：不算外部转发
     return False
@@ -118,6 +140,76 @@ def has_url_entities(message: Message) -> bool:
             return True
 
     return False
+
+
+async def check_and_handle_channel_as_sender(message: Message, _bot: Bot) -> bool:
+    """检测并处理频道马甲消息(统一处理函数)
+
+    Args:
+        message: 消息对象
+        bot: Bot 实例
+
+    Returns:
+        True 表示是频道马甲且已处理(调用者应直接 return)，False 表示不是频道马甲或未启用检测
+    """
+    # 检查是否是频道马甲
+    if not is_channel_as_sender(message):
+        return False
+
+    # 检查群组是否启用反频道马甲
+    try:
+        group = await GroupRepository.get(message.chat.id)
+        if group and not group.anti_channel_enabled:
+            logger.debug(f"群组 {message.chat.id} 未启用反频道马甲功能，跳过频道马甲检测")
+            return False
+
+        # 频道马甲消息：删除消息并警告
+        channel_title = message.sender_chat.title if message.sender_chat.title else "未知频道"
+        logger.warning(
+            f"检测到频道马甲消息 [群组:{message.chat.id}] "
+            f"[频道:{channel_title}({message.sender_chat.id})]"
+        )
+
+        # 删除消息
+        with contextlib.suppress(Exception):
+            await message.delete()
+
+        # 发送警告通知(如果有实际用户)
+        if message.from_user:
+            user_mention = format_user_mention(message.from_user)
+            warning_text = (
+                f"⚠️ {user_mention}\n\n"
+                f"检测到您使用频道身份 <b>{channel_title}</b> 发言。\n"
+                f"本群禁止使用频道马甲发言，您的消息已被删除。\n\n"
+                f"💡 请使用您的个人账号正常发言。"
+            )
+
+            # 发送警告并自动删除
+            warning_msg = await message.answer(warning_text, parse_mode="HTML")
+            await auto_delete_message(warning_msg, delay=30)
+
+            # 记录警告到数据库
+            moderation_service = ModerationService()
+            await moderation_service.add_warning(
+                message.chat.id, message.from_user.id, "使用频道马甲发言"
+            )
+        else:
+            # 没有实际用户信息，仅在群组发送提示
+            warning_text = (
+                f"⚠️ 检测到频道 <b>{channel_title}</b> 的消息。\n\n"
+                f"本群禁止使用频道身份发言，该消息已被删除。"
+            )
+            warning_msg = await message.answer(warning_text, parse_mode="HTML")
+            await auto_delete_message(warning_msg, delay=30)
+
+        logger.info(
+            f"已处理频道马甲消息 [群组:{message.chat.id}] [频道:{channel_title}({message.sender_chat.id})]"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"处理频道马甲消息失败: {e}")
+        return False
 
 
 async def check_non_text_message(
@@ -377,6 +469,117 @@ async def on_antispam_retrain(callback: CallbackQuery) -> None:
         await callback.answer("❌ 训练失败", show_alert=True)
 
 
+@router.message(Command("channel"))
+async def cmd_channel(message: Message, bot: Bot) -> None:
+    """反频道马甲配置命令"""
+    logger.debug(f"收到 /channel 命令 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
+
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        logger.debug("私聊模式，拒绝执行")
+        reply = await message.answer("❌ 此命令只能在群组中使用")
+        await auto_delete_message(reply)
+        return
+
+    # 检查权限（使用统一的权限检查函数）
+    if not await check_admin_permission(message, bot):
+        reply = await message.answer("❌ 只有管理员可以使用此命令")
+        await auto_delete_message(reply)
+        return
+
+    logger.debug("权限检查通过，准备查询当前配置")
+
+    # 获取当前配置
+    try:
+        group = await GroupRepository.get(message.chat.id)
+        current_status = "✅ 已启用" if (group and group.anti_channel_enabled) else "❌ 已禁用"
+    except Exception as e:
+        logger.error(f"获取群组配置失败: {e}")
+        current_status = "✅ 已启用(默认)"
+
+    # 显示配置菜单
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 启用反频道马甲",
+                    callback_data=f"channel_toggle:{message.chat.id}:on",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ 禁用反频道马甲",
+                    callback_data=f"channel_toggle:{message.chat.id}:off",
+                )
+            ],
+        ]
+    )
+
+    logger.debug("发送配置菜单消息")
+    reply = await message.answer(
+        f"🎭 <b>反频道马甲配置</b>\n\n"
+        f"当前状态: {current_status}\n\n"
+        f"💡 <b>说明</b>：\n"
+        f"• 启用后，禁止用户以频道身份发言\n"
+        f"• 频道马甲消息会被删除，并记录警告\n"
+        f"• 有助于减少广告和频道宣传",
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+    logger.debug(f"配置菜单已发送，消息ID: {reply.message_id}")
+    await auto_delete_message(reply)
+
+
+@router.callback_query(F.data.startswith("channel_toggle:"))
+async def on_channel_toggle(callback: CallbackQuery) -> None:
+    """处理反频道马甲开关"""
+    try:
+        _, chat_id_str, action = callback.data.split(":")
+        chat_id = int(chat_id_str)
+
+        # ✅ 权限验证
+        if callback.from_user.id not in settings.admin_ids:
+            # ✅ P1-10: 使用 Redis 缓存减少 API 调用
+            if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
+                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                logger.warning(
+                    f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 反频道马甲设置但无权限"
+                )
+                return
+
+        # ✅ 参数白名单验证
+        if action not in ["on", "off"]:
+            await callback.answer("❌ 无效的操作", show_alert=True)
+            logger.warning(f"收到无效的反频道马甲开关操作: {action}")
+            return
+
+        # 更新配置
+        enabled = action == "on"
+        group = await GroupRepository.get_or_create(chat_id)
+        group.anti_channel_enabled = enabled
+        await GroupRepository.update(group)
+
+        status_text = "✅ 已启用" if enabled else "❌ 已禁用"
+        await callback.answer(f"反频道马甲功能 {status_text}", show_alert=False)
+
+        # 更新消息
+        await callback.message.edit_text(
+            f"🎭 <b>反频道马甲配置</b>\n\n"
+            f"当前状态: {status_text}\n\n"
+            f"💡 <b>说明</b>：\n"
+            f"• 启用后，禁止用户以频道身份发言\n"
+            f"• 频道马甲消息会被删除，并记录警告\n"
+            f"• 有助于减少广告和频道宣传",
+            parse_mode="HTML",
+        )
+
+        logger.info(f"群组 {chat_id} 反频道马甲功能已{status_text}")
+
+    except Exception as e:
+        logger.error(f"处理反频道马甲开关失败: {e}")
+        await callback.answer("❌ 操作失败", show_alert=True)
+
+
 @router.message(F.text)
 async def on_message(message: Message, bot: Bot) -> None:
     """处理所有文本消息，检测垃圾"""
@@ -408,6 +611,15 @@ async def on_message(message: Message, bot: Bot) -> None:
         logger.debug(f"跳过匿名管理员文本消息 [群组:{message.chat.id}]")
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user，这里提前返回
+    if not message.from_user:
+        logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
+        return
+
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
         logger.debug(f"跳过超级管理员文本消息 [用户:{message.from_user.id}]")
@@ -435,9 +647,7 @@ async def on_message(message: Message, bot: Bot) -> None:
     is_special_message = is_external_forward(message) or has_url_entities(message)
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 记录活跃度（管理员已在上面跳过，不会记录）
     activity = None
@@ -573,6 +783,15 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         logger.debug(f"跳过匿名管理员图片消息 [群组:{message.chat.id}]")
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user，这里提前返回
+    if not message.from_user:
+        logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
+        return
+
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
         logger.debug(f"跳过超级管理员图片消息 [用户:{message.from_user.id}]")
@@ -594,12 +813,12 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # ✅ 活跃度检查（管理员已在上面跳过）
-    if await check_non_text_message(message, bot, "photo", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "photo", activity_enabled=activity_system_enabled
+    ):
         return  # 消息已被删除
 
     # 检查群组是否启用反垃圾
@@ -740,6 +959,15 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         logger.debug(f"跳过匿名管理员贴纸消息 [群组:{message.chat.id}]")
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user，这里提前返回
+    if not message.from_user:
+        logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
+        return
+
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
         logger.debug(f"跳过超级管理员贴纸消息 [用户:{message.from_user.id}]")
@@ -760,12 +988,12 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # ✅ 活跃度检查（管理员已在上面跳过）
-    if await check_non_text_message(message, bot, "sticker", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "sticker", activity_enabled=activity_system_enabled
+    ):
         return  # 消息已被删除
 
     # 检查群组是否启用反垃圾
@@ -916,9 +1144,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                                     if img.mode == "P":
                                         img = img.convert("RGBA")
                                     if img.mode in ("RGBA", "LA"):
-                                        background.paste(
-                                            img, mask=img.split()[-1]  # alpha channel
-                                        )
+                                        background.paste(img, mask=img.split()[-1])  # alpha channel
                                     else:
                                         background.paste(img)
                                     background.save(png_file_path, "PNG")
@@ -964,8 +1190,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             # WebP 文件应该以 "RIFF" 开头，并包含 "WEBP"
                             if not (header[:4] == b"RIFF" and header[8:12] == b"WEBP"):
                                 logger.error(
-                                    f"文件不是有效的 WebP 格式 "
-                                    f"(header: {header[:12].hex()})"
+                                    f"文件不是有效的 WebP 格式 " f"(header: {header[:12].hex()})"
                                 )
                                 return
 
@@ -1023,8 +1248,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         check_indices.append(frame_2_3)
 
                     logger.debug(
-                        f"将检测第 {check_indices} 帧 "
-                        f"(1/3 和 2/3 位置, 总帧数: {total_frames})"
+                        f"将检测第 {check_indices} 帧 " f"(1/3 和 2/3 位置, 总帧数: {total_frames})"
                     )
 
                     # 循环检测每一帧
@@ -1042,9 +1266,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             if img.mode != "RGB":
                                 img = img.convert("RGB")
                             img.save(png_file_path, "PNG")
-                            logger.debug(
-                                f"第 {frame_idx} 帧已保存为 PNG: {png_file_path}"
-                            )
+                            logger.debug(f"第 {frame_idx} 帧已保存为 PNG: {png_file_path}")
 
                             # 检测当前帧中的文字
                             result = await detector.detect_image(
@@ -1055,9 +1277,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 
                             # 如果检测到垃圾，立即停止检测
                             if result["is_spam"]:
-                                logger.info(
-                                    f"第 {frame_idx} 帧检测到垃圾，停止后续检测"
-                                )
+                                logger.info(f"第 {frame_idx} 帧检测到垃圾，停止后续检测")
                                 break
 
                 except Exception as e:
@@ -1166,6 +1386,14 @@ async def on_video_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
+    if not message.from_user:
+        return
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1180,12 +1408,12 @@ async def on_video_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 活跃度检查
-    if await check_non_text_message(message, bot, "video", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "video", activity_enabled=activity_system_enabled
+    ):
         return
 
 
@@ -1198,6 +1426,14 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
+    if not message.from_user:
+        return
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1212,12 +1448,12 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 活跃度检查
-    if await check_non_text_message(message, bot, "animation", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "animation", activity_enabled=activity_system_enabled
+    ):
         return
 
 
@@ -1230,6 +1466,14 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
+    if not message.from_user:
+        return
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1244,12 +1488,12 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 活跃度检查
-    if await check_non_text_message(message, bot, "voice", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "voice", activity_enabled=activity_system_enabled
+    ):
         return
 
 
@@ -1262,6 +1506,14 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
+    if not message.from_user:
+        return
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1276,12 +1528,12 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 活跃度检查
-    if await check_non_text_message(message, bot, "video_note", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "video_note", activity_enabled=activity_system_enabled
+    ):
         return
 
 
@@ -1294,6 +1546,14 @@ async def on_document_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
+    if not message.from_user:
+        return
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1308,12 +1568,12 @@ async def on_document_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 活跃度检查
-    if await check_non_text_message(message, bot, "document", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "document", activity_enabled=activity_system_enabled
+    ):
         return
 
 
@@ -1326,6 +1586,14 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
     if is_anonymous_admin(message):
         return
 
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
+    if not message.from_user:
+        return
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1340,12 +1608,12 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (
-        not group or group.activity_enabled
-    )
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
 
     # 活跃度检查
-    if await check_non_text_message(message, bot, "audio", activity_enabled=activity_system_enabled):
+    if await check_non_text_message(
+        message, bot, "audio", activity_enabled=activity_system_enabled
+    ):
         return
 
 

@@ -1,7 +1,7 @@
 """群管理命令处理器"""
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
@@ -494,13 +494,9 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         # 根据警告次数显示处罚提示
         if auto_punished:
             if warning_count >= settings.warning_ban_threshold:
-                response += (
-                    f"\n\n🚫 用户已达到 {settings.warning_ban_threshold} 次警告，已被封禁"
-                )
+                response += f"\n\n🚫 用户已达到 {settings.warning_ban_threshold} 次警告，已被封禁"
             elif warning_count >= settings.warning_kick_threshold:
-                response += (
-                    f"\n\n👢 用户已达到 {settings.warning_kick_threshold} 次警告，已被踢出"
-                )
+                response += f"\n\n👢 用户已达到 {settings.warning_kick_threshold} 次警告，已被踢出"
             elif warning_count >= settings.max_warnings:
                 response += (
                     f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，"
@@ -515,9 +511,9 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
                     f"{settings.warning_mute_duration_hours} 小时"
                 )
             elif warning_count == settings.warning_kick_threshold - 1:
-                response += f"\n\n💡 提示：再 1 次警告将被踢出群组"
+                response += "\n\n💡 提示：再 1 次警告将被踢出群组"
             elif warning_count == settings.warning_ban_threshold - 1:
-                response += f"\n\n💡 提示：再 1 次警告将被封禁"
+                response += "\n\n💡 提示：再 1 次警告将被封禁"
 
         reply = await message.answer(response)
         await auto_delete_message(reply)
@@ -903,9 +899,7 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             if not delete_all:
                 try:
                     await message.reply_to_message.delete()
-                    logger.debug(
-                        f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]"
-                    )
+                    logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
                 except Exception as e:
                     logger.debug(f"删除垃圾消息失败: {e}")
 

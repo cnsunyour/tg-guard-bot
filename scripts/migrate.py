@@ -124,11 +124,11 @@ async def show_statistics():
             stats_query = text("""
                 SELECT
                     schemaname,
-                    tablename,
+                    relname as tablename,
                     n_live_tup as row_count
                 FROM pg_stat_user_tables
                 WHERE schemaname = 'public'
-                ORDER BY tablename;
+                ORDER BY relname;
             """)
 
             result = await conn.execute(stats_query)
@@ -145,6 +145,107 @@ async def show_statistics():
         logger.error(f"获取统计信息失败: {e}")
 
 
+async def execute_migrations():
+    """执行 migrations 目录中的 SQL 迁移文件"""
+    logger.info("开始执行 SQL 迁移...")
+
+    # 获取 migrations 目录
+    migrations_dir = Path(__file__).parent.parent / "migrations"
+
+    if not migrations_dir.exists():
+        logger.warning(f"migrations 目录不存在: {migrations_dir}")
+        return True
+
+    # 获取所有 .sql 文件并排序
+    sql_files = sorted(migrations_dir.glob("*.sql"))
+
+    if not sql_files:
+        logger.info("没有找到 SQL 迁移文件")
+        return True
+
+    # 创建 schema_migrations 表来跟踪已执行的迁移
+    # 兼容现有表结构：version, applied_at, description
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version VARCHAR(255) PRIMARY KEY,
+                    applied_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    description TEXT
+                );
+            """)
+            )
+    except Exception as e:
+        logger.error(f"创建 schema_migrations 表失败: {e}")
+        return False
+
+    # 执行每个迁移文件
+    success_count = 0
+    skip_count = 0
+    error_count = 0
+
+    for sql_file in sql_files:
+        filename = sql_file.name
+
+        try:
+            async with engine.begin() as conn:
+                # 检查是否已执行（使用 version 字段存储文件名）
+                result = await conn.execute(
+                    text("SELECT COUNT(*) FROM schema_migrations WHERE version = :version"),
+                    {"version": filename},
+                )
+                count = result.scalar()
+
+                if count > 0:
+                    logger.debug(f"⏭️  跳过已执行的迁移: {filename}")
+                    skip_count += 1
+                    continue
+
+                # 读取并执行 SQL 文件
+                logger.info(f"🔄 执行迁移: {filename}")
+                sql_content = sql_file.read_text(encoding="utf-8")
+
+                # 提取描述（从文件的第二行注释中）
+                description = ""
+                for line in sql_content.split("\n"):
+                    if line.startswith("-- Description:"):
+                        description = line.replace("-- Description:", "").strip()
+                        break
+
+                # 执行 SQL（可能包含多个语句）
+                for statement in sql_content.split(";"):
+                    statement = statement.strip()
+                    if statement and not statement.startswith("--"):
+                        await conn.execute(text(statement))
+
+                # 记录已执行的迁移
+                await conn.execute(
+                    text(
+                        """
+                    INSERT INTO schema_migrations (version, description)
+                    VALUES (:version, :description)
+                """
+                    ),
+                    {"version": filename, "description": description},
+                )
+
+                logger.info(f"✅ 迁移成功: {filename}")
+                success_count += 1
+
+        except Exception as e:
+            logger.error(f"❌ 迁移失败 {filename}: {e}")
+            error_count += 1
+            # 继续执行其他迁移，不中断
+
+    # 总结
+    logger.info(
+        f"=== 迁移执行完成: 成功 {success_count}, 跳过 {skip_count}, 失败 {error_count} ==="
+    )
+
+    return error_count == 0
+
+
 async def main():
     """主函数"""
     import argparse
@@ -153,6 +254,7 @@ async def main():
     parser.add_argument("--check", action="store_true", help="检查数据库连接和状态")
     parser.add_argument("--create", action="store_true", help="创建数据库表")
     parser.add_argument("--indexes", action="store_true", help="创建数据库索引")
+    parser.add_argument("--migrations", action="store_true", help="执行 SQL 迁移文件")
     parser.add_argument("--stats", action="store_true", help="显示数据库统计")
 
     args = parser.parse_args()
@@ -162,7 +264,7 @@ async def main():
 
     try:
         # 如果没有指定参数，执行完整迁移
-        if not any([args.check, args.create, args.indexes, args.stats]):
+        if not any([args.check, args.create, args.indexes, args.migrations, args.stats]):
             logger.info("=== 执行完整数据库迁移 ===")
 
             # 1. 检查数据库
@@ -180,7 +282,12 @@ async def main():
                 logger.error("索引创建失败，终止迁移")
                 sys.exit(1)
 
-            # 4. 显示统计
+            # 4. 执行 SQL 迁移
+            if not await execute_migrations():
+                logger.error("SQL 迁移执行失败，终止迁移")
+                sys.exit(1)
+
+            # 5. 显示统计
             await show_statistics()
 
             logger.info("=== 数据库迁移完成 ===")
@@ -195,6 +302,9 @@ async def main():
 
             if args.indexes:
                 await create_indexes()
+
+            if args.migrations:
+                await execute_migrations()
 
             if args.stats:
                 await show_statistics()

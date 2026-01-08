@@ -107,9 +107,7 @@ async def check_user_spam_info(
     return False  # 通过检测
 
 
-async def generate_verification_challenge(
-    group, chat_id: int, user_id: int, username: str
-):
+async def generate_verification_challenge(group, chat_id: int, user_id: int, username: str):
     """根据群组配置生成验证挑战
 
     Args:
@@ -178,9 +176,7 @@ async def send_verification_message(
     chat_title = escape_html(chat.title) if chat.title else "群组"
 
     # 构造消息文本（使用 HTML 格式以防注入）
-    message_text = (
-        f"📢 <b>{message_title}</b>\n\n{message_prefix}：<b>{chat_title}</b>\n\n{challenge.question}"
-    )
+    message_text = f"📢 <b>{message_title}</b>\n\n{message_prefix}：<b>{chat_title}</b>\n\n{challenge.question}"
 
     # 根据是否有图片选择发送方式
     if challenge.photo:
@@ -705,7 +701,7 @@ async def on_honeypot_verify(callback: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("verify_captcha_input:"))
-async def on_captcha_input_request(callback: CallbackQuery, bot: Bot) -> None:
+async def on_captcha_input_request(callback: CallbackQuery, _bot: Bot) -> None:
     """处理验证码输入请求 - 私聊模式"""
     try:
         _, chat_id_str, user_id_str = callback.data.split(":")
@@ -865,9 +861,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 async def delayed_delete():
                     await asyncio.sleep(30)
                     with contextlib.suppress(Exception):
-                        await bot.delete_message(
-                            chat_id=chat_id, message_id=welcome_msg.message_id
-                        )
+                        await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
 
                 asyncio.create_task(delayed_delete())
 
@@ -1049,7 +1043,9 @@ async def handle_verification_timeout(
             # 3. ✅ 在私聊中通知用户（可选）
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
+                chat_title = (
+                    escape_html(chat.title) if chat.title else "群组"
+                )  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
                     text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时，请重新加入并在规定时间内完成验证。",
@@ -1088,7 +1084,9 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "本群组"  # ✅ 安全修复：转义 HTML
+                chat_title = (
+                    escape_html(chat.title) if chat.title else "本群组"
+                )  # ✅ 安全修复：转义 HTML
             except Exception:
                 chat_title = "本群组"
 
@@ -1206,7 +1204,9 @@ async def handle_join_request_timeout(
             # 3. 在私聊中通知用户（可选）
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
+                chat_title = (
+                    escape_html(chat.title) if chat.title else "群组"
+                )  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
                     text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
@@ -1246,7 +1246,9 @@ async def handle_user_not_started_bot_for_join_request(
             # 获取群组信息
             try:
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "本群组"  # ✅ 安全修复：转义 HTML
+                chat_title = (
+                    escape_html(chat.title) if chat.title else "本群组"
+                )  # ✅ 安全修复：转义 HTML
             except Exception:
                 chat_title = "本群组"
 

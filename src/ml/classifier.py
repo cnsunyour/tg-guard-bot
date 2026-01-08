@@ -272,9 +272,9 @@ class SpamClassifier:
             # 3. 生产环境强制禁用 allow_unsigned_models
             if not settings.debug and settings.allow_unsigned_models:
                 logger.error(
-                    f"🔒 生产环境禁止启用 ALLOW_UNSIGNED_MODELS\n"
-                    f"这会允许加载未签名模型，存在 RCE 风险\n"
-                    f"请设置 ALLOW_UNSIGNED_MODELS=false"
+                    "🔒 生产环境禁止启用 ALLOW_UNSIGNED_MODELS\n"
+                    "这会允许加载未签名模型，存在 RCE 风险\n"
+                    "请设置 ALLOW_UNSIGNED_MODELS=false"
                 )
                 return False
 

@@ -288,7 +288,11 @@ class ModerationService:
                 operator_id=operator_id,
                 action="ban_temp",
                 target_user_id=user_id,
-                details={"reason": reason, "duration_minutes": duration} if reason else {"duration_minutes": duration},
+                details=(
+                    {"reason": reason, "duration_minutes": duration}
+                    if reason
+                    else {"duration_minutes": duration}
+                ),
             )
 
             logger.info(f"用户 {user_id} 被管理员 {operator_id} 踢出并封禁 {duration} 分钟")
