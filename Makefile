@@ -204,18 +204,50 @@ db-migrate:
 	docker-compose exec bot python scripts/migrate.py
 	@echo "✅ 数据库迁移完成"
 
-db-backup:
-	@mkdir -p backups
-	docker-compose exec -T postgres pg_dump -U postgres tg_guard > backups/backup_$$(date +%Y%m%d_%H%M%S).sql
-	@echo "✅ 数据库已备份到 backups/"
-
-db-restore:
-	@read -p "输入备份文件名 (backups/backup_YYYYMMDD_HHMMSS.sql): " backup_file; \
-	docker-compose exec -T postgres psql -U postgres tg_guard < $$backup_file
-	@echo "✅ 数据库已恢复"
-
 db-shell:
 	docker-compose exec postgres psql -U postgres -d tg_guard
+
+# 自动备份（PostgreSQL + Redis + GFS 轮转）
+backup:
+	python scripts/backup.py
+	@echo "✅ 自动备份完成（PostgreSQL + Redis）"
+
+backup-postgres:
+	python scripts/backup.py --postgres
+	@echo "✅ PostgreSQL 备份完成"
+
+backup-redis:
+	python scripts/backup.py --redis
+	@echo "✅ Redis 备份完成"
+
+backup-list:
+	python scripts/backup.py --list
+
+backup-cleanup:
+	python scripts/backup.py --cleanup
+	@echo "✅ 过期备份已清理"
+
+backup-restore-postgres:
+	@if [ -z "$(FILE)" ]; then \
+		echo "错误: 请指定备份文件，例如: make backup-restore-postgres FILE=backups/daily/postgres_20260109.sql"; \
+		exit 1; \
+	fi
+	python scripts/backup.py --restore-postgres $(FILE)
+	@echo "✅ PostgreSQL 已恢复"
+
+backup-restore-redis:
+	@if [ -z "$(FILE)" ]; then \
+		echo "错误: 请指定备份文件，例如: make backup-restore-redis FILE=backups/daily/redis_20260109.rdb"; \
+		exit 1; \
+	fi
+	@echo "⚠️  警告: Redis 恢复需要重启容器"
+	docker-compose stop redis
+	python scripts/backup.py --restore-redis $(FILE)
+	docker-compose start redis
+	@echo "✅ Redis 已恢复并重启"
+
+backup-setup-cron:
+	@bash scripts/setup_cron.sh
 
 # 模型训练
 train-samples:

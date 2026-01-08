@@ -54,6 +54,7 @@ logs/
 *.sql
 *.dump
 backup/
+backups/  # 自动备份目录
 
 # 例外：允许提交数据库迁移文件
 !migrations/*.sql
