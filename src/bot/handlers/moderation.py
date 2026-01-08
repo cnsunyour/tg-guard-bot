@@ -472,6 +472,16 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         # 命令参数模式: /warn <用户ID> [原因]
         reason = parts[2] if len(parts) > 2 else None
 
+    # 检查目标用户是否是管理员
+    try:
+        target_member = await bot.get_chat_member(message.chat.id, target_user_id)
+        if target_member.status in ["creator", "administrator"]:
+            reply = await message.answer("❌ 无法对群组管理员执行此操作")
+            await auto_delete_message(reply)
+            return
+    except Exception as e:
+        logger.debug(f"检查目标用户管理员身份失败: {e}")
+
     # 执行警告
     success, warning_count, auto_punished = await ModerationService.warn_user(
         bot=bot,
@@ -882,6 +892,16 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
     is_admin = await check_admin_permission_strict_message(message, bot)
 
     if is_admin:
+        # 检查目标用户是否是管理员
+        try:
+            target_member = await bot.get_chat_member(message.chat.id, target_user_id)
+            if target_member.status in ["creator", "administrator"]:
+                reply = await message.answer("❌ 无法对群组管理员执行此操作")
+                await auto_delete_message(reply)
+                return
+        except Exception as e:
+            logger.debug(f"检查目标用户管理员身份失败: {e}")
+
         # 管理员模式：直接封禁+删除+训练库
         success, error_msg = await ModerationService.ban_user(
             bot=bot,

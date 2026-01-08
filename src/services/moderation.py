@@ -358,6 +358,12 @@ class ModerationService:
             (是否成功, 累计警告次数, 是否触发自动处罚)
         """
         try:
+            # 验证目标用户不是管理员
+            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not not_admin:
+                logger.warning(f"尝试警告管理员 {user_id}，操作已阻止")
+                return False, 0, False
+
             # 添加警告
             await UserRepository.add_warning(
                 group_id=chat_id, user_id=user_id, reason=reason, issued_by=operator_id
