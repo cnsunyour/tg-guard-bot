@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="日志级别")
     debug: bool = Field(default=False, description="调试模式")
 
+    # Sentry 配置
+    sentry_dsn: str | None = Field(default=None, description="Sentry DSN（用于错误监控）")
+    sentry_environment: str = Field(default="production", description="Sentry 环境标识")
+    sentry_traces_sample_rate: float = Field(
+        default=1.0, description="Sentry 性能监控采样率（0.0-1.0）"
+    )
+
     # 反垃圾配置
     spam_threshold_rule: float = Field(default=0.8, description="规则引擎阈值")
     spam_threshold_ml: float = Field(default=0.7, description="ML 分类器阈值")
