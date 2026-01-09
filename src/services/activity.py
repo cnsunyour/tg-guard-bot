@@ -99,9 +99,7 @@ class ActivityService:
         await redis.set(activity_key, str(new_activity))
         await redis.set(last_date_key, date.today().isoformat())
 
-        logger.debug(
-            f"活跃度增加 [群组:{chat_id}] [用户:{user_id}] {current} -> {new_activity}"
-        )
+        logger.debug(f"活跃度增加 [群组:{chat_id}] [用户:{user_id}] {current} -> {new_activity}")
 
         return new_activity
 
@@ -148,9 +146,7 @@ class ActivityService:
         await redis.set(activity_key, str(new_activity))
         await redis.set(last_date_key, date.today().isoformat())
 
-        logger.debug(
-            f"活跃度减少 [群组:{chat_id}] [用户:{user_id}] {current} -> {new_activity}"
-        )
+        logger.debug(f"活跃度减少 [群组:{chat_id}] [用户:{user_id}] {current} -> {new_activity}")
 
         return new_activity
 

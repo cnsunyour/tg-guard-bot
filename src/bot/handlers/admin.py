@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 
+from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.health import get_health_checker
 from src.core.utils import auto_delete_message, check_admin_permission, escape_html
@@ -269,12 +270,11 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
             return
 
         # 更新群组配置
-        group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+        await GroupRepository.get_or_create(message.chat.id, message.chat.title)
         await GroupRepository.update_verification_timeout(message.chat.id, timeout)
 
         reply = await message.answer(
-            f"✅ 已设置验证超时时间为 {timeout} 秒\n\n"
-            "所有新加入的用户将使用此超时时间进行验证。"
+            f"✅ 已设置验证超时时间为 {timeout} 秒\n\n" "所有新加入的用户将使用此超时时间进行验证。"
         )
         await auto_delete_message(reply)
 

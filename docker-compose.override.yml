@@ -11,6 +11,7 @@ services:
     volumes:
       - ./src:/app/src:ro           # 只读挂载源代码
       - ./scripts:/app/scripts:ro   # 只读挂载脚本
+      - ./migrations:/app/migrations:ro  # 只读挂载迁移脚本
       - ./data/models:/app/data/models
       - ./logs:/app/logs
 

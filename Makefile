@@ -8,12 +8,14 @@ help:
 	@echo "  make install         - 安装生产依赖"
 	@echo "  make install-dev     - 安装开发依赖"
 	@echo "  make install-all     - 安装所有依赖（包括 OCR）"
+	@echo "  make deps-update     - 更新所有依赖到最新版本"
 	@echo ""
 	@echo "🧪 测试:"
 	@echo "  make test            - 运行所有测试"
 	@echo "  make test-cov        - 运行测试并生成覆盖率报告"
 	@echo "  make test-unit       - 仅运行单元测试"
 	@echo "  make test-integration - 仅运行集成测试"
+	@echo "  make test-watch      - 监控模式运行测试（文件变化自动重跑）"
 	@echo ""
 	@echo "✨ 代码质量:"
 	@echo "  make lint            - 运行代码检查（ruff + mypy）"
@@ -42,9 +44,17 @@ help:
 	@echo ""
 	@echo "🗄️  数据库:"
 	@echo "  make db-migrate      - 运行数据库迁移"
-	@echo "  make db-backup       - 备份数据库"
-	@echo "  make db-restore      - 恢复数据库"
 	@echo "  make db-shell        - 进入数据库 Shell"
+	@echo ""
+	@echo "💾 备份与恢复（GFS 轮转策略）:"
+	@echo "  make backup          - 自动备份（PostgreSQL + Redis）"
+	@echo "  make backup-postgres - 仅备份 PostgreSQL"
+	@echo "  make backup-redis    - 仅备份 Redis"
+	@echo "  make backup-list     - 列出所有备份文件"
+	@echo "  make backup-cleanup  - 清理过期备份"
+	@echo "  make backup-restore-postgres FILE=<文件> - 恢复 PostgreSQL"
+	@echo "  make backup-restore-redis FILE=<文件>    - 恢复 Redis"
+	@echo "  make backup-setup-cron                   - 设置自动备份定时任务"
 	@echo ""
 	@echo "🤖 模型训练:"
 	@echo "  make train-samples   - 添加示例训练数据"
@@ -54,6 +64,9 @@ help:
 	@echo "  make clean           - 清理临时文件"
 	@echo "  make clean-all       - 清理所有数据（包括数据库）"
 	@echo "  make status          - 查看服务状态"
+	@echo ""
+	@echo "🚢 CI/CD:"
+	@echo "  make ci              - 运行完整 CI 检查（格式化 + lint + 安全 + 测试）"
 
 # ============================================================================
 # 安装和依赖管理
@@ -204,18 +217,50 @@ db-migrate:
 	docker-compose exec bot python scripts/migrate.py
 	@echo "✅ 数据库迁移完成"
 
-db-backup:
-	@mkdir -p backups
-	docker-compose exec -T postgres pg_dump -U postgres tg_guard > backups/backup_$$(date +%Y%m%d_%H%M%S).sql
-	@echo "✅ 数据库已备份到 backups/"
-
-db-restore:
-	@read -p "输入备份文件名 (backups/backup_YYYYMMDD_HHMMSS.sql): " backup_file; \
-	docker-compose exec -T postgres psql -U postgres tg_guard < $$backup_file
-	@echo "✅ 数据库已恢复"
-
 db-shell:
 	docker-compose exec postgres psql -U postgres -d tg_guard
+
+# 自动备份（PostgreSQL + Redis + GFS 轮转）
+backup:
+	python scripts/backup.py
+	@echo "✅ 自动备份完成（PostgreSQL + Redis）"
+
+backup-postgres:
+	python scripts/backup.py --postgres
+	@echo "✅ PostgreSQL 备份完成"
+
+backup-redis:
+	python scripts/backup.py --redis
+	@echo "✅ Redis 备份完成"
+
+backup-list:
+	python scripts/backup.py --list
+
+backup-cleanup:
+	python scripts/backup.py --cleanup
+	@echo "✅ 过期备份已清理"
+
+backup-restore-postgres:
+	@if [ -z "$(FILE)" ]; then \
+		echo "错误: 请指定备份文件，例如: make backup-restore-postgres FILE=backups/daily/postgres_20260109.sql"; \
+		exit 1; \
+	fi
+	python scripts/backup.py --restore-postgres $(FILE)
+	@echo "✅ PostgreSQL 已恢复"
+
+backup-restore-redis:
+	@if [ -z "$(FILE)" ]; then \
+		echo "错误: 请指定备份文件，例如: make backup-restore-redis FILE=backups/daily/redis_20260109.rdb"; \
+		exit 1; \
+	fi
+	@echo "⚠️  警告: Redis 恢复需要重启容器"
+	docker-compose stop redis
+	python scripts/backup.py --restore-redis $(FILE)
+	docker-compose start redis
+	@echo "✅ Redis 已恢复并重启"
+
+backup-setup-cron:
+	@bash scripts/setup_cron.sh
 
 # 模型训练
 train-samples:

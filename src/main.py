@@ -3,10 +3,12 @@
 import asyncio
 import sys
 
+import sentry_sdk
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from loguru import logger
+from sentry_sdk.integrations.loguru import LoguruIntegration
 
 from src.core.config import settings
 from src.core.database import close_db, init_db
@@ -20,6 +22,11 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    # ✅ 注册 Session 层中间件：处理 Telegram API 速率限制 (429)
+    from src.bot.middlewares import RetryAfterMiddleware
+
+    bot.session.middleware(RetryAfterMiddleware(max_retries=3))
 
     dp = Dispatcher()
 
@@ -104,6 +111,30 @@ async def on_shutdown() -> None:
 
 async def main() -> None:
     """主函数"""
+    # 初始化 Sentry（如果配置了 DSN）
+    if settings.sentry_dsn:
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.sentry_environment,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            # 集成 Loguru 日志
+            integrations=[
+                LoguruIntegration(
+                    level=None,  # 捕获所有 Loguru 日志级别
+                    event_level="ERROR",  # 仅 ERROR 及以上级别创建 Sentry 事件
+                )
+            ],
+            # 发布版本（使用项目版本）
+            release="tg-guard-bot@0.1.0",
+            # 附加上下文
+            attach_stacktrace=True,
+            # 过滤敏感数据
+            send_default_pii=False,
+        )
+        logger.info(f"✅ Sentry 已初始化 (环境: {settings.sentry_environment})")
+    else:
+        logger.info("⚠️ Sentry DSN 未配置，跳过 Sentry 初始化")
+
     # 配置日志
     # 移除默认的 stderr handler
     logger.remove()

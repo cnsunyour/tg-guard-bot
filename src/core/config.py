@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="日志级别")
     debug: bool = Field(default=False, description="调试模式")
 
+    # Sentry 配置
+    sentry_dsn: str | None = Field(default=None, description="Sentry DSN（用于错误监控）")
+    sentry_environment: str = Field(default="production", description="Sentry 环境标识")
+    sentry_traces_sample_rate: float = Field(
+        default=1.0, description="Sentry 性能监控采样率（0.0-1.0）"
+    )
+
     # 反垃圾配置
     spam_threshold_rule: float = Field(default=0.8, description="规则引擎阈值")
     spam_threshold_ml: float = Field(default=0.7, description="ML 分类器阈值")
@@ -47,7 +54,9 @@ class Settings(BaseSettings):
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数（触发禁言）")
     warning_expiration_days: int = Field(default=7, description="警告有效期（天）")
-    warning_mute_duration_hours: int = Field(default=24, description="警告达到阈值后的禁言时长（小时）")
+    warning_mute_duration_hours: int = Field(
+        default=24, description="警告达到阈值后的禁言时长（小时）"
+    )
     warning_kick_threshold: int = Field(default=5, description="踢出群组阈值（次）")
     warning_ban_threshold: int = Field(default=7, description="封禁阈值（次，踢出+拉黑）")
 
@@ -93,7 +102,9 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if self.db_password == "postgres":
+            if (
+                self.db_password == "postgres"
+            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"
