@@ -808,12 +808,12 @@ async def _show_activity_skip_config(
         "• 设置为 0 表示禁用此功能\n"
         "• 建议阈值：50-200（根据群组活跃度调整）\n\n"
         "<b>配置优先级：</b>\n"
-        "• 全局阈值 > 0：使用全局配置（所有群组统一）\n"
+        "• 全局阈值 &gt; 0：使用全局配置（所有群组统一）\n"
         "• 全局阈值 = 0：使用群组配置（每个群组独立）\n"
-        "• 全局阈值 < 0：全局禁用（所有群组都不跳过）\n\n"
+        "• 全局阈值 &lt; 0：全局禁用（所有群组都不跳过）\n\n"
         "<b>用法：</b>\n"
         "• /activityskip - 查看当前配置\n"
-        "• /activityskip &lt;阈值&gt; - 设置群组阈值"
+        "• /activityskip <code>[阈值]</code> - 设置群组阈值"
     )
 
     reply = await message.answer(text)
