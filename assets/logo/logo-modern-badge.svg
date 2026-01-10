@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0088cc;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#0099dd;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00d4aa;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="0" dy="4" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.3"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 外圈装饰 -->
+  <circle cx="256" cy="256" r="235" fill="none" stroke="url(#mainGradient)" stroke-width="3" opacity="0.3"/>
+  <circle cx="256" cy="256" r="220" fill="none" stroke="url(#mainGradient)" stroke-width="2" opacity="0.2"/>
+
+  <!-- 主盾牌 -->
+  <g filter="url(#shadow)">
+    <path d="M 256 60
+             L 400 110
+             Q 410 120, 410 135
+             L 410 280
+             Q 410 360, 350 420
+             Q 300 465, 256 485
+             Q 212 465, 162 420
+             Q 102 360, 102 280
+             L 102 135
+             Q 102 120, 112 110
+             L 256 60 Z"
+          fill="url(#mainGradient)"/>
+  </g>
+
+  <!-- 盾牌内部装饰线条 -->
+  <path d="M 256 75
+           L 385 120
+           Q 393 128, 393 140
+           L 393 275
+           Q 393 345, 340 400
+           Q 295 440, 256 458"
+        fill="none"
+        stroke="#ffffff"
+        stroke-width="2"
+        opacity="0.4"/>
+
+  <!-- 中心 "G" 字母 (Guard) -->
+  <g transform="translate(256, 250)">
+    <!-- G 外圈 -->
+    <circle r="80" fill="none" stroke="#ffffff" stroke-width="18" opacity="0.95"/>
+    <!-- G 缺口 -->
+    <path d="M 56 0 L 80 0 L 80 45 L 30 45" fill="none" stroke="#0088cc" stroke-width="18" stroke-linecap="round"/>
+    <!-- G 横线 -->
+    <line x1="0" y1="45" x2="50" y2="45" stroke="#ffffff" stroke-width="18" stroke-linecap="round" opacity="0.95"/>
+  </g>
+
+  <!-- 底部装饰文字区域 (可选) -->
+  <text x="256" y="470" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#0088cc" text-anchor="middle" opacity="0.8">GUARD</text>
+
+  <!-- 顶部小图标：AI 标识 -->
+  <g transform="translate(256, 140)">
+    <circle r="18" fill="#00d4aa"/>
+    <text x="0" y="7" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="middle">AI</text>
+  </g>
+</svg>

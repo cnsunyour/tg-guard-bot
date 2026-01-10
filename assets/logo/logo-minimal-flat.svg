@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0088cc;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00d4aa;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- 圆形背景 -->
+  <circle cx="256" cy="256" r="240" fill="url(#bgGradient)"/>
+
+  <!-- 盾牌简化形状 -->
+  <path d="M 256 100
+           L 370 140
+           L 370 260
+           Q 370 340, 256 410
+           Q 142 340, 142 260
+           L 142 140
+           L 256 100 Z"
+        fill="#ffffff"
+        opacity="0.95"/>
+
+  <!-- 勾号 + 盾牌中心设计 -->
+  <g transform="translate(256, 240)">
+    <!-- 大勾号 -->
+    <path d="M -60 -10 L -20 35 L 70 -60"
+          fill="none"
+          stroke="#0088cc"
+          stroke-width="22"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+  </g>
+
+  <!-- 装饰小圆点 (代表 AI 智能节点) -->
+  <circle cx="256" cy="150" r="8" fill="#00d4aa"/>
+  <circle cx="200" cy="200" r="6" fill="#00d4aa" opacity="0.7"/>
+  <circle cx="312" cy="200" r="6" fill="#00d4aa" opacity="0.7"/>
+  <circle cx="190" cy="280" r="6" fill="#00d4aa" opacity="0.7"/>
+  <circle cx="322" cy="280" r="6" fill="#00d4aa" opacity="0.7"/>
+
+  <!-- 底部装饰带 -->
+  <rect x="80" y="430" width="352" height="50" rx="25" fill="#ffffff" opacity="0.2"/>
+  <text x="256" y="462" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#ffffff" text-anchor="middle">TG GUARD</text>
+</svg>
