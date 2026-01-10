@@ -20,19 +20,19 @@ class AISpamDetector:
 严格按照以下 JSON 格式返回结果：
 {
   "is_spam": true 或 false,
-  "confidence": 0.0-1.0 之间的数字,
+  "confidence": 0.0-1.0 之间的数字（保留两位小数，如 0.85）,
   "reason": "简短说明判断理由（一句话）"
 }
 
 **重要：confidence 的语义定义**
-confidence 始终表示"是垃圾"的置信度/概率：
-- 如果判定为垃圾（is_spam=true），confidence 应该较高（如 0.9 = 90% 确信是垃圾）
-- 如果判定为正常（is_spam=false），confidence 应该较低（如 0.1 = 10% 可能是垃圾）
+confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
+- 如果判定为垃圾（is_spam=true），confidence 应该较高（如 0.90 = 90% 确信是垃圾）
+- 如果判定为正常（is_spam=false），confidence 应该较低（如 0.10 = 10% 可能是垃圾）
 
 示例：
 1. 明显的垃圾广告 → {"is_spam": true, "confidence": 0.95, "reason": "包含明显广告推广"}
 2. 正常技术讨论 → {"is_spam": false, "confidence": 0.05, "reason": "正常技术交流内容"}
-3. 稍可疑的消息 → {"is_spam": false, "confidence": 0.3, "reason": "内容略有推广倾向但可能是正常分享"}
+3. 稍可疑的消息 → {"is_spam": false, "confidence": 0.30, "reason": "内容略有推广倾向但可能是正常分享"}
 
 判断标准：
 - 广告推广：加微信、领红包、点击链接、扫码关注等
