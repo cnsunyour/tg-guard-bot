@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""测试 Sentry 集成"""
+"""测试 Sentry 集成和敏感数据过滤"""
 
 import sys
 from pathlib import Path
@@ -22,6 +22,7 @@ print(f"✓ 采样率: {settings.sentry_traces_sample_rate}")
 if settings.sentry_dsn:
     import sentry_sdk
     from sentry_sdk.integrations.loguru import LoguruIntegration
+    from src.main import before_send
 
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
@@ -36,20 +37,59 @@ if settings.sentry_dsn:
         release="tg-guard-bot@0.1.0",
         attach_stacktrace=True,
         send_default_pii=False,
+        before_send=before_send,  # 使用敏感数据过滤钩子
     )
 
     print("\n✓ Sentry SDK 初始化成功")
+    print("✓ 已启用敏感数据过滤")
+
+    # 测试敏感数据过滤
+    print("\n" + "=" * 60)
+    print("测试敏感数据过滤功能")
+    print("=" * 60)
+
+    # 模拟一个包含 Bot Token 的错误
+    fake_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyz012345678"
+    fake_url = f"https://api.telegram.org/bot{fake_token}/getUpdates"
+
+    print(f"\n测试数据:")
+    print(f"  假 Token: {fake_token}")
+    print(f"  假 URL: {fake_url}")
+
+    # 测试过滤函数
+    test_event = {
+        "message": f"Failed to fetch from {fake_url}",
+        "exception": {
+            "values": [{
+                "value": f"Cannot connect to bot {fake_token}"
+            }]
+        }
+    }
+
+    filtered_event = before_send(test_event.copy(), None)
+
+    print(f"\n过滤前的消息: {test_event['message']}")
+    print(f"过滤后的消息: {filtered_event['message']}")
+    print(f"\n过滤前的异常: {test_event['exception']['values'][0]['value']}")
+    print(f"过滤后的异常: {filtered_event['exception']['values'][0]['value']}")
+
+    if "[FILTERED_BOT_TOKEN]" in filtered_event['message']:
+        print("\n✅ 敏感数据过滤测试通过！Token 已被正确过滤")
+    else:
+        print("\n❌ 敏感数据过滤测试失败！Token 未被过滤")
 
     # 测试发送一个测试事件（可选）
-    choice = input("\n是否发送测试事件到 Sentry? (y/N): ").strip().lower()
+    print("\n" + "=" * 60)
+    choice = input("是否发送测试事件到 Sentry? (y/N): ").strip().lower()
     if choice == 'y':
-        print("\n发送测试事件...")
+        print("\n发送测试事件（包含假 Token，应被过滤）...")
         try:
-            # 触发一个测试异常
-            1 / 0
-        except ZeroDivisionError:
+            # 触发一个包含 Token 的测试异常
+            raise ValueError(f"Test error with token: {fake_token} and URL: {fake_url}")
+        except ValueError:
             sentry_sdk.capture_exception()
-            print("✓ 测试事件已发送，请在 Sentry 控制台查看")
+            print("✓ 测试事件已发送")
+            print("✓ 请在 Sentry 控制台查看，Token 应显示为 [FILTERED_BOT_TOKEN]")
     else:
         print("✓ 跳过发送测试事件")
 else:
