@@ -669,6 +669,31 @@ async def on_message(message: Message, bot: Bot) -> None:
                 message.chat.id, message.from_user.id
             )
 
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled and activity is not None:
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 确定最终阈值（全局配置优先）
+        if global_threshold > 0:
+            # 全局阈值 > 0：使用全局配置
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            # 全局阈值 = 0：使用群组配置
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            # 全局阈值 < 0：全局禁用
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            return  # 直接返回，不进行垃圾检测
+
     # 获取检测器
     detector = get_detector()
 

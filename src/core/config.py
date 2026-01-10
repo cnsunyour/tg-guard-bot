@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     activity_max_confidence_reduction: float = Field(
         default=0.15, description="活跃度最大置信度减少值（用于反垃圾检测）"
     )
+    activity_skip_spam_check_threshold: int = Field(
+        default=0,
+        description="活跃度跳过垃圾检测全局阈值（>0=全局统一阈值，=0=使用群组配置，<0=全局禁用）",
+    )
 
     # AI 模型路径
     ml_model_path: str = Field(default="data/models/spam_classifier.pkl", description="ML 模型路径")

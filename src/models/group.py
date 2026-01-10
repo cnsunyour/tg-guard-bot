@@ -41,6 +41,11 @@ class Group(Base):
     activity_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, comment="是否启用活跃度系统"
     )
+    activity_skip_threshold: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="活跃度跳过垃圾检测阈值（0=禁用，>0=启用并使用此阈值）",
+    )
 
     # 白名单配置
     is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否在白名单中")
