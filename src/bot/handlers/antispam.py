@@ -1655,6 +1655,16 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             logger.debug(
                 f"使用缓存文本添加反馈 [消息ID:{message_id_str}] [长度:{len(cached_text)}]"
             )
+
+            # 检查是否需要自动训练
+            try:
+                triggered, train_message = await detector.check_and_auto_train(
+                    admin_ids=settings.admin_ids, threshold=50
+                )
+                if triggered:
+                    logger.info(f"反馈添加后触发自动训练: {train_message}")
+            except Exception as e:
+                logger.error(f"检查自动训练失败: {e}")
         else:
             # 缓存已过期或不存在，记录警告但仍然接受反馈
             logger.warning(
