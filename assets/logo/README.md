@@ -162,8 +162,7 @@ assets/logo/
 
 **横幅**
 ```
-├── banner-horizontal.png      # 800×200 (28KB)
-└── banner-horizontal-512.png  # 512×512 正方形版本 (37KB)
+└── banner-horizontal.png      # 800×200 (28KB)
 ```
 
 ---
