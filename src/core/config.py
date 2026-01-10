@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     ai_spam_timeout: int = Field(default=10, description="超时时间（秒）")
     ai_spam_max_retries: int = Field(default=2, description="最大重试次数")
     ai_spam_auto_train: bool = Field(default=True, description="是否自动入库训练")
+    ai_spam_auto_train_negatives: bool = Field(
+        default=False, description="是否自动入库高置信度负样本（正常消息）"
+    )
+    ai_spam_negative_threshold: float = Field(
+        default=0.2, description="负样本置信度阈值（置信度 <= 此值时入库正常样本）"
+    )
     ai_spam_max_length: int = Field(default=500, description="文本最大长度")
     ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
 

@@ -214,6 +214,9 @@ class SpamDetector:
             logger.warning(f"传统检测失败，使用 AI 结果 [用户:{user_id}]")
             if ai["is_spam"]:
                 await self._handle_ai_spam_detection(text, ai, user_id)
+            else:
+                # 处理高置信度负样本
+                await self._handle_ai_negative_detection(text, ai, user_id)
             return ai
 
         # AI 检测失败 → 使用传统结果
@@ -235,8 +238,10 @@ class SpamDetector:
             await self._handle_ai_spam_detection(text, ai, user_id)
             return ai
 
-        # 策略 3: 都不是垃圾 → 使用传统结果
+        # 策略 3: 都不是垃圾 → 使用传统结果 + 检查是否入库负样本
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
+        # 处理高置信度负样本
+        await self._handle_ai_negative_detection(text, ai, user_id)
         return traditional
 
     async def _handle_ai_spam_detection(
@@ -283,6 +288,66 @@ class SpamDetector:
 
         except Exception as e:
             logger.error(f"AI 样本入库失败 [用户:{user_id}]: {e}")
+
+    async def _handle_ai_negative_detection(
+        self, text: str, ai_result: dict[str, Any], user_id: int
+    ) -> None:
+        """处理 AI 检测到的高置信度负样本（正常消息）
+
+        - 只在置信度 <= negative_threshold 时入库
+        - 表示 AI 高度确信这不是垃圾信息
+        - 作为高质量负样本用于训练
+
+        Args:
+            text: 原始文本
+            ai_result: AI 检测结果
+            user_id: 用户 ID
+        """
+        # 检查是否启用自动训练和负样本入库
+        if not settings.ai_spam_auto_train:
+            logger.debug("AI 自动训练未启用，跳过入库")
+            return
+
+        if not settings.ai_spam_auto_train_negatives:
+            logger.debug("AI 负样本自动训练未启用，跳过入库")
+            return
+
+        # 检查置信度是否足够低（高度确信不是垃圾）
+        confidence = ai_result.get("confidence", 1.0)
+        if confidence > settings.ai_spam_negative_threshold:
+            logger.debug(
+                f"AI 负样本置信度过高，跳过入库 [用户:{user_id}] "
+                f"[置信度:{confidence:.2f}] [阈值:{settings.ai_spam_negative_threshold}]"
+            )
+            return
+
+        try:
+            # 入库负样本（labeled_by = -1 表示 AI 标注）
+            success = await self.add_feedback(
+                text=text,
+                is_spam=False,  # 负样本
+                labeled_by=settings.ai_spam_labeled_by,  # -1
+                confidence=confidence,
+            )
+
+            if success:
+                logger.info(
+                    f"AI 负样本已入库 [用户:{user_id}] "
+                    f"[置信度:{confidence:.2f}] "
+                    f"[阈值:{settings.ai_spam_negative_threshold}] "
+                    f"[labeled_by:{settings.ai_spam_labeled_by}]"
+                )
+
+                # 检查是否触发自动训练
+                triggered, message = await self.check_and_auto_train(
+                    admin_ids=settings.admin_ids, threshold=50
+                )
+
+                if triggered:
+                    logger.info(f"AI 负样本触发自动训练: {message}")
+
+        except Exception as e:
+            logger.error(f"AI 负样本入库失败 [用户:{user_id}]: {e}")
 
     def _apply_activity_adjustment(
         self, result: dict[str, Any], activity: int | None, user_id: int
