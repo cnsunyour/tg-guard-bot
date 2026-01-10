@@ -50,6 +50,22 @@ class Settings(BaseSettings):
         default=0.9, description="高置信度阈值（>= 此值踢出并封禁，< 此值禁言）"
     )
 
+    # AI 垃圾检测配置（OpenAI 兼容 API）
+    ai_spam_enabled: bool = Field(default=False, description="是否启用 AI API 垃圾检测")
+    ai_spam_api_key: str = Field(default="", description="AI API Key")
+    ai_spam_api_base: str = Field(
+        default="https://api.openai.com/v1",
+        description="API Base URL（支持 OpenRouter、DeepSeek、Moonshot 等）",
+    )
+    ai_spam_model: str = Field(default="gpt-4o-mini", description="模型名称")
+    ai_spam_temperature: float = Field(default=0.0, description="生成温度")
+    ai_spam_threshold: float = Field(default=0.8, description="置信度阈值")
+    ai_spam_timeout: int = Field(default=10, description="超时时间（秒）")
+    ai_spam_max_retries: int = Field(default=2, description="最大重试次数")
+    ai_spam_auto_train: bool = Field(default=True, description="是否自动入库训练")
+    ai_spam_max_length: int = Field(default=500, description="文本最大长度")
+    ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
+
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数（触发禁言）")

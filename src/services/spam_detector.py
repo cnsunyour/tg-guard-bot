@@ -3,6 +3,7 @@
 ✅ P1-11: CPU 密集型操作已移至线程池
 """
 
+import asyncio
 from typing import Any
 
 from loguru import logger
@@ -10,6 +11,7 @@ from loguru import logger
 from src.core.config import settings
 from src.core.executor import run_in_executor  # ✅ P1-11: 导入线程池执行器
 from src.core.utils import mask_text
+from src.ml.ai_detector import get_ai_detector
 from src.ml.classifier import get_classifier
 from src.ml.embedder import get_embedder
 from src.ml.ocr import get_ocr_extractor
@@ -26,6 +28,7 @@ class SpamDetector:
         self.classifier = get_classifier()
         self.embedder = get_embedder()
         self.ocr_extractor = get_ocr_extractor()
+        self.ai_detector = get_ai_detector()
 
     async def detect(
         self, text: str, user_id: int, chat_id: int, activity: int | None = None
@@ -120,6 +123,166 @@ class SpamDetector:
         # 未检测到垃圾信息
         logger.debug(f"消息通过检测 [用户:{user_id}]")
         return result
+
+    async def detect_with_ai(
+        self, text: str, user_id: int, chat_id: int, activity: int | None = None
+    ) -> dict[str, Any]:
+        """并行检测入口 - 同时运行传统三阶段管道和 AI API 检测
+
+        Args:
+            text: 待检测文本
+            user_id: 用户 ID
+            chat_id: 群组 ID
+            activity: 用户活跃度（可选）
+
+        Returns:
+            合并后的检测结果字典
+        """
+        # 如果 AI 检测未启用，直接使用传统三阶段
+        if not self.ai_detector.enabled:
+            return await self.detect(text, user_id, chat_id, activity)
+
+        # 并行执行传统检测和 AI 检测
+        try:
+            results = await asyncio.gather(
+                self.detect(text, user_id, chat_id, activity),  # 传统三阶段
+                self.ai_detector.detect(text),  # AI API 检测
+                return_exceptions=True,
+            )
+
+            traditional_result = results[0]
+            ai_result = results[1]
+
+            # 检查是否有异常
+            if isinstance(traditional_result, Exception):
+                logger.error(f"传统检测失败: {traditional_result}")
+                traditional_result = None
+
+            if isinstance(ai_result, Exception):
+                logger.error(f"AI 检测失败: {ai_result}")
+                ai_result = None
+
+            # 合并结果
+            return await self._merge_detection_results(
+                traditional_result, ai_result, text, user_id, activity
+            )
+
+        except Exception as e:
+            logger.error(f"并行检测失败: {e}")
+            # 降级到传统检测
+            return await self.detect(text, user_id, chat_id, activity)
+
+    async def _merge_detection_results(
+        self,
+        traditional: dict[str, Any] | None,
+        ai: dict[str, Any] | None,
+        text: str,
+        user_id: int,
+        activity: int | None = None,
+    ) -> dict[str, Any]:
+        """合并传统检测和 AI 检测结果
+
+        合并策略：
+        1. 传统检测为垃圾 → 使用传统结果
+        2. AI 检测为垃圾 → 使用 AI 结果 + 自动入库训练
+        3. 都不是垃圾 → 使用传统结果（置信度 0.0）
+        4. 任一检测失败 → 使用另一个结果
+
+        Args:
+            traditional: 传统检测结果
+            ai: AI 检测结果
+            text: 原始文本
+            user_id: 用户 ID
+            activity: 用户活跃度
+
+        Returns:
+            合并后的检测结果
+        """
+        # 两者都失败 → 默认不是垃圾
+        if traditional is None and ai is None:
+            logger.warning(f"传统和 AI 检测都失败 [用户:{user_id}]")
+            return {
+                "is_spam": False,
+                "confidence": 0.0,
+                "stage": "failed",
+                "reasons": ["所有检测器都失败"],
+                "details": {},
+            }
+
+        # 传统检测失败 → 使用 AI 结果
+        if traditional is None:
+            logger.warning(f"传统检测失败，使用 AI 结果 [用户:{user_id}]")
+            if ai["is_spam"]:
+                await self._handle_ai_spam_detection(text, ai, user_id)
+            return ai
+
+        # AI 检测失败 → 使用传统结果
+        if ai is None:
+            logger.warning(f"AI 检测失败，使用传统结果 [用户:{user_id}]")
+            return traditional
+
+        # 策略 1: 传统检测为垃圾 → 使用传统结果（优先级高）
+        if traditional["is_spam"]:
+            logger.info(
+                f"传统检测为垃圾 [用户:{user_id}] [阶段:{traditional['stage']}] "
+                f"[置信度:{traditional['confidence']:.2f}]"
+            )
+            return traditional
+
+        # 策略 2: AI 检测为垃圾 → 使用 AI 结果 + 自动入库训练
+        if ai["is_spam"]:
+            logger.info(f"AI 检测为垃圾 [用户:{user_id}] [置信度:{ai['confidence']:.2f}]")
+            await self._handle_ai_spam_detection(text, ai, user_id)
+            return ai
+
+        # 策略 3: 都不是垃圾 → 使用传统结果
+        logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
+        return traditional
+
+    async def _handle_ai_spam_detection(
+        self, text: str, ai_result: dict[str, Any], user_id: int
+    ) -> None:
+        """处理 AI 检测到的垃圾信息
+
+        - 自动入库作为训练样本（labeled_by = -1 标记为 AI 标注）
+        - 检查是否触发自动训练
+
+        Args:
+            text: 原始文本
+            ai_result: AI 检测结果
+            user_id: 用户 ID
+        """
+        # 检查是否启用自动训练
+        if not settings.ai_spam_auto_train:
+            logger.debug("AI 自动训练未启用，跳过入库")
+            return
+
+        try:
+            # 入库训练样本（labeled_by = -1 表示 AI 标注）
+            success = await self.add_feedback(
+                text=text,
+                is_spam=True,
+                labeled_by=settings.ai_spam_labeled_by,  # -1
+                confidence=ai_result.get("confidence"),
+            )
+
+            if success:
+                logger.info(
+                    f"AI 检测样本已入库 [用户:{user_id}] "
+                    f"[置信度:{ai_result.get('confidence', 0.0):.2f}] "
+                    f"[labeled_by:{settings.ai_spam_labeled_by}]"
+                )
+
+                # 检查是否触发自动训练
+                triggered, message = await self.check_and_auto_train(
+                    admin_ids=settings.admin_ids, threshold=50
+                )
+
+                if triggered:
+                    logger.info(f"AI 样本触发自动训练: {message}")
+
+        except Exception as e:
+            logger.error(f"AI 样本入库失败 [用户:{user_id}]: {e}")
 
     def _apply_activity_adjustment(
         self, result: dict[str, Any], activity: int | None, user_id: int

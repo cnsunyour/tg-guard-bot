@@ -697,8 +697,8 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 获取检测器
     detector = get_detector()
 
-    # 检测垃圾（传入活跃度）
-    result = await detector.detect(
+    # 检测垃圾（传入活跃度，使用并行 AI 检测）
+    result = await detector.detect_with_ai(
         text=message.text,
         user_id=message.from_user.id,
         chat_id=message.chat.id,
