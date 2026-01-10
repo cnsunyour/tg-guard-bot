@@ -18,7 +18,9 @@ class Group(Base):
 
     # 验证配置
     verification_type: Mapped[str] = mapped_column(
-        String(20), default="math", comment="验证方式: math/slider/qa/emoji/captcha/honeypot/random"
+        String(20),
+        default="random",
+        comment="验证方式: math/slider/qa/emoji/captcha/honeypot/random",
     )
     verification_timeout: Mapped[int] = mapped_column(
         Integer, default=120, comment="验证超时时间(秒)"
