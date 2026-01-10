@@ -123,14 +123,47 @@
 
 ## 📦 文件清单
 
+### SVG 源文件（矢量格式）
 ```
 assets/logo/
-├── logo-shield-bot.svg        # 方案1: 盾牌机器人 (512x512)
-├── logo-modern-badge.svg      # 方案2: 现代徽章 (512x512)
-├── logo-minimal-flat.svg      # 方案3: 极简扁平 (512x512)
-├── icon-simple.svg            # 简化图标 (128x128)
-├── banner-horizontal.svg      # 横版横幅 (800x200)
+├── logo-shield-bot.svg        # 方案1: 盾牌机器人
+├── logo-modern-badge.svg      # 方案2: 现代徽章
+├── logo-minimal-flat.svg      # 方案3: 极简扁平
+├── icon-simple.svg            # 简化图标
+├── banner-horizontal.svg      # 横版横幅
 └── README.md                  # 本文档
+```
+
+### PNG 导出文件（已生成）
+
+**主 Logo (512×512)**
+```
+├── logo-shield-bot.png        # 盾牌机器人 (31KB)
+├── logo-modern-badge.png      # 现代徽章 (66KB)
+├── logo-minimal-flat.png      # 极简扁平 (32KB)
+└── icon-simple.png            # 简化图标 (27KB)
+```
+
+**高清版本 (1024×1024)**
+```
+├── logo-shield-bot-1024.png       # 盾牌机器人高清版 (68KB)
+├── logo-modern-badge-1024.png     # 现代徽章高清版 (159KB)
+└── logo-minimal-flat-1024.png     # 极简扁平高清版 (78KB)
+```
+
+**Favicon 尺寸系列**
+```
+├── icon-16x16.png             # 643B
+├── icon-32x32.png             # 1.2KB
+├── icon-64x64.png             # 2.6KB
+├── icon-128x128.png           # 5.2KB
+└── icon-256x256.png           # 11KB
+```
+
+**横幅**
+```
+├── banner-horizontal.png      # 800×200 (28KB)
+└── banner-horizontal-512.png  # 512×512 正方形版本 (37KB)
 ```
 
 ---
@@ -147,14 +180,39 @@ assets/logo/
 
 ### 2. 设置 Bot 头像
 
-1. 将 `logo-shield-bot.svg` 导出为 PNG (建议 512x512)
-2. 在 BotFather 中使用 `/setuserpic` 命令上传
+直接使用已导出的 PNG 文件：
 
-### 3. 生成 Favicon
+```bash
+# 方式1: 在 Telegram 中手动上传
+# 找到 BotFather -> /setuserpic -> 上传 logo-shield-bot.png
 
-使用在线工具将 `icon-simple.svg` 转换为多尺寸 favicon:
-- https://realfavicongenerator.net/
+# 方式2: 使用 Telegram Bot API (需要 BOT_TOKEN)
+curl -F "photo=@assets/logo/logo-shield-bot.png" \
+  "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setUserProfilePhoto"
+```
+
+推荐使用 **logo-shield-bot.png** (512×512)
+
+### 3. 使用 Favicon
+
+已生成多种尺寸的 Favicon，可直接使用：
+
+**方法1: 直接使用 PNG 文件**
+```html
+<link rel="icon" type="image/png" sizes="32x32" href="assets/logo/icon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/logo/icon-16x16.png">
+```
+
+**方法2: 生成 ICO 文件（可选）**
+
+使用在线工具将多尺寸 PNG 合并为 .ico：
+- https://www.icoconverter.com/
 - https://favicon.io/
+
+上传以下文件：
+- icon-16x16.png
+- icon-32x32.png
+- icon-64x64.png
 
 ---
 
