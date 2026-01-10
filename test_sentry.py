@@ -42,10 +42,11 @@ if settings.sentry_dsn:
 
     print("\n✓ Sentry SDK 初始化成功")
     print("✓ 已启用敏感数据过滤")
+    print("✓ 已启用网络错误过滤")
 
     # 测试敏感数据过滤
     print("\n" + "=" * 60)
-    print("测试敏感数据过滤功能")
+    print("测试 1: 敏感数据过滤功能")
     print("=" * 60)
 
     # 模拟一个包含 Bot Token 的错误
@@ -77,6 +78,67 @@ if settings.sentry_dsn:
         print("\n✅ 敏感数据过滤测试通过！Token 已被正确过滤")
     else:
         print("\n❌ 敏感数据过滤测试失败！Token 未被过滤")
+
+    # 测试网络错误过滤
+    print("\n" + "=" * 60)
+    print("测试 2: 网络错误过滤功能")
+    print("=" * 60)
+
+    # 测试各种网络错误
+    network_error_types = [
+        "TelegramNetworkError",
+        "ClientConnectorError",
+        "TimeoutError",
+        "ConnectionError",
+    ]
+
+    for error_type in network_error_types:
+        test_network_event = {
+            "exception": {
+                "values": [{
+                    "type": error_type,
+                    "value": f"Test {error_type}",
+                    "module": "aiogram.exceptions" if "Telegram" in error_type else "aiohttp"
+                }]
+            },
+            "message": f"Network error: {error_type}"
+        }
+
+        result = before_send(test_network_event.copy(), None)
+
+        if result is None:
+            print(f"  ✅ {error_type:<25} - 已过滤（不发送到 Sentry）")
+        else:
+            print(f"  ❌ {error_type:<25} - 未过滤（会发送到 Sentry）")
+
+    # 测试非网络错误（应该保留）
+    print("\n测试非网络错误（应该保留）:")
+    normal_errors = [
+        {"type": "ValueError", "module": "builtins"},
+        {"type": "KeyError", "module": "builtins"},
+        {"type": "AttributeError", "module": "builtins"},
+    ]
+
+    for error_info in normal_errors:
+        test_normal_event = {
+            "exception": {
+                "values": [{
+                    "type": error_info["type"],
+                    "value": f"Test {error_info['type']}",
+                    "module": error_info["module"]
+                }]
+            },
+            "message": f"Normal error: {error_info['type']}"
+        }
+
+        result = before_send(test_normal_event.copy(), None)
+
+        if result is not None:
+            print(f"  ✅ {error_info['type']:<25} - 已保留（会发送到 Sentry）")
+        else:
+            print(f"  ❌ {error_info['type']:<25} - 被过滤（不会发送）")
+
+    print("\n✅ 网络错误过滤测试完成！")
 
     # 测试发送一个测试事件（可选）
     print("\n" + "=" * 60)

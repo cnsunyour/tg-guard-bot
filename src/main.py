@@ -17,10 +17,39 @@ from src.core.redis import close_redis
 
 
 def before_send(event, _hint):
-    """Sentry 事件发送前的数据清理钩子，过滤敏感信息"""
+    """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
     import re
 
-    # 定义敏感数据的正则模式
+    # 1. 过滤网络临时性错误（自动重试的错误不需要告警）
+    if "exception" in event and "values" in event["exception"]:
+        for exc_value in event["exception"]["values"]:
+            exc_type = exc_value.get("type", "")
+            exc_module = exc_value.get("module", "")
+
+            # 网络相关的临时性错误
+            network_errors = [
+                "TelegramNetworkError",  # Telegram 网络错误
+                "ClientConnectorError",  # aiohttp 连接错误
+                "ServerDisconnectedError",  # 服务器断开连接
+                "TimeoutError",  # 超时错误
+                "asyncio.TimeoutError",  # asyncio 超时
+                "ConnectionError",  # 连接错误
+                "ConnectionResetError",  # 连接重置
+                "BrokenPipeError",  # 管道破裂
+                "OSError",  # 操作系统错误（网络相关）
+            ]
+
+            # 检查是否是网络错误
+            if exc_type in network_errors:
+                # 返回 None 表示丢弃该事件，不发送到 Sentry
+                return None
+
+            # 检查是否是 aiogram 的可恢复错误
+            if exc_module and "aiogram" in exc_module:
+                if "RestartingTelegram" in exc_type or "RetryAfter" in exc_type:
+                    return None
+
+    # 2. 定义敏感数据的正则模式
     token_pattern = re.compile(r"\d+:[A-Za-z0-9_-]{35}")  # Telegram Bot Token 格式
     url_token_pattern = re.compile(r"bot(\d+:[A-Za-z0-9_-]{35})")  # URL 中的 token
 
@@ -37,7 +66,7 @@ def before_send(event, _hint):
             return data
         return data
 
-    # 清理事件数据
+    # 3. 清理事件数据中的敏感信息
     if "exception" in event:
         event["exception"] = scrub_sensitive_data(event["exception"])
 
@@ -180,6 +209,7 @@ async def main() -> None:
         )
         logger.info(f"✅ Sentry 已初始化 (环境: {settings.sentry_environment})")
         logger.info("🔒 已启用敏感数据过滤（Bot Token 将被自动屏蔽）")
+        logger.info("🚫 已启用网络错误过滤（临时性网络错误不会发送到 Sentry）")
     else:
         logger.info("⚠️ Sentry DSN 未配置，跳过 Sentry 初始化")
 

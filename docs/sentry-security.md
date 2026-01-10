@@ -2,7 +2,11 @@
 
 ## 🚨 问题说明
 
-在使用 Sentry 收集错误日志时，可能会遇到敏感信息（如 Bot Token）泄露到错误消息中的问题。例如：
+在使用 Sentry 收集错误日志时，可能会遇到以下问题：
+
+### 1. 敏感信息泄露
+
+敏感信息（如 Bot Token）可能泄露到错误消息中。例如：
 
 ```
 Failed to fetch updates - TelegramNetworkError: HTTP Client says -
@@ -14,6 +18,14 @@ ssl:default [None]
 ```
 https://api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrsTUVwxyz/getUpdates
 ```
+
+### 2. 网络临时性错误告警
+
+网络波动、API 超时等临时性错误会产生大量 Sentry 告警，但这些错误：
+- 非常常见（网络不稳定、API 限流等）
+- 会自动重试恢复
+- 不是代码 bug
+- 会消耗 Sentry 配额
 
 ## ✅ 解决方案
 
@@ -33,7 +45,29 @@ https://api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrsTUVwxyz/getUpdates
 - 请求信息（request）
 - 额外上下文（extra）
 
-### 2. 测试过滤功能
+### 2. 自动过滤网络临时性错误
+
+项目已配置过滤以下类型的网络错误，这些错误不会发送到 Sentry：
+
+**已过滤的错误类型**：
+- `TelegramNetworkError` - Telegram API 网络错误
+- `ClientConnectorError` - HTTP 连接错误
+- `ServerDisconnectedError` - 服务器断开连接
+- `TimeoutError` - 超时错误
+- `ConnectionError` - 连接错误
+- `ConnectionResetError` - 连接重置
+- `BrokenPipeError` - 管道破裂
+- `OSError` - 操作系统网络错误
+- `RestartingTelegram` - Telegram 重启错误
+- `RetryAfter` - API 速率限制错误
+
+**保留的错误类型**：
+- 代码逻辑错误（ValueError、KeyError、AttributeError 等）
+- 数据库错误
+- 业务逻辑异常
+- 其他非网络相关的错误
+
+### 3. 测试过滤功能
 
 运行测试脚本验证过滤功能：
 
@@ -43,13 +77,25 @@ python test_sentry.py
 
 **预期输出**：
 ```
+测试 1: 敏感数据过滤功能
 过滤前的消息: Failed to fetch from https://api.telegram.org/bot123456789:ABC.../getUpdates
 过滤后的消息: Failed to fetch from https://api.telegram.org/bot[FILTERED_BOT_TOKEN]/getUpdates
-
 ✅ 敏感数据过滤测试通过！Token 已被正确过滤
+
+测试 2: 网络错误过滤功能
+  ✅ TelegramNetworkError      - 已过滤（不发送到 Sentry）
+  ✅ ClientConnectorError      - 已过滤（不发送到 Sentry）
+  ✅ TimeoutError              - 已过滤（不发送到 Sentry）
+  ✅ ConnectionError           - 已过滤（不发送到 Sentry）
+
+测试非网络错误（应该保留）:
+  ✅ ValueError                - 已保留（会发送到 Sentry）
+  ✅ KeyError                  - 已保留（会发送到 Sentry）
+  ✅ AttributeError            - 已保留（会发送到 Sentry）
+✅ 网络错误过滤测试完成！
 ```
 
-### 3. 验证线上过滤效果
+### 4. 验证线上过滤效果
 
 1. 在 Sentry 控制台查看最新的错误事件
 2. 检查错误消息和堆栈跟踪
@@ -157,9 +203,14 @@ SENTRY_ENVIRONMENT=development
 sentry_sdk.init(
     dsn=settings.sentry_dsn,
     send_default_pii=False,  # ✅ 禁止发送个人身份信息
-    before_send=before_send,  # ✅ 自定义过滤钩子
+    before_send=before_send,  # ✅ 自定义过滤钩子（敏感数据 + 网络错误）
 )
 ```
+
+**过滤策略**：
+- ✅ 自动过滤 Bot Token
+- ✅ 自动过滤网络临时性错误
+- ✅ 保留真正的代码错误
 
 ### 4. 日志脱敏
 
@@ -188,6 +239,7 @@ logger.error(f"Failed to call Telegram API: {endpoint}")
 部署前检查：
 
 - [ ] 已启用 Sentry 敏感数据过滤（`before_send` 钩子）
+- [ ] 已启用网络错误过滤（临时性错误不发送到 Sentry）
 - [ ] 已禁用 PII 发送（`send_default_pii=False`）
 - [ ] 已运行过滤测试（`python test_sentry.py`）
 - [ ] 生产和开发环境使用不同的 Bot Token
@@ -202,6 +254,8 @@ logger.error(f"Failed to call Telegram API: {endpoint}")
 - [ ] 确认所有 Token 显示为 `[FILTERED_BOT_TOKEN]`
 - [ ] 验证错误消息不包含敏感 URL
 - [ ] 检查堆栈跟踪中无敏感信息
+- [ ] 确认网络错误未发送到 Sentry
+- [ ] 验证代码逻辑错误正常上报
 
 ---
 
@@ -239,6 +293,42 @@ data = db_password_pattern.sub("password=[FILTERED]", data)
 # 过滤 IP 地址
 ip_pattern = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 data = ip_pattern.sub("[FILTERED_IP]", data)
+```
+
+### Q6: 为什么要过滤网络错误？
+
+**A**: 网络临时性错误（如连接超时、API 限流）是正常现象，不是代码 bug。这些错误：
+- 会自动重试恢复
+- 不需要开发者介入
+- 产生大量无意义的 Sentry 事件
+- 消耗 Sentry 配额
+
+过滤这些错误可以：
+- 减少噪音，聚焦真正的问题
+- 节省 Sentry 配额
+- 提高告警的信噪比
+
+### Q7: 如果需要调试网络问题怎么办？
+
+**A**: 网络错误仍然会记录到本地日志文件：
+- 查看 `logs/bot_*.log` - 所有日志
+- 查看 `logs/error_*.log` - 错误日志
+
+Sentry 过滤只影响远程上报，不影响本地调试。
+
+### Q8: 如何添加自定义过滤规则？
+
+**A**: 在 `src/main.py` 的 `before_send` 函数中添加：
+
+```python
+# 过滤特定错误消息
+if "exception" in event:
+    for exc_value in event["exception"]["values"]:
+        error_msg = exc_value.get("value", "")
+
+        # 过滤特定错误消息
+        if "expected error pattern" in error_msg.lower():
+            return None  # 丢弃该事件
 ```
 
 ---
