@@ -141,3 +141,18 @@ class SpamRepository:
                 return True
 
             return False
+
+
+# 全局变量：记录上次训练时的样本数量
+_last_train_sample_count = 0
+
+
+def get_last_train_count() -> int:
+    """获取上次训练时的样本数量"""
+    return _last_train_sample_count
+
+
+def update_last_train_count(count: int) -> None:
+    """更新上次训练时的样本数量"""
+    global _last_train_sample_count
+    _last_train_sample_count = count

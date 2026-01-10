@@ -938,6 +938,20 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"添加垃圾样本失败: {e}")
 
+            # 检查是否需要自动训练
+            try:
+                from src.core.config import settings
+                from src.services.spam_detector import get_detector
+
+                detector = get_detector()
+                triggered, train_message = await detector.check_and_auto_train(
+                    admin_ids=settings.admin_ids, threshold=50
+                )
+                if triggered:
+                    logger.info(f"样本添加后触发自动训练: {train_message}")
+            except Exception as e:
+                logger.error(f"检查自动训练失败: {e}")
+
             # 发送响应消息
             if delete_all:
                 reply = await message.answer(
@@ -1007,6 +1021,105 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             logger.error(f"创建举报记录失败: {e}")
             reply = await message.answer("❌ 举报提交失败，请稍后重试")
             await auto_delete_message(reply)
+
+
+@router.message(Command("notspam"))
+async def cmd_notspam(message: Message, bot: Bot) -> None:
+    """标记为非垃圾消息（误报修正）
+
+    用于修正模型的误判，将被误判的消息添加为负样本
+    仅管理员可用
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 必须回复某条消息
+    if not message.reply_to_message:
+        reply = await message.answer(
+            "❌ 请回复要标记为非垃圾的消息\n\n"
+            "<b>用法</b>:\n"
+            "• /notspam [备注] - 将消息标记为正常消息\n\n"
+            "<b>示例</b>:\n"
+            "• /notspam\n"
+            "• /notspam 这是正常的讨论\n\n"
+            "💡 <b>说明</b>:\n"
+            "• 仅管理员可用\n"
+            "• 用于修正模型的误判\n"
+            "• 帮助模型学习什么不是垃圾"
+        )
+        await auto_delete_message(reply)
+        return
+
+    # 检查是否是管理员
+    if not await check_admin_permission_strict_message(message, bot):
+        reply = await message.answer("❌ 只有管理员可以使用此命令")
+        await auto_delete_message(reply)
+        return
+
+    # ✅ 检查是否为用户消息（排除频道消息）
+    if not message.reply_to_message.from_user:
+        reply = await message.answer("❌ 无法标记频道消息，请回复用户消息")
+        await auto_delete_message(reply)
+        return
+
+    # 解析备注
+    args = message.text.split(maxsplit=1)
+    note = args[1] if len(args) > 1 else ""
+
+    # 获取消息文本内容
+    message_text = ""
+    if message.reply_to_message.text:
+        message_text = message.reply_to_message.text
+    elif message.reply_to_message.caption:
+        message_text = message.reply_to_message.caption
+
+    # 如果没有文本内容，记录消息类型
+    if not message_text:
+        content_type = message.reply_to_message.content_type
+        message_text = f"[{content_type}消息]"
+
+    # 添加到反垃圾训练库（负样本）
+    try:
+        await SpamRepository.add_sample(
+            text=message_text,
+            is_spam=False,  # 标记为非垃圾
+            confidence=1.0,  # 管理员标注，置信度为1.0
+            labeled_by=message.from_user.id,
+        )
+        logger.info(
+            f"非垃圾样本已添加到训练库 [标注者:{message.from_user.id}] "
+            f"[文本长度:{len(message_text)}] [备注:{note}]"
+        )
+
+        # 检查是否需要自动训练
+        try:
+            from src.core.config import settings
+            from src.services.spam_detector import get_detector
+
+            detector = get_detector()
+            triggered, train_message = await detector.check_and_auto_train(
+                admin_ids=settings.admin_ids, threshold=50
+            )
+            if triggered:
+                logger.info(f"样本添加后触发自动训练: {train_message}")
+        except Exception as e:
+            logger.error(f"检查自动训练失败: {e}")
+
+        reply = await message.answer(
+            "✅ 已标记为正常消息\n"
+            "• 已添加到训练库（负样本）\n"
+            "• 帮助模型避免类似误判\n"
+            + (f"• 备注: {escape_html(note)}\n" if note else "")
+            + "\n💡 积累足够样本后会自动触发训练"
+        )
+        await auto_delete_message(reply)
+
+    except Exception as e:
+        logger.error(f"添加非垃圾样本失败: {e}")
+        reply = await message.answer("❌ 操作失败，请稍后重试")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("reports"))

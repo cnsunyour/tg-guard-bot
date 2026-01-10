@@ -284,8 +284,11 @@ class SpamDetector:
             logger.error(f"获取统计信息失败: {e}")
             return {}
 
-    async def retrain_model(self) -> tuple[bool, str]:
+    async def retrain_model(self, admin_ids: list[int] | None = None) -> tuple[bool, str]:
         """重新训练模型
+
+        Args:
+            admin_ids: 管理员 ID 列表，用于发送训练完成通知
 
         Returns:
             (是否成功, 消息)
@@ -307,6 +310,11 @@ class SpamDetector:
             if not saved:
                 return False, "模型训练成功但保存失败"
 
+            # 更新上次训练时的样本数量
+            from src.repositories.spam_repo import update_last_train_count
+
+            update_last_train_count(len(texts))
+
             message = (
                 f"模型训练成功！\n"
                 f"准确率: {accuracy:.2%}\n"
@@ -316,11 +324,90 @@ class SpamDetector:
             )
 
             logger.info(message)
+
+            # 如果提供了管理员 ID，发送通知
+            if admin_ids:
+                await self._notify_admins_training_complete(admin_ids, message)
+
             return True, message
 
         except Exception as e:
             logger.error(f"重新训练模型失败: {e}")
             return False, f"训练失败: {e!s}"
+
+    async def _notify_admins_training_complete(self, admin_ids: list[int], message: str) -> None:
+        """通知管理员训练完成
+
+        Args:
+            admin_ids: 管理员 ID 列表
+            message: 训练结果消息
+        """
+        try:
+            from aiogram import Bot
+
+            from src.core.config import settings
+
+            bot = Bot(token=settings.bot_token)
+
+            notification = f"🤖 <b>反垃圾模型自动训练完成</b>\n\n{message}"
+
+            for admin_id in admin_ids:
+                try:
+                    await bot.send_message(admin_id, notification)
+                    logger.info(f"训练完成通知已发送给管理员 {admin_id}")
+                except Exception as e:
+                    logger.warning(f"发送训练通知给管理员 {admin_id} 失败: {e}")
+
+            await bot.session.close()
+
+        except Exception as e:
+            logger.error(f"发送训练完成通知失败: {e}")
+
+    async def check_and_auto_train(
+        self, admin_ids: list[int] | None = None, threshold: int = 50
+    ) -> tuple[bool, str | None]:
+        """检查是否需要自动训练，如果需要则触发训练
+
+        Args:
+            admin_ids: 管理员 ID 列表，用于发送通知
+            threshold: 触发自动训练的新样本阈值（默认 50）
+
+        Returns:
+            (是否触发了训练, 消息)
+        """
+        try:
+            from src.repositories.spam_repo import get_last_train_count
+
+            # 获取当前样本总数
+            current_count = await SpamRepository.count_samples()
+
+            # 获取上次训练时的样本数量
+            last_count = get_last_train_count()
+
+            # 计算新增样本数
+            new_samples = current_count - last_count
+
+            logger.debug(
+                f"样本统计: 当前={current_count}, 上次训练={last_count}, 新增={new_samples}"
+            )
+
+            # 检查是否达到训练阈值
+            if new_samples >= threshold:
+                logger.info(f"检测到 {new_samples} 个新样本（阈值={threshold}），触发自动训练...")
+
+                # 触发训练
+                success, message = await self.retrain_model(admin_ids)
+
+                if success:
+                    return True, f"自动训练成功: {message}"
+                else:
+                    return False, f"自动训练失败: {message}"
+
+            return False, None
+
+        except Exception as e:
+            logger.error(f"检查自动训练失败: {e}")
+            return False, f"检查失败: {e!s}"
 
 
 # 全局检测器实例
