@@ -297,19 +297,34 @@
 
         // ========== Friendly Captcha ==========
         async function initFriendly(config) {
-            await loadScript('https://cdn.jsdelivr.net/npm/friendly-challenge@0.9.15/widget.module.min.js');
-            document.getElementById('friendly-widget').classList.add('active');
+            // 加载 Friendly Captcha 脚本
+            await loadScript('https://cdn.jsdelivr.net/npm/friendly-challenge@0.9.15/widget.min.js');
 
-            const widget = document.createElement('div');
-            widget.className = 'frc-captcha';
-            widget.setAttribute('data-sitekey', config.site_key);
-            widget.setAttribute('data-start', 'auto');
-            document.getElementById('friendly-widget').appendChild(widget);
+            const container = document.getElementById('friendly-widget');
+            container.classList.add('active');
 
-            // 监听 Friendly Captcha 完成事件
-            widget.addEventListener('frc:widget.complete', (event) => {
-                const solution = event.detail.solution;
-                verifyWithBackend('friendly', solution);
+            // 创建 widget 容器
+            const widgetDiv = document.createElement('div');
+            widgetDiv.className = 'frc-captcha';
+            widgetDiv.setAttribute('data-sitekey', config.site_key);
+            widgetDiv.setAttribute('data-start', 'auto');
+            widgetDiv.setAttribute('data-lang', 'zh');
+            container.appendChild(widgetDiv);
+
+            // 初始化 WidgetInstance（使用 API 方式）
+            const WidgetInstance = window.friendlyChallenge.WidgetInstance;
+            const widget = new WidgetInstance(widgetDiv, {
+                sitekey: config.site_key,
+                startMode: 'auto',
+                language: 'zh',
+                doneCallback: (solution) => {
+                    console.log('Friendly Captcha 完成:', solution);
+                    verifyWithBackend('friendly', solution);
+                },
+                errorCallback: (err) => {
+                    console.error('Friendly Captcha 错误:', err);
+                    showStatus('error', '❌ 验证失败，请刷新重试');
+                },
             });
 
             window.friendlyWidget = widget;
