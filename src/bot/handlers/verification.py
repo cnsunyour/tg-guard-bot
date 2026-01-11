@@ -30,6 +30,21 @@ from src.services.verification import VerificationService
 router = Router(name="verification")
 
 
+# ==================== 调试：捕获所有私聊消息 ====================
+@router.message(F.chat.type == "private")
+async def debug_all_private_messages(message: Message) -> None:
+    """调试：记录所有私聊消息，用于诊断 WebApp 数据接收问题"""
+    logger.info(
+        f"[🔍 DEBUG] 收到私聊消息 [user:{message.from_user.id}] "
+        f"[msg_id:{message.message_id}] "
+        f"[content_type:{message.content_type}] "
+        f"[has_text:{bool(message.text)}] "
+        f"[has_web_app_data:{bool(message.web_app_data)}]"
+    )
+    # 不做任何处理，让消息继续传递给其他 handler
+# ==================== 调试结束 ====================
+
+
 async def check_user_spam_info(
     bot: Bot, chat_id: int, user_id: int, username: str, mode: str = "join"
 ) -> bool:
@@ -941,9 +956,18 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("❌ 刷新失败，请联系管理员", show_alert=True)
 
 
-@router.message(F.chat.type == "private", F.text)
+@router.message(F.chat.type == "private", F.text, ~F.web_app_data)
 async def on_captcha_text_input(message: Message, bot: Bot) -> None:
-    """处理验证码文本输入 - 私聊消息"""
+    """处理验证码文本输入 - 私聊消息
+
+    注意：明确排除 web_app_data 消息，避免拦截 Turnstile 回调
+    """
+    # 调试日志
+    logger.debug(
+        f"[CAPTCHA] 收到私聊文本 [user:{message.from_user.id}] "
+        f"[has_webapp:{message.web_app_data is not None}]"
+    )
+
     try:
         user_id = message.from_user.id
         text_input = message.text.strip()
