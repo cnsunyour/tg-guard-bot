@@ -381,9 +381,14 @@ ALTCHA_API_URL=https://xxx.serv00.net/altcha
 ALTCHA_HMAC_KEY=<64字符hex密钥>
 ```
 
-**Turnstile**（已有，向后兼容）：
+**Turnstile**（Cloudflare 无感验证，已集成到统一 WebApp）：
 ```env
 TURNSTILE_ENABLED=true
+# ✅ 推荐：使用统一 CAPTCHA WebApp（与其他服务共用）
+# 配置 CAPTCHA_WEBAPP_URL 后会自动使用统一 WebApp
+
+# ⚠️ 已过时：独立 Turnstile WebApp（向后兼容）
+# 如果未配置 CAPTCHA_WEBAPP_URL，将回退使用此配置
 TURNSTILE_WEBAPP_URL=https://verify.xxx.pages.dev
 TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
 ```

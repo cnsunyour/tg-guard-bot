@@ -685,6 +685,7 @@ class VerificationService:
         """生成 Turnstile 验证挑战
 
         用户需要点击 WebApp 按钮完成 Cloudflare Turnstile 人机验证
+        现已集成到统一 CAPTCHA WebApp
 
         Args:
             chat_id: 群组 ID
@@ -695,32 +696,49 @@ class VerificationService:
         Returns:
             VerificationChallenge 对象,包含 WebApp 按钮
         """
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
         from src.core.config import settings
 
         # 生成一次性 verify_token（防止重放攻击）
         verify_token = secrets.token_urlsafe(32)
 
-        # 存储 token 到 Redis
         redis = get_redis()
-        token_key = RedisKeys.turnstile_token(chat_id, user_id)
-        await redis.setex(token_key, timeout + 10, verify_token)  # ✅ TTL 比超时时间多 10 秒
+
+        # 优先使用统一 CAPTCHA WebApp，向后兼容旧的 Turnstile WebApp
+        webapp_base_url = settings.captcha_webapp_url or settings.turnstile_webapp_url
+
+        if not webapp_base_url:
+            raise ValueError("未配置 CAPTCHA WebApp 或 Turnstile WebApp URL")
+
+        # 根据使用的 URL 决定 token 存储方式
+        if settings.captcha_webapp_url:
+            # 使用统一 WebApp：存储到 captcha_token
+            token_key = RedisKeys.captcha_token(chat_id, user_id)
+            await redis.setex(token_key, timeout + 10, f"turnstile:{verify_token}")
+
+            # 构建统一 WebApp URL（包含 provider 参数）
+            webapp_url = (
+                f"{webapp_base_url}"
+                f"?provider=turnstile&chat_id={chat_id}&user_id={user_id}"
+                f"&token={verify_token}"
+            )
+        else:
+            # 向后兼容：使用旧的 Turnstile WebApp
+            token_key = RedisKeys.turnstile_token(chat_id, user_id)
+            await redis.setex(token_key, timeout + 10, verify_token)
+
+            # 构建旧的 Turnstile WebApp URL（无 provider 参数）
+            webapp_url = (
+                f"{webapp_base_url}"
+                f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
+            )
 
         # 存储验证状态
         verify_key = RedisKeys.verification(chat_id, user_id)
-        await redis.setex(verify_key, timeout + 10, "turnstile:pending")  # ✅ TTL 比超时时间多 10 秒
-
-        # 构建 WebApp URL（指向独立部署的 WebApp）
-        webapp_url = (
-            f"{settings.turnstile_webapp_url}"
-            f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
-        )
+        await redis.setex(verify_key, timeout + 10, "turnstile:pending")
 
         # 创建 WebApp 按钮（使用 KeyboardButton 以支持 tg.sendData()）
-        # 注意：InlineKeyboardButton 不支持 tg.sendData()，必须使用 KeyboardButton
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [

@@ -3,7 +3,7 @@
 ## 概述
 
 这是一个统一的 Telegram WebApp，支持多种 CAPTCHA 验证服务：
-- **Cloudflare Turnstile** - 无感验证
+- **Cloudflare Turnstile** - 无感验证（已集成）
 - **Friendly Captcha** - 隐私友好，支持多 key 轮换
 - **hCaptcha** - 图片验证
 - **MTCaptcha** - 自适应验证
