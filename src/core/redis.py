@@ -129,3 +129,12 @@ class RedisKeys:
         存储最后发送消息的日期（YYYY-MM-DD），用于每日衰减计算
         """
         return f"activity_date:{chat_id}:{user_id}"
+
+    @staticmethod
+    def turnstile_token(chat_id: int, user_id: int) -> str:
+        """Turnstile 验证 token 键名
+
+        用于存储一次性验证 token,防止重放攻击
+        存储格式: "{token_string}"
+        """
+        return f"turnstile_token:{chat_id}:{user_id}"

@@ -150,6 +150,10 @@ async def generate_verification_challenge(group, chat_id: int, user_id: int, use
         return await verification_service.generate_puzzle_challenge(
             chat_id, user_id, username, group.verification_timeout
         )
+    elif group.verification_type == "turnstile":
+        return await verification_service.generate_turnstile_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
     elif group.verification_type == "random":
         return await verification_service.generate_random_challenge(
             chat_id, user_id, username, group.verification_timeout
@@ -1106,6 +1110,122 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"处理取消验证失败: {e}")
+
+
+@router.message(F.web_app_data)
+async def on_webapp_data(message: Message, bot: Bot) -> None:
+    """处理 WebApp 返回的数据（Turnstile 验证回调）"""
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    from src.core.config import settings
+
+    try:
+        data = json.loads(message.web_app_data.data)
+
+        if data.get("action") != "turnstile_success":
+            return
+
+        chat_id = int(data["chat_id"])
+        user_id = int(data["user_id"])
+        verify_token = data["verify_token"]
+        signature = data["signature"]
+        timestamp = int(data["timestamp"])
+
+        # 1. 验证时间戳（防止重放，5 分钟内有效）
+        if abs(time.time() - timestamp) > 300:
+            logger.warning(f"Turnstile 回调时间戳过期 [user:{user_id}]")
+            return
+
+        # 2. 验证签名
+        expected_sig = hmac.new(
+            settings.turnstile_signature_key.encode(),
+            f"{chat_id}:{user_id}:{verify_token}:{timestamp}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(signature, expected_sig):
+            logger.warning(f"Turnstile 回调签名无效 [user:{user_id}]")
+            return
+
+        # 3. 验证 Redis 中的 token 存在（一次性）
+        redis = get_redis()
+        token_key = RedisKeys.turnstile_token(chat_id, user_id)
+        stored_token = await redis.get(token_key)
+
+        if not stored_token or stored_token != verify_token:
+            logger.warning(f"Turnstile token 无效或已使用 [user:{user_id}]")
+            return
+
+        # 4. 删除 token（防止重复使用）
+        await redis.delete(token_key)
+
+        # 5. 检查验证类型
+        type_key = RedisKeys.verification_type(chat_id, user_id)
+        verification_type = await redis.get(type_key)
+        is_join_request = verification_type == "join_request"
+
+        # 清除类型标记
+        await redis.delete(type_key)
+
+        # 6. 验证成功，恢复权限
+        if is_join_request:
+            # 加入请求模式：批准加入请求
+            approved_key = RedisKeys.verification_approved(chat_id, user_id)
+            await redis.setex(approved_key, 60, "1")
+            await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+
+            # 在私聊中通知用户
+            with contextlib.suppress(Exception):
+                chat = await bot.get_chat(chat_id)
+                chat_title = escape_html(chat.title) if chat.title else "群组"
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！",
+                    parse_mode="HTML",
+                )
+
+            logger.info(f"用户 {user_id} Turnstile 验证成功，已批准加入请求 (群组 {chat_id})")
+        else:
+            # 正常入群模式：恢复群组权限
+            await bot.unban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                only_if_banned=False,
+            )
+
+            # 在私聊中通知用户
+            with contextlib.suppress(Exception):
+                chat = await bot.get_chat(chat_id)
+                chat_title = escape_html(chat.title) if chat.title else "群组"
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                    parse_mode="HTML",
+                )
+
+            # 在群内发送欢迎消息
+            user = message.from_user
+            welcome_msg = await bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！",
+            )
+
+            # 5秒后删除欢迎消息
+            await asyncio.sleep(5)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
+
+            logger.info(f"用户 {user_id} Turnstile 验证成功 (群组 {chat_id})")
+
+        # 清除验证状态
+        verification_service = VerificationService()
+        await verification_service.clear_verification(chat_id, user_id)
+
+    except Exception as e:
+        logger.error(f"处理 Turnstile 回调失败: {e}")
 
 
 async def handle_verification_success(

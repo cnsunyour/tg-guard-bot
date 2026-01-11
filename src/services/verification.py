@@ -679,6 +679,65 @@ class VerificationService:
         )
 
     @staticmethod
+    async def generate_turnstile_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成 Turnstile 验证挑战
+
+        用户需要点击 WebApp 按钮完成 Cloudflare Turnstile 人机验证
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+
+        Returns:
+            VerificationChallenge 对象,包含 WebApp 按钮
+        """
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+        from src.core.config import settings
+
+        # 生成一次性 verify_token（防止重放攻击）
+        verify_token = secrets.token_urlsafe(32)
+
+        # 存储 token 到 Redis
+        redis = get_redis()
+        token_key = RedisKeys.turnstile_token(chat_id, user_id)
+        await redis.setex(token_key, timeout, verify_token)
+
+        # 存储验证状态
+        verify_key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(verify_key, timeout, "turnstile:pending")
+
+        # 构建 WebApp URL（指向独立部署的 WebApp）
+        webapp_url = (
+            f"{settings.turnstile_webapp_url}"
+            f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
+        )
+
+        # 创建 WebApp 按钮
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                ],
+            ]
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
+        )
+
+        return VerificationChallenge(
+            challenge_type="turnstile",
+            question=question,
+            answer="turnstile",
+            keyboard=keyboard,
+        )
+
+    @staticmethod
     async def generate_random_challenge(
         chat_id: int, user_id: int, username: str, timeout: int = 60
     ) -> VerificationChallenge:

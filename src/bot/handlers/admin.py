@@ -99,6 +99,11 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
             ],
             [
                 InlineKeyboardButton(
+                    text="🔐 Turnstile 验证", callback_data=f"setverify:{message.chat.id}:turnstile"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🎲 随机验证", callback_data=f"setverify:{message.chat.id}:random"
                 )
             ],
@@ -140,6 +145,7 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "captcha",
             "honeypot",
             "puzzle",
+            "turnstile",
             "random",
         ]:
             await callback.answer("❌ 无效的验证类型", show_alert=True)
@@ -157,6 +163,7 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "captcha": "图片验证码",
             "honeypot": "蜜罐验证",
             "puzzle": "拼图验证",
+            "turnstile": "Turnstile 验证",
             "random": "随机验证",
         }
 
@@ -192,6 +199,7 @@ async def cmd_verify_config(message: Message) -> None:
             "captcha": "图片验证码",
             "honeypot": "蜜罐验证",
             "puzzle": "拼图验证",
+            "turnstile": "Turnstile 验证",
             "random": "随机验证",
         }
 
