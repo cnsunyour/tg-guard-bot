@@ -146,6 +146,10 @@ async def generate_verification_challenge(group, chat_id: int, user_id: int, use
         return await verification_service.generate_honeypot_challenge(
             chat_id, user_id, username, group.verification_timeout
         )
+    elif group.verification_type == "puzzle":
+        return await verification_service.generate_puzzle_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
     elif group.verification_type == "random":
         return await verification_service.generate_random_challenge(
             chat_id, user_id, username, group.verification_timeout
@@ -782,6 +786,73 @@ async def on_honeypot_verify(callback: CallbackQuery, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"处理蜜罐验证失败: {e}")
+        await callback.answer("❌ 验证失败，请联系管理员", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("verify_puzzle:"))
+async def on_puzzle_verify(callback: CallbackQuery, bot: Bot) -> None:
+    """处理拼图验证 - 私聊模式"""
+    try:
+        _, chat_id_str, user_id_str, position = callback.data.split(":")
+        chat_id = int(chat_id_str)
+        user_id = int(user_id_str)
+
+        # 检查是否是本人点击
+        if callback.from_user.id != user_id:
+            await callback.answer("❌ 这不是你的验证消息", show_alert=True)
+            return
+
+        # ✅ 检查验证状态是否还存在
+        verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        # 验证答案
+        if await verification_service.verify_answer(chat_id, user_id, position):
+            # 检查验证类型
+            redis = get_redis()
+            type_key = RedisKeys.verification_type(chat_id, user_id)
+            verification_type = await redis.get(type_key)
+            is_join_request = verification_type == "join_request"
+
+            # 清除类型标记
+            await redis.delete(type_key)
+
+            await handle_verification_success(bot, callback, chat_id, user_id, is_join_request)
+        else:
+            await callback.answer("❌ 选择错误", show_alert=True)
+            # 根据验证类型决定踢出或拒绝
+            redis = get_redis()
+            type_key = RedisKeys.verification_type(chat_id, user_id)
+            verification_type = await redis.get(type_key)
+
+            if verification_type == "join_request":
+                # 拒绝加入请求并封禁1小时，防止立即重试
+                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=1),
+                )
+                await redis.delete(type_key)
+            else:
+                # 踢出并封禁 1 小时
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=1),
+                )
+
+            # 删除私聊中的验证消息
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            logger.info(f"用户 {user_id} 拼图验证失败")
+
+    except Exception as e:
+        logger.error(f"处理拼图验证失败: {e}")
         await callback.answer("❌ 验证失败，请联系管理员", show_alert=True)
 
 
