@@ -408,7 +408,7 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
         except TelegramForbiddenError:
             # ✅ 用户未启动 Bot，使用共享引导消息机制
             logger.warning(f"用户 {user_id} 未启动 Bot，无法发送私聊验证")
-            await handle_user_not_started_bot(bot, chat_id, user_id)
+            await handle_user_not_started_bot(bot, chat_id, user_id, group.verification_timeout)
 
         except Exception as e:
             logger.error(f"发送私聊验证消息失败: {e}")
@@ -1092,11 +1092,12 @@ async def handle_verification_timeout(
         logger.error(f"处理验证超时失败: {e}")
 
 
-async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> None:
+async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int, timeout: int) -> None:
     """
-    处理用户未启动 Bot 的情况 - 共享引导消息机制
+    处理用户未启动 Bot 的情况 - 共享引导消息机制 + 延迟踢出
 
     优化: 30秒内只发送一条群内引导消息，多用户共享
+    策略: 不立即踢出，给用户完整的验证超时时间去启动 bot 和完成验证
     """
     redis = get_redis()
     hint_key = RedisKeys.verification_hint(chat_id)
@@ -1164,16 +1165,14 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
         await redis.expire(hint_key, 30)
         logger.debug(f"群组 {chat_id} 已有引导消息，延长 TTL 到 30 秒（用户 {user_id}）")
 
-    # 5. 踢出并封禁当前用户 1 小时
-    try:
-        await bot.ban_chat_member(
-            chat_id=chat_id,
-            user_id=user_id,
-            until_date=datetime.now() + timedelta(hours=1),
-        )
-        logger.info(f"用户 {user_id} 未启动 Bot，已从群组 {chat_id} 踢出并封禁 1 小时")
-    except Exception as e:
-        logger.error(f"踢出用户失败: {e}")
+    # 5. 启动延迟踢出任务（延迟时间 = 验证超时时间）
+    # 如果用户在超时前启动 bot 并完成验证，验证成功流程会清除验证状态，导致踢出任务检查失败
+    asyncio.create_task(
+        handle_verification_timeout(bot, chat_id, user_id, message_id=0, timeout=timeout)
+    )
+    logger.info(
+        f"用户 {user_id} 未启动 Bot，已保留在群组 {chat_id} 但限制权限，{timeout} 秒后将踢出"
+    )
 
 
 async def delete_hint_message_after_delay(
