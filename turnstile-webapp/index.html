@@ -20,50 +20,13 @@
             background: var(--tg-theme-bg-color, #fff);
             color: var(--tg-theme-text-color, #000);
         }
-        .container { text-align: center; max-width: 600px; width: 100%; }
+        .container { text-align: center; max-width: 400px; }
         h1 { font-size: 24px; margin-bottom: 10px; }
         p { color: var(--tg-theme-hint-color, #666); margin-bottom: 20px; }
         .status { margin-top: 20px; font-size: 16px; min-height: 24px; }
         .success { color: #4CAF50; }
         .error { color: #f44336; }
         .loading { color: var(--tg-theme-hint-color, #666); }
-        .debug-info {
-            margin-top: 20px;
-            padding: 15px;
-            background: #f5f5f5;
-            border-radius: 8px;
-            text-align: left;
-            display: none;
-        }
-        .debug-info.show { display: block; }
-        .debug-info h3 {
-            margin: 0 0 10px 0;
-            font-size: 18px;
-            color: #333;
-        }
-        .debug-info pre {
-            background: #fff;
-            padding: 10px;
-            border-radius: 4px;
-            overflow-x: auto;
-            font-size: 12px;
-            margin: 10px 0;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        .copy-btn {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-top: 10px;
-        }
-        .copy-btn:active {
-            background: #45a049;
-        }
     </style>
 </head>
 <body>
@@ -75,40 +38,13 @@
         <div id="turnstile-container"></div>
 
         <div id="status" class="status"></div>
-
-        <!-- 调试信息显示区域 -->
-        <div id="debug-info" class="debug-info">
-            <h3>📋 回调数据（调试模式）</h3>
-            <p style="color: #666; font-size: 14px; margin: 10px 0;">方式 1: 手动复制发送</p>
-            <pre id="callback-data"></pre>
-            <button class="copy-btn" onclick="copyData()">📋 复制数据</button>
-
-            <p style="color: #666; font-size: 14px; margin: 20px 0 10px 0;">方式 2: 测试 tg.sendData()</p>
-            <button class="copy-btn" onclick="testSendData()" style="background: #2196F3;">🚀 测试发送数据</button>
-
-            <div id="send-status" style="margin-top: 10px; font-size: 14px;"></div>
-        </div>
     </div>
 
     <script>
         // 初始化 Telegram WebApp
         const tg = window.Telegram.WebApp;
-
-        // 调试：输出 Telegram WebApp 信息
-        console.log('=== Telegram WebApp 调试信息 ===');
-        console.log('window.Telegram 存在:', !!window.Telegram);
-        console.log('window.Telegram.WebApp 存在:', !!window.Telegram?.WebApp);
-        console.log('tg.initData:', tg.initData);
-        console.log('tg.initDataUnsafe:', tg.initDataUnsafe);
-        console.log('tg.version:', tg.version);
-        console.log('tg.platform:', tg.platform);
-        console.log('tg.isExpanded:', tg.isExpanded);
-
         tg.ready();
         tg.expand();
-
-        console.log('tg.ready() 已调用');
-        console.log('tg.expand() 已调用');
 
         // 从 URL 获取参数
         const params = new URLSearchParams(window.location.search);
@@ -154,7 +90,6 @@
 
                 status.textContent = '';
             } catch (e) {
-                console.error('初始化失败:', e);
                 status.className = 'status error';
                 status.textContent = '❌ 加载失败，请刷新重试';
             }
@@ -200,30 +135,18 @@
                     status.className = 'status success';
                     status.textContent = '✅ 验证成功！';
 
-                    // 构建回调数据
-                    const callbackData = {
-                        action: 'turnstile_success',
-                        chat_id: chatId,
-                        user_id: userId,
-                        verify_token: verifyToken,
-                        signature: result.signature,
-                        timestamp: result.timestamp
-                    };
-
-                    // 自动发送数据给 Bot（生产模式）
+                    // 发送签名数据给 Bot
                     setTimeout(() => {
-                        console.log('发送数据给 Bot:', JSON.stringify(callbackData, null, 2));
-                        tg.sendData(JSON.stringify(callbackData));
-                        console.log('tg.sendData() 已调用，WebApp 即将关闭');
+                        tg.sendData(JSON.stringify({
+                            action: 'turnstile_success',
+                            chat_id: chatId,
+                            user_id: userId,
+                            verify_token: verifyToken,
+                            signature: result.signature,
+                            timestamp: result.timestamp
+                        }));
                         tg.close();
                     }, 800);
-
-                    // 调试模式：显示回调数据（可选）
-                    // const debugInfo = document.getElementById('debug-info');
-                    // const callbackDataElement = document.getElementById('callback-data');
-                    // callbackDataElement.textContent = JSON.stringify(callbackData, null, 2);
-                    // debugInfo.classList.add('show');
-                    // window.callbackData = JSON.stringify(callbackData);
                 } else {
                     status.className = 'status error';
                     status.textContent = '❌ ' + (result.error || '验证失败，请重试');
@@ -235,7 +158,6 @@
             } catch (e) {
                 status.className = 'status error';
                 status.textContent = '❌ 网络错误，请重试';
-                console.error('验证失败:', e);
                 if (window.turnstile) {
                     window.turnstile.reset();
                 }
@@ -245,79 +167,6 @@
         function onTurnstileError() {
             status.className = 'status error';
             status.textContent = '❌ 验证加载失败，请刷新重试';
-        }
-
-        // 复制回调数据
-        function copyData() {
-            if (window.callbackData) {
-                navigator.clipboard.writeText(window.callbackData).then(() => {
-                    const btn = document.querySelector('.copy-btn');
-                    const originalText = btn.textContent;
-                    btn.textContent = '✅ 已复制';
-                    setTimeout(() => {
-                        btn.textContent = originalText;
-                    }, 2000);
-                }).catch(err => {
-                    // 降级方案：使用传统方式复制
-                    const textarea = document.createElement('textarea');
-                    textarea.value = window.callbackData;
-                    textarea.style.position = 'fixed';
-                    textarea.style.opacity = '0';
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    try {
-                        document.execCommand('copy');
-                        const btn = document.querySelector('.copy-btn');
-                        const originalText = btn.textContent;
-                        btn.textContent = '✅ 已复制';
-                        setTimeout(() => {
-                            btn.textContent = originalText;
-                        }, 2000);
-                    } catch (e) {
-                        alert('复制失败，请手动复制');
-                    }
-                    document.body.removeChild(textarea);
-                });
-            }
-        }
-
-        // 测试 tg.sendData()
-        function testSendData() {
-            const sendStatus = document.getElementById('send-status');
-
-            if (!window.callbackData) {
-                sendStatus.innerHTML = '<span style="color: red;">❌ 没有可发送的数据</span>';
-                return;
-            }
-
-            sendStatus.innerHTML = '<span style="color: #666;">📤 正在通过 tg.sendData() 发送...</span>';
-            console.log('=== 测试 tg.sendData() ===');
-            console.log('发送数据:', window.callbackData);
-
-            try {
-                // 检查 tg.sendData 是否存在
-                if (typeof tg.sendData !== 'function') {
-                    console.error('tg.sendData 不是一个函数！');
-                    sendStatus.innerHTML = '<span style="color: red;">❌ tg.sendData 不可用</span>';
-                    return;
-                }
-
-                // 调用 tg.sendData
-                tg.sendData(window.callbackData);
-                console.log('✅ tg.sendData() 已调用');
-
-                sendStatus.innerHTML = '<span style="color: #4CAF50;">✅ 已调用 tg.sendData()，请查看 Bot 日志</span>';
-
-                // 5 秒后自动关闭
-                setTimeout(() => {
-                    console.log('准备关闭 WebApp...');
-                    tg.close();
-                }, 5000);
-
-            } catch (e) {
-                console.error('tg.sendData() 调用失败:', e);
-                sendStatus.innerHTML = `<span style="color: red;">❌ 调用失败: ${e.message}</span>`;
-            }
         }
     </script>
 </body>
