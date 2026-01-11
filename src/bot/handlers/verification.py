@@ -221,6 +221,14 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
+        # ✅ 防止重复验证请求：检查是否已有进行中的验证
+        verification_service = VerificationService()
+        if await verification_service.is_verification_pending(chat_id, user_id):
+            logger.debug(
+                f"用户 {user_id} 在群组 {chat_id} 已有进行中的验证（加入请求模式），忽略重复请求"
+            )
+            return
+
         # 根据验证类型生成挑战
         challenge = await generate_verification_challenge(group, chat_id, user_id, username)
 
@@ -385,6 +393,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
         # 用户未通过加入请求验证（未启用 Approve New Members），执行正常验证流程
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
+
+        # ✅ 防止重复验证请求：检查是否已有进行中的验证
+        verification_service = VerificationService()
+        if await verification_service.is_verification_pending(chat_id, user_id):
+            logger.debug(
+                f"用户 {user_id} 在群组 {chat_id} 已有进行中的验证（直接加入模式），忽略重复请求"
+            )
+            return
 
         # 根据验证类型生成挑战
         challenge = await generate_verification_challenge(group, chat_id, user_id, username)
