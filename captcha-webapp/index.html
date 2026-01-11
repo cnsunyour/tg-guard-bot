@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>入群验证</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+            background: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+        }
+
+        .container {
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--tg-theme-text-color, #000000);
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: var(--tg-theme-hint-color, #999999);
+            margin-bottom: 24px;
+        }
+
+        #captcha-container {
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            min-height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status.loading {
+            background: var(--tg-theme-button-color, #3390ec);
+            color: var(--tg-theme-button-text-color, #ffffff);
+        }
+
+        .status.success {
+            background: #4CAF50;
+            color: #ffffff;
+        }
+
+        .status.error {
+            background: #f44336;
+            color: #ffffff;
+        }
+
+        .status:empty {
+            display: none;
+        }
+
+        /* Provider specific containers */
+        #turnstile-widget,
+        #friendly-widget,
+        #hcaptcha-widget,
+        #mtcaptcha-widget,
+        #altcha-widget {
+            display: none;
+        }
+
+        #turnstile-widget.active,
+        #friendly-widget.active,
+        #hcaptcha-widget.active,
+        #mtcaptcha-widget.active,
+        #altcha-widget.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 入群验证</h1>
+        <p class="subtitle">请完成下方验证以加入群组</p>
+
+        <div id="captcha-container">
+            <!-- Turnstile Widget -->
+            <div id="turnstile-widget"></div>
+
+            <!-- Friendly Captcha Widget -->
+            <div id="friendly-widget"></div>
+
+            <!-- hCaptcha Widget -->
+            <div id="hcaptcha-widget"></div>
+
+            <!-- MTCaptcha Widget -->
+            <div id="mtcaptcha-widget" class="mtcaptcha"></div>
+
+            <!-- ALTCHA Widget -->
+            <div id="altcha-widget"></div>
+        </div>
+
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        // 初始化 Telegram WebApp
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        // 解析 URL 参数
+        const params = new URLSearchParams(window.location.search);
+        const provider = params.get('provider') || 'turnstile';
+        const chatId = params.get('chat_id');
+        const userId = params.get('user_id');
+        const verifyToken = params.get('token');
+        const keyIndex = params.get('key_index') || 0;
+
+        const statusEl = document.getElementById('status');
+
+        // 参数验证
+        if (!chatId || !userId || !verifyToken) {
+            showStatus('error', '❌ 验证参数无效');
+            throw new Error('Missing required parameters');
+        }
+
+        // 显示状态消息
+        function showStatus(type, message) {
+            statusEl.className = `status ${type}`;
+            statusEl.textContent = message;
+        }
+
+        // 动态加载脚本
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        // 调用后端验证 API
+        async function verifyWithBackend(provider, captchaResponse) {
+            showStatus('loading', '验证中...');
+
+            try {
+                const response = await fetch('/api/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider,
+                        chat_id: chatId,
+                        user_id: userId,
+                        verify_token: verifyToken,
+                        captcha_response: captchaResponse,
+                        key_index: parseInt(keyIndex, 10),
+                    }),
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus('success', '✅ 验证成功！');
+
+                    // 发送签名数据回 Bot
+                    setTimeout(() => {
+                        tg.sendData(JSON.stringify({
+                            action: 'captcha_success',
+                            provider: provider,
+                            chat_id: chatId,
+                            user_id: userId,
+                            verify_token: verifyToken,
+                            signature: result.signature,
+                            timestamp: result.timestamp,
+                        }));
+                        tg.close();
+                    }, 800);
+                } else {
+                    showStatus('error', `❌ ${result.error || '验证失败，请重试'}`);
+                    resetCaptcha(provider);
+                }
+            } catch (error) {
+                console.error('Verification error:', error);
+                showStatus('error', '❌ 网络错误，请重试');
+                resetCaptcha(provider);
+            }
+        }
+
+        // 重置 CAPTCHA
+        function resetCaptcha(provider) {
+            setTimeout(() => {
+                switch (provider) {
+                    case 'turnstile':
+                        if (window.turnstile) window.turnstile.reset();
+                        break;
+                    case 'friendly':
+                        if (window.friendlyWidget) window.friendlyWidget.reset();
+                        break;
+                    case 'hcaptcha':
+                        if (window.hcaptcha) window.hcaptcha.reset();
+                        break;
+                    case 'mtcaptcha':
+                        if (window.mtcaptcha) window.mtcaptcha.resetUI();
+                        break;
+                }
+            }, 2000);
+        }
+
+        // 初始化对应的 CAPTCHA provider
+        async function initProvider() {
+            showStatus('loading', '加载验证组件...');
+
+            try {
+                // 获取 provider 配置
+                const configResponse = await fetch(`/api/config?provider=${provider}&key_index=${keyIndex}`);
+                const config = await configResponse.json();
+
+                if (!config.success) {
+                    throw new Error(config.error || '无法获取配置');
+                }
+
+                // 根据 provider 加载对应的组件
+                switch (provider) {
+                    case 'turnstile':
+                        await initTurnstile(config);
+                        break;
+                    case 'friendly':
+                        await initFriendly(config);
+                        break;
+                    case 'hcaptcha':
+                        await initHCaptcha(config);
+                        break;
+                    case 'mtcaptcha':
+                        await initMTCaptcha(config);
+                        break;
+                    case 'altcha':
+                        await initAltcha(config);
+                        break;
+                    default:
+                        throw new Error(`Unknown provider: ${provider}`);
+                }
+
+                statusEl.textContent = '';
+                statusEl.className = 'status';
+            } catch (error) {
+                console.error('Init error:', error);
+                showStatus('error', `❌ 加载失败: ${error.message}`);
+            }
+        }
+
+        // ========== Turnstile ==========
+        async function initTurnstile(config) {
+            await loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js');
+            document.getElementById('turnstile-widget').classList.add('active');
+
+            await new Promise(resolve => {
+                const checkTurnstile = setInterval(() => {
+                    if (window.turnstile) {
+                        clearInterval(checkTurnstile);
+                        resolve();
+                    }
+                }, 100);
+            });
+
+            window.turnstile.render('#turnstile-widget', {
+                sitekey: config.site_key,
+                callback: (token) => verifyWithBackend('turnstile', token),
+                'error-callback': () => showStatus('error', '❌ 验证加载失败'),
+                theme: 'auto',
+            });
+        }
+
+        // ========== Friendly Captcha ==========
+        async function initFriendly(config) {
+            await loadScript('https://cdn.jsdelivr.net/npm/friendly-challenge@0.9.15/widget.module.min.js');
+            document.getElementById('friendly-widget').classList.add('active');
+
+            const widget = document.createElement('div');
+            widget.className = 'frc-captcha';
+            widget.setAttribute('data-sitekey', config.site_key);
+            widget.setAttribute('data-start', 'auto');
+            document.getElementById('friendly-widget').appendChild(widget);
+
+            // 监听 Friendly Captcha 完成事件
+            widget.addEventListener('frc:widget.complete', (event) => {
+                const solution = event.detail.solution;
+                verifyWithBackend('friendly', solution);
+            });
+
+            window.friendlyWidget = widget;
+        }
+
+        // ========== hCaptcha ==========
+        async function initHCaptcha(config) {
+            await loadScript('https://js.hcaptcha.com/1/api.js');
+            document.getElementById('hcaptcha-widget').classList.add('active');
+
+            window.hcaptcha.render('hcaptcha-widget', {
+                sitekey: config.site_key,
+                callback: (token) => verifyWithBackend('hcaptcha', token),
+                'error-callback': () => showStatus('error', '❌ 验证加载失败'),
+                theme: 'light',
+            });
+        }
+
+        // ========== MTCaptcha ==========
+        async function initMTCaptcha(config) {
+            // MTCaptcha 需要全局配置
+            window.mtcaptchaConfig = {
+                sitekey: config.site_key,
+                'verified-callback': (token) => verifyWithBackend('mtcaptcha', token),
+                'error-callback': () => showStatus('error', '❌ 验证加载失败'),
+            };
+
+            await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
+            document.getElementById('mtcaptcha-widget').classList.add('active');
+        }
+
+        // ========== ALTCHA ==========
+        async function initAltcha(config) {
+            await loadScript('https://cdn.jsdelivr.net/npm/altcha/dist/altcha.min.js');
+            document.getElementById('altcha-widget').classList.add('active');
+
+            const widget = document.createElement('altcha-widget');
+            widget.setAttribute('challengeurl', config.challenge_url);
+            widget.setAttribute('hidefooter', '');
+            document.getElementById('altcha-widget').appendChild(widget);
+
+            widget.addEventListener('statechange', (event) => {
+                if (event.detail.state === 'verified') {
+                    const payload = event.detail.payload;
+                    verifyAltcha(payload, config.verify_url);
+                } else if (event.detail.state === 'error') {
+                    showStatus('error', '❌ 验证失败');
+                }
+            });
+        }
+
+        // ALTCHA 验证（直接调用 PHP 后端）
+        async function verifyAltcha(payload, verifyUrl) {
+            showStatus('loading', '验证中...');
+
+            try {
+                const response = await fetch(verifyUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        payload: payload,
+                        chat_id: chatId,
+                        user_id: userId,
+                        verify_token: verifyToken,
+                    }),
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus('success', '✅ 验证成功！');
+
+                    // 发送签名数据回 Bot
+                    setTimeout(() => {
+                        tg.sendData(JSON.stringify({
+                            action: 'captcha_success',
+                            provider: 'altcha',
+                            chat_id: chatId,
+                            user_id: userId,
+                            verify_token: verifyToken,
+                            signature: result.signature,
+                            timestamp: result.timestamp,
+                        }));
+                        tg.close();
+                    }, 800);
+                } else {
+                    showStatus('error', `❌ ${result.error || '验证失败，请重试'}`);
+                }
+            } catch (error) {
+                console.error('ALTCHA verification error:', error);
+                showStatus('error', '❌ 网络错误，请重试');
+            }
+        }
+
+        // 启动初始化
+        initProvider();
+    </script>
+</body>
+</html>
