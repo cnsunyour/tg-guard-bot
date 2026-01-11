@@ -1348,14 +1348,14 @@ async def handle_verification_timeout(
             # 验证超时
             logger.info(f"用户 {user_id} 验证超时（{timeout}秒），开始处理...")
 
-            # 1. 踢出并封禁 24 小时
+            # 1. 踢出并封禁 1 小时
             try:
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=24),
+                    until_date=datetime.now() + timedelta(hours=1),
                 )
-                logger.info(f"已踢出并封禁用户 {user_id} 24小时（验证超时）")
+                logger.info(f"已踢出并封禁用户 {user_id} 1小时（验证超时）")
             except Exception as e:
                 logger.error(f"踢出用户失败: {e}")
 
@@ -1371,7 +1371,7 @@ async def handle_verification_timeout(
                 )  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时（超过 {timeout} 秒）。\n\n为防止滥用，您已被临时限制加入该群组 24 小时。请在限制解除后重新加入并在规定时间内完成验证。",
+                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时（超过 {timeout} 秒）。请重新加入并在规定时间内完成验证。",
                     parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
@@ -1380,7 +1380,7 @@ async def handle_verification_timeout(
             # 5. 清除验证状态
             await verification_service.clear_verification(chat_id, user_id)
 
-            logger.info(f"用户 {user_id} 验证超时处理完成（已踢出+封禁24小时）")
+            logger.info(f"用户 {user_id} 验证超时处理完成（已踢出+封禁1小时）")
         else:
             logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
 
@@ -1521,14 +1521,14 @@ async def handle_join_request_timeout(
             except Exception as e:
                 logger.error(f"拒绝加入请求失败: {e}")
 
-            # 2. 封禁 24 小时，防止频繁重试
+            # 2. 封禁 1 小时，防止立即重试
             try:
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=24),
+                    until_date=datetime.now() + timedelta(hours=1),
                 )
-                logger.info(f"已封禁用户 {user_id} 24小时（验证超时）")
+                logger.info(f"已封禁用户 {user_id} 1小时（验证超时）")
             except Exception as e:
                 logger.error(f"封禁用户失败: {e}")
 
@@ -1544,7 +1544,7 @@ async def handle_join_request_timeout(
                 )  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时（超过 {timeout} 秒）。\n\n为防止滥用，您已被临时限制加入该群组 24 小时。请在限制解除后重新申请，并在规定时间内完成验证。",
+                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时（超过 {timeout} 秒）。请重新发送加入请求并在规定时间内完成验证。",
                     parse_mode="HTML",
                 )
 
@@ -1556,7 +1556,7 @@ async def handle_join_request_timeout(
             type_key = RedisKeys.verification_type(chat_id, user_id)
             await redis.delete(type_key)
 
-            logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁24小时）")
+            logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁1小时）")
         else:
             logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
 
