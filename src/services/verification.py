@@ -565,6 +565,179 @@ class VerificationService:
         )
 
     @staticmethod
+    async def generate_puzzle_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成拼图验证挑战
+
+        用户需要选择灰色缺口的正确位置
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+        """
+        from PIL import Image, ImageDraw
+
+        # 1. 生成背景图（280x100，随机渐变色）
+        width, height = 280, 100
+        img = Image.new("RGB", (width, height))
+        draw = ImageDraw.Draw(img)
+
+        # 随机渐变色
+        color1 = (
+            secrets.randbelow(200) + 55,
+            secrets.randbelow(200) + 55,
+            secrets.randbelow(200) + 55,
+        )
+        color2 = (
+            secrets.randbelow(200) + 55,
+            secrets.randbelow(200) + 55,
+            secrets.randbelow(200) + 55,
+        )
+
+        for x in range(width):
+            r = int(color1[0] + (color2[0] - color1[0]) * x / width)
+            g = int(color1[1] + (color2[1] - color1[1]) * x / width)
+            b = int(color1[2] + (color2[2] - color1[2]) * x / width)
+            draw.line([(x, 0), (x, height)], fill=(r, g, b))
+
+        # 2. 定义 4 个候选位置（拼图块大小 50x50）
+        piece_size = 50
+        positions = [
+            (15, 25),  # 位置 1
+            (80, 25),  # 位置 2
+            (145, 25),  # 位置 3
+            (210, 25),  # 位置 4
+        ]
+
+        # 3. 随机选择正确位置
+        correct_idx = secrets.randbelow(4)
+        correct_pos = positions[correct_idx]
+
+        # 4. 在正确位置画缺口（白色/灰色方块）
+        draw.rectangle(
+            [correct_pos, (correct_pos[0] + piece_size, correct_pos[1] + piece_size)],
+            fill=(200, 200, 200),
+            outline=(150, 150, 150),
+            width=2,
+        )
+
+        # 5. 在其他位置画装饰（让图片更丰富）
+        for i, pos in enumerate(positions):
+            if i != correct_idx:
+                # 画一些随机形状
+                shape_color = (
+                    secrets.randbelow(100) + 100,
+                    secrets.randbelow(100) + 100,
+                    secrets.randbelow(100) + 100,
+                )
+                draw.ellipse([pos[0] + 10, pos[1] + 10, pos[0] + 40, pos[1] + 40], fill=shape_color)
+
+        # 6. 转换为 BufferedInputFile
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
+        photo = BufferedInputFile(img_bytes.read(), filename="puzzle.png")
+
+        # 7. 创建按钮
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="1️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:0"
+                    ),
+                    InlineKeyboardButton(
+                        text="2️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:1"
+                    ),
+                    InlineKeyboardButton(
+                        text="3️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:2"
+                    ),
+                    InlineKeyboardButton(
+                        text="4️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:3"
+                    ),
+                ],
+            ]
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内选择灰色缺口的位置："
+        )
+
+        # 8. 存储答案到 Redis
+        redis = get_redis()
+        key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(key, timeout, f"puzzle:{correct_idx}")
+
+        return VerificationChallenge(
+            challenge_type="puzzle",
+            question=question,
+            answer=str(correct_idx),
+            keyboard=keyboard,
+            photo=photo,
+        )
+
+    @staticmethod
+    async def generate_turnstile_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成 Turnstile 验证挑战
+
+        用户需要点击 WebApp 按钮完成 Cloudflare Turnstile 人机验证
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+
+        Returns:
+            VerificationChallenge 对象,包含 WebApp 按钮
+        """
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+        from src.core.config import settings
+
+        # 生成一次性 verify_token（防止重放攻击）
+        verify_token = secrets.token_urlsafe(32)
+
+        # 存储 token 到 Redis
+        redis = get_redis()
+        token_key = RedisKeys.turnstile_token(chat_id, user_id)
+        await redis.setex(token_key, timeout, verify_token)
+
+        # 存储验证状态
+        verify_key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(verify_key, timeout, "turnstile:pending")
+
+        # 构建 WebApp URL（指向独立部署的 WebApp）
+        webapp_url = (
+            f"{settings.turnstile_webapp_url}"
+            f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
+        )
+
+        # 创建 WebApp 按钮
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                ],
+            ]
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
+        )
+
+        return VerificationChallenge(
+            challenge_type="turnstile",
+            question=question,
+            answer="turnstile",
+            keyboard=keyboard,
+        )
+
+    @staticmethod
     async def generate_random_challenge(
         chat_id: int, user_id: int, username: str, timeout: int = 60
     ) -> VerificationChallenge:
@@ -579,7 +752,7 @@ class VerificationService:
             timeout: 验证超时时间(秒)
         """
         # 可用的验证类型（不包括 random 自身）
-        available_types = ["math", "slider", "qa", "emoji", "captcha", "honeypot"]
+        available_types = ["math", "slider", "qa", "emoji", "captcha", "honeypot", "puzzle"]
         selected_type = secrets.choice(available_types)
 
         # 根据选择的类型生成对应的挑战
@@ -601,6 +774,10 @@ class VerificationService:
             )
         elif selected_type == "captcha":
             return await VerificationService.generate_captcha_challenge(
+                chat_id, user_id, username, timeout
+            )
+        elif selected_type == "puzzle":
+            return await VerificationService.generate_puzzle_challenge(
                 chat_id, user_id, username, timeout
             )
         else:  # honeypot

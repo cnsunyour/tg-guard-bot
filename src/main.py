@@ -16,6 +16,75 @@ from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关
 from src.core.redis import close_redis
 
 
+def before_send(event, _hint):
+    """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
+    import re
+
+    # 1. 过滤网络临时性错误（自动重试的错误不需要告警）
+    if "exception" in event and "values" in event["exception"]:
+        for exc_value in event["exception"]["values"]:
+            exc_type = exc_value.get("type", "")
+            exc_module = exc_value.get("module", "")
+
+            # 网络相关的临时性错误
+            network_errors = [
+                "TelegramNetworkError",  # Telegram 网络错误
+                "ClientConnectorError",  # aiohttp 连接错误
+                "ServerDisconnectedError",  # 服务器断开连接
+                "TimeoutError",  # 超时错误
+                "asyncio.TimeoutError",  # asyncio 超时
+                "ConnectionError",  # 连接错误
+                "ConnectionResetError",  # 连接重置
+                "BrokenPipeError",  # 管道破裂
+                "OSError",  # 操作系统错误（网络相关）
+            ]
+
+            # 检查是否是网络错误
+            if exc_type in network_errors:
+                # 返回 None 表示丢弃该事件，不发送到 Sentry
+                return None
+
+            # 检查是否是 aiogram 的可恢复错误
+            if exc_module and "aiogram" in exc_module:
+                if "RestartingTelegram" in exc_type or "RetryAfter" in exc_type:
+                    return None
+
+    # 2. 定义敏感数据的正则模式
+    token_pattern = re.compile(r"\d+:[A-Za-z0-9_-]{35}")  # Telegram Bot Token 格式
+    url_token_pattern = re.compile(r"bot(\d+:[A-Za-z0-9_-]{35})")  # URL 中的 token
+
+    def scrub_sensitive_data(data):
+        """递归清理敏感数据"""
+        if isinstance(data, dict):
+            return {key: scrub_sensitive_data(value) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [scrub_sensitive_data(item) for item in data]
+        elif isinstance(data, str):
+            # 替换 Bot Token
+            data = token_pattern.sub("[FILTERED_BOT_TOKEN]", data)
+            data = url_token_pattern.sub("bot[FILTERED_BOT_TOKEN]", data)
+            return data
+        return data
+
+    # 3. 清理事件数据中的敏感信息
+    if "exception" in event:
+        event["exception"] = scrub_sensitive_data(event["exception"])
+
+    if "message" in event:
+        event["message"] = scrub_sensitive_data(event["message"])
+
+    if "breadcrumbs" in event:
+        event["breadcrumbs"] = scrub_sensitive_data(event["breadcrumbs"])
+
+    if "request" in event:
+        event["request"] = scrub_sensitive_data(event["request"])
+
+    if "extra" in event:
+        event["extra"] = scrub_sensitive_data(event["extra"])
+
+    return event
+
+
 async def setup_bot() -> tuple[Bot, Dispatcher]:
     """初始化 Bot 和 Dispatcher"""
     bot = Bot(
@@ -130,8 +199,17 @@ async def main() -> None:
             attach_stacktrace=True,
             # 过滤敏感数据
             send_default_pii=False,
+            # 自定义事件过滤钩子（过滤 Bot Token）
+            before_send=before_send,
+            # 默认的敏感字段名称过滤
+            # Sentry 会自动过滤包含这些关键词的字段
+            _experiments={
+                "profiles_sample_rate": 0,  # 禁用 profiling
+            },
         )
         logger.info(f"✅ Sentry 已初始化 (环境: {settings.sentry_environment})")
+        logger.info("🔒 已启用敏感数据过滤（Bot Token 将被自动屏蔽）")
+        logger.info("🚫 已启用网络错误过滤（临时性网络错误不会发送到 Sentry）")
     else:
         logger.info("⚠️ Sentry DSN 未配置，跳过 Sentry 初始化")
 

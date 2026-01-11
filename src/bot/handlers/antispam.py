@@ -669,11 +669,36 @@ async def on_message(message: Message, bot: Bot) -> None:
                 message.chat.id, message.from_user.id
             )
 
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled and activity is not None:
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 确定最终阈值（全局配置优先）
+        if global_threshold > 0:
+            # 全局阈值 > 0：使用全局配置
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            # 全局阈值 = 0：使用群组配置
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            # 全局阈值 < 0：全局禁用
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            return  # 直接返回，不进行垃圾检测
+
     # 获取检测器
     detector = get_detector()
 
-    # 检测垃圾（传入活跃度）
-    result = await detector.detect(
+    # 检测垃圾（传入活跃度，使用并行 AI 检测）
+    result = await detector.detect_with_ai(
         text=message.text,
         user_id=message.from_user.id,
         chat_id=message.chat.id,
@@ -1655,6 +1680,16 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             logger.debug(
                 f"使用缓存文本添加反馈 [消息ID:{message_id_str}] [长度:{len(cached_text)}]"
             )
+
+            # 检查是否需要自动训练
+            try:
+                triggered, train_message = await detector.check_and_auto_train(
+                    admin_ids=settings.admin_ids, threshold=50
+                )
+                if triggered:
+                    logger.info(f"反馈添加后触发自动训练: {train_message}")
+            except Exception as e:
+                logger.error(f"检查自动训练失败: {e}")
         else:
             # 缓存已过期或不存在，记录警告但仍然接受反馈
             logger.warning(

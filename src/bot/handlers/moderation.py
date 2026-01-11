@@ -9,6 +9,7 @@ from aiogram.types import Message
 from loguru import logger
 
 from src.core.config import settings
+from src.core.redis import RedisKeys, get_redis
 from src.core.utils import (
     auto_delete_message,
     check_admin_permission_strict_message,
@@ -938,6 +939,20 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"添加垃圾样本失败: {e}")
 
+            # 检查是否需要自动训练
+            try:
+                from src.core.config import settings
+                from src.services.spam_detector import get_detector
+
+                detector = get_detector()
+                triggered, train_message = await detector.check_and_auto_train(
+                    admin_ids=settings.admin_ids, threshold=50
+                )
+                if triggered:
+                    logger.info(f"样本添加后触发自动训练: {train_message}")
+            except Exception as e:
+                logger.error(f"检查自动训练失败: {e}")
+
             # 发送响应消息
             if delete_all:
                 reply = await message.answer(
@@ -1007,6 +1022,152 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             logger.error(f"创建举报记录失败: {e}")
             reply = await message.answer("❌ 举报提交失败，请稍后重试")
             await auto_delete_message(reply)
+
+
+@router.message(Command("notspam"))
+async def cmd_notspam(message: Message, bot: Bot) -> None:
+    """标记为非垃圾消息（误报修正 + 预防性训练）
+
+    支持两种使用方式：
+    1. 回复消息：/notspam [备注] - 预防性训练，将正常消息标记为负样本
+    2. 指定消息ID：/notspam <message_id> [备注] - 误报修正，从 Redis 获取已删除消息
+
+    仅管理员可用
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查是否是管理员
+    if not await check_admin_permission_strict_message(message, bot):
+        reply = await message.answer("❌ 只有管理员可以使用此命令")
+        await auto_delete_message(reply)
+        return
+
+    # 解析命令参数
+    args = message.text.split(maxsplit=2)
+
+    # 场景判断：回复消息 vs 指定 message_id
+    if message.reply_to_message:
+        # ==================== 场景A：预防性训练 ====================
+        # ✅ 检查是否为用户消息（排除频道消息）
+        if not message.reply_to_message.from_user:
+            reply = await message.answer("❌ 无法标记频道消息，请回复用户消息")
+            await auto_delete_message(reply)
+            return
+
+        # 解析备注（args[1] 是备注）
+        note = args[1] if len(args) > 1 else ""
+
+        # 获取消息文本内容
+        message_text = ""
+        if message.reply_to_message.text:
+            message_text = message.reply_to_message.text
+        elif message.reply_to_message.caption:
+            message_text = message.reply_to_message.caption
+
+        # 如果没有文本内容，记录消息类型
+        if not message_text:
+            content_type = message.reply_to_message.content_type
+            message_text = f"[{content_type}消息]"
+
+        usage_type = "预防性训练"
+
+    else:
+        # ==================== 场景B：误报修正（通过 message_id） ====================
+        if len(args) < 2:
+            reply = await message.answer(
+                "❌ 请提供消息ID或回复要标记的消息\n\n"
+                "<b>用法</b>:\n"
+                "• /notspam [备注] - 回复消息，预防性训练\n"
+                "• /notspam &lt;message_id&gt; [备注] - 标记已删除消息为误报\n\n"
+                "<b>示例</b>:\n"
+                "• /notspam （回复正常消息）\n"
+                "• /notspam 这是正常讨论 （回复正常消息）\n"
+                "• /notspam 12345 （标记已删除的消息12345为误报）\n"
+                "• /notspam 12345 这是误报 （标记已删除消息并添加备注）\n\n"
+                "💡 <b>说明</b>:\n"
+                "• 仅管理员可用\n"
+                "• 预防性训练：增强模型对正常消息的识别\n"
+                "• 误报修正：修正被误判的消息（警告消息删除后仍可用）"
+            )
+            await auto_delete_message(reply)
+            return
+
+        # 解析 message_id
+        try:
+            target_message_id = int(args[1])
+        except ValueError:
+            reply = await message.answer(
+                f"❌ 无效的消息ID: {escape_html(args[1])}\n\n"
+                "消息ID应该是纯数字，例如：/notspam 12345"
+            )
+            await auto_delete_message(reply)
+            return
+
+        # 解析备注（args[2] 是备注）
+        note = args[2] if len(args) > 2 else ""
+
+        # 从 Redis 获取缓存的消息文本
+        redis = get_redis()
+        text_cache_key = RedisKeys.spam_message_text(message.chat.id, target_message_id)
+        cached_text = await redis.get(text_cache_key)
+
+        if not cached_text:
+            reply = await message.answer(
+                "❌ 未找到该消息的缓存\n\n"
+                "可能原因：\n"
+                "• 消息ID不正确\n"
+                "• 缓存已过期（1小时后自动删除）\n"
+                "• 该消息未被检测为垃圾"
+            )
+            await auto_delete_message(reply)
+            return
+
+        message_text = cached_text
+        usage_type = "误报修正"
+
+    # ==================== 通用处理：添加到训练库 ====================
+    try:
+        await SpamRepository.add_sample(
+            text=message_text,
+            is_spam=False,  # 标记为非垃圾
+            confidence=1.0,  # 管理员标注，置信度为1.0
+            labeled_by=message.from_user.id,
+        )
+        logger.info(
+            f"非垃圾样本已添加到训练库 [{usage_type}] "
+            f"[标注者:{message.from_user.id}] "
+            f"[文本长度:{len(message_text)}] [备注:{note}]"
+        )
+
+        # 检查是否需要自动训练
+        try:
+            from src.services.spam_detector import get_detector
+
+            detector = get_detector()
+            triggered, train_message = await detector.check_and_auto_train(
+                admin_ids=settings.admin_ids, threshold=50
+            )
+            if triggered:
+                logger.info(f"样本添加后触发自动训练: {train_message}")
+        except Exception as e:
+            logger.error(f"检查自动训练失败: {e}")
+
+        reply = await message.answer(
+            f"✅ 已标记为正常消息（{usage_type}）\n"
+            "• 已添加到训练库（负样本）\n"
+            "• 帮助模型避免类似误判\n"
+            + (f"• 备注: {escape_html(note)}\n" if note else "")
+            + "\n💡 积累足够样本后会自动触发训练"
+        )
+        await auto_delete_message(reply)
+
+    except Exception as e:
+        logger.error(f"添加非垃圾样本失败: {e}")
+        reply = await message.answer("❌ 操作失败，请稍后重试")
+        await auto_delete_message(reply)
 
 
 @router.message(Command("reports"))

@@ -40,7 +40,8 @@ async def cmd_start(message: Message) -> None:
         "🛡️ <b>反垃圾</b>\n"
         "• /antispam - 配置反垃圾\n\n"
         "📊 <b>活跃度系统</b>\n"
-        "• /activity - 控制活跃度系统开关\n\n"
+        "• /activity - 控制活跃度系统开关\n"
+        "• /activityskip - 查看/设置活跃度跳过阈值\n\n"
         "💡 <b>提示</b>：将我添加到群组并设为管理员即可使用所有功能"
     )
 
@@ -93,6 +94,16 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
             ],
             [
                 InlineKeyboardButton(
+                    text="🧩 拼图验证", callback_data=f"setverify:{message.chat.id}:puzzle"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔐 Turnstile 验证", callback_data=f"setverify:{message.chat.id}:turnstile"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🎲 随机验证", callback_data=f"setverify:{message.chat.id}:random"
                 )
             ],
@@ -126,7 +137,17 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
                 return
 
         # ✅ 参数白名单验证
-        if verify_type not in ["math", "slider", "qa", "emoji", "captcha", "honeypot", "random"]:
+        if verify_type not in [
+            "math",
+            "slider",
+            "qa",
+            "emoji",
+            "captcha",
+            "honeypot",
+            "puzzle",
+            "turnstile",
+            "random",
+        ]:
             await callback.answer("❌ 无效的验证类型", show_alert=True)
             logger.warning(f"无效的验证类型: {verify_type}")
             return
@@ -141,6 +162,8 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "emoji": "表情验证",
             "captcha": "图片验证码",
             "honeypot": "蜜罐验证",
+            "puzzle": "拼图验证",
+            "turnstile": "Turnstile 验证",
             "random": "随机验证",
         }
 
@@ -175,6 +198,8 @@ async def cmd_verify_config(message: Message) -> None:
             "emoji": "表情验证",
             "captcha": "图片验证码",
             "honeypot": "蜜罐验证",
+            "puzzle": "拼图验证",
+            "turnstile": "Turnstile 验证",
             "random": "随机验证",
         }
 
@@ -679,3 +704,147 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
     except Exception as e:
         logger.error(f"处理活跃度设置回调失败: {e}")
         await callback.answer("❌ 操作失败，请重试", show_alert=True)
+
+
+@router.message(Command("activityskip"))
+async def cmd_activity_skip(message: Message, bot: Bot) -> None:
+    """查看/设置活跃度跳过垃圾检测阈值
+
+    用法:
+    - /activityskip - 查看当前配置
+    - /activityskip <阈值> - 设置群组阈值
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    try:
+        # 获取群组配置
+        group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+
+        # 获取全局配置
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 解析参数
+        args = message.text.split()
+        if len(args) == 1:
+            # 仅查看配置
+            await _show_activity_skip_config(message, group, global_threshold)
+        else:
+            # 设置阈值
+            try:
+                new_threshold = int(args[1])
+            except ValueError:
+                reply = await message.answer("❌ 阈值必须是数字（0=禁用，>0=启用）")
+                await auto_delete_message(reply)
+                try:
+                    await message.delete()
+                except Exception as e:
+                    logger.debug(f"删除命令消息失败: {e}")
+                return
+
+            # 验证范围
+            if new_threshold < 0:
+                reply = await message.answer("❌ 阈值不能为负数（0=禁用，>0=启用）")
+                await auto_delete_message(reply)
+                try:
+                    await message.delete()
+                except Exception as e:
+                    logger.debug(f"删除命令消息失败: {e}")
+                return
+
+            # 更新群组配置
+            group.activity_skip_threshold = new_threshold
+            await GroupRepository.update(group)
+
+            logger.info(
+                f"管理员 {message.from_user.id} 在群组 {message.chat.id} "
+                f"设置活跃度跳过阈值为 {new_threshold}"
+            )
+
+            # 显示更新后的配置
+            await _show_activity_skip_config(
+                message, group, global_threshold, show_success=True, new_value=new_threshold
+            )
+
+    except Exception as e:
+        logger.error(f"处理活跃度跳过阈值命令失败: {e}")
+        reply = await message.answer("❌ 操作失败，请重试")
+        await auto_delete_message(reply)
+        try:
+            await message.delete()
+        except Exception as e:
+            logger.debug(f"删除命令消息失败: {e}")
+
+
+async def _show_activity_skip_config(
+    message: Message,
+    group,
+    global_threshold: int,
+    show_success: bool = False,
+    new_value: int | None = None,
+) -> None:
+    """显示活跃度跳过阈值配置信息"""
+    # 计算有效阈值
+    if global_threshold > 0:
+        effective_threshold = global_threshold
+        threshold_source = "全局配置"
+        warning = f"⚠️ <b>警告</b>：全局配置生效（阈值 = {global_threshold}），群组配置被覆盖"
+    elif global_threshold == 0:
+        effective_threshold = group.activity_skip_threshold
+        threshold_source = "群组配置"
+        warning = None
+    else:
+        effective_threshold = 0
+        threshold_source = "全局禁用"
+        warning = "⚠️ <b>警告</b>：全局禁用活跃度跳过检测，群组配置无效"
+
+    # 构建消息文本
+    text = "<b>📊 活跃度跳过垃圾检测阈值</b>\n\n"
+
+    if show_success and new_value is not None:
+        text += f"✅ 群组阈值已设置为 <b>{new_value}</b>\n\n"
+
+    text += "<b>当前配置：</b>\n"
+    text += f"• 全局阈值: {global_threshold}"
+    if global_threshold > 0:
+        text += " (全局统一)\n"
+    elif global_threshold == 0:
+        text += " (使用群组配置)\n"
+    else:
+        text += " (全局禁用)\n"
+
+    text += f"• 群组阈值: {group.activity_skip_threshold}\n"
+    text += f"• 有效阈值: <b>{effective_threshold}</b> (来源: {threshold_source})\n\n"
+
+    if warning:
+        text += f"{warning}\n\n"
+
+    text += (
+        "<b>功能说明：</b>\n"
+        "• 当用户活跃度 ≥ 有效阈值时，跳过垃圾检测\n"
+        "• 设置为 0 表示禁用此功能\n"
+        "• 建议阈值：50-200（根据群组活跃度调整）\n\n"
+        "<b>配置优先级：</b>\n"
+        "• 全局阈值 &gt; 0：使用全局配置（所有群组统一）\n"
+        "• 全局阈值 = 0：使用群组配置（每个群组独立）\n"
+        "• 全局阈值 &lt; 0：全局禁用（所有群组都不跳过）\n\n"
+        "<b>用法：</b>\n"
+        "• /activityskip - 查看当前配置\n"
+        "• /activityskip <code>[阈值]</code> - 设置群组阈值"
+    )
+
+    reply = await message.answer(text)
+    await auto_delete_message(reply)
+
+    # 删除命令消息
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.debug(f"删除命令消息失败: {e}")

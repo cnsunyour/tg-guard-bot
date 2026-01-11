@@ -18,7 +18,9 @@ class Group(Base):
 
     # 验证配置
     verification_type: Mapped[str] = mapped_column(
-        String(20), default="math", comment="验证方式: math/slider/qa/emoji/captcha/honeypot/random"
+        String(20),
+        default="random",
+        comment="验证方式: math/slider/qa/emoji/captcha/honeypot/random",
     )
     verification_timeout: Mapped[int] = mapped_column(
         Integer, default=120, comment="验证超时时间(秒)"
@@ -38,6 +40,11 @@ class Group(Base):
     # 活跃度系统配置
     activity_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, comment="是否启用活跃度系统"
+    )
+    activity_skip_threshold: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="活跃度跳过垃圾检测阈值（0=禁用，>0=启用并使用此阈值）",
     )
 
     # 白名单配置
