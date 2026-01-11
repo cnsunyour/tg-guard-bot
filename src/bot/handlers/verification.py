@@ -154,6 +154,22 @@ async def generate_verification_challenge(group, chat_id: int, user_id: int, use
         return await verification_service.generate_turnstile_challenge(
             chat_id, user_id, username, group.verification_timeout
         )
+    elif group.verification_type == "friendly":
+        return await verification_service.generate_friendly_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "hcaptcha":
+        return await verification_service.generate_hcaptcha_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "mtcaptcha":
+        return await verification_service.generate_mtcaptcha_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
+    elif group.verification_type == "altcha":
+        return await verification_service.generate_altcha_challenge(
+            chat_id, user_id, username, group.verification_timeout
+        )
     elif group.verification_type == "random":
         return await verification_service.generate_random_challenge(
             chat_id, user_id, username, group.verification_timeout
@@ -1123,7 +1139,7 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.message(F.web_app_data)
 async def on_webapp_data(message: Message, bot: Bot) -> None:
-    """处理 WebApp 返回的数据（Turnstile 验证回调）"""
+    """处理 WebApp 返回的数据（所有 CAPTCHA 验证回调）"""
     import hashlib
     import hmac
     import json
@@ -1142,8 +1158,16 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         data = json.loads(message.web_app_data.data)
         logger.debug(f"WebApp 解析后数据: {data}")
 
-        if data.get("action") != "turnstile_success":
-            logger.warning(f"WebApp 数据 action 不匹配: {data.get('action')}")
+        # 支持两种 action 格式：
+        # 1. 新格式：captcha_success + provider 字段
+        # 2. 旧格式：turnstile_success (向后兼容)
+        action = data.get("action", "")
+        if action == "captcha_success":
+            provider = data.get("provider", "turnstile")
+        elif action == "turnstile_success":
+            provider = "turnstile"  # 向后兼容
+        else:
+            logger.warning(f"WebApp 数据 action 不匹配: {action}")
             return
 
         chat_id = int(data["chat_id"])
@@ -1152,11 +1176,11 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         signature = data["signature"]
         timestamp = int(data["timestamp"])
 
-        logger.info(f"收到 Turnstile WebApp 回调 [user:{user_id}] [chat:{chat_id}]")
+        logger.info(f"收到 {provider.upper()} WebApp 回调 [user:{user_id}] [chat:{chat_id}]")
 
         # 1. 验证时间戳（防止重放，5 分钟内有效）
         if abs(time.time() - timestamp) > 300:
-            logger.warning(f"Turnstile 回调时间戳过期 [user:{user_id}]")
+            logger.warning(f"{provider.upper()} 回调时间戳过期 [user:{user_id}]")
             # 通知用户
             with contextlib.suppress(Exception):
                 await bot.send_message(
@@ -1166,16 +1190,22 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                 )
             return
 
-        # 2. 验证签名
+        # 2. 验证签名（统一使用 captcha_signature_key 或 turnstile_signature_key）
+        # 优先使用 captcha_signature_key（通用签名密钥）
+        signature_key = settings.captcha_signature_key or settings.turnstile_signature_key
+        if not signature_key:
+            logger.error(f"未配置签名密钥 [provider:{provider}]")
+            return
+
         expected_sig = hmac.new(
-            settings.turnstile_signature_key.encode(),
+            signature_key.encode(),
             f"{chat_id}:{user_id}:{verify_token}:{timestamp}".encode(),
             hashlib.sha256,
         ).hexdigest()
 
         if not hmac.compare_digest(signature, expected_sig):
             logger.warning(
-                f"Turnstile 回调签名无效 [user:{user_id}] [expected:{expected_sig[:8]}...] [got:{signature[:8]}...]"
+                f"{provider.upper()} 回调签名无效 [user:{user_id}] [expected:{expected_sig[:8]}...] [got:{signature[:8]}...]"
             )
             # 通知用户
             with contextlib.suppress(Exception):
@@ -1188,18 +1218,58 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
         # 3. 验证 Redis 中的 token 存在（一次性）
         redis = get_redis()
-        token_key = RedisKeys.turnstile_token(chat_id, user_id)
-        stored_token = await redis.get(token_key)
+        
+        # 根据 provider 选择 token 键
+        if provider == "turnstile":
+            token_key = RedisKeys.turnstile_token(chat_id, user_id)
+        else:
+            token_key = RedisKeys.captcha_token(chat_id, user_id)
+        
+        stored_token_data = await redis.get(token_key)
 
-        if not stored_token or stored_token != verify_token:
+        # 检查 token
+        if not stored_token_data:
             logger.warning(
-                f"Turnstile token 无效或已使用 [user:{user_id}] [stored:{stored_token}] [got:{verify_token[:8]}...]"
+                f"{provider.upper()} token 不存在或已过期 [user:{user_id}]"
             )
             # 通知用户
             with contextlib.suppress(Exception):
                 await bot.send_message(
                     chat_id=user_id,
                     text="❌ <b>验证失败</b>\n\n验证令牌无效或已使用，请重新尝试。",
+                    parse_mode="HTML",
+                )
+            return
+
+        # 解析 token（格式：provider:token[:key_index]）
+        if provider == "turnstile":
+            # Turnstile 直接存储 token
+            stored_token = stored_token_data
+        else:
+            # 其他 provider 存储格式：provider:token[:key_index]
+            token_parts = stored_token_data.split(":")
+            if len(token_parts) < 2 or token_parts[0] != provider:
+                logger.warning(
+                    f"{provider.upper()} token 格式错误 [user:{user_id}] [stored:{stored_token_data}]"
+                )
+                with contextlib.suppress(Exception):
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text="❌ <b>验证失败</b>\n\n验证令牌格式错误，请重新尝试。",
+                        parse_mode="HTML",
+                    )
+                return
+            stored_token = token_parts[1]
+
+        if stored_token != verify_token:
+            logger.warning(
+                f"{provider.upper()} token 不匹配 [user:{user_id}] [stored:{stored_token[:8]}...] [got:{verify_token[:8]}...]"
+            )
+            # 通知用户
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text="❌ <b>验证失败</b>\n\n验证令牌无效，请重新尝试。",
                     parse_mode="HTML",
                 )
             return
@@ -1235,7 +1305,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     reply_markup=ReplyKeyboardRemove(),  # 移除键盘
                 )
 
-            logger.info(f"用户 {user_id} Turnstile 验证成功，已批准加入请求 (群组 {chat_id})")
+            logger.info(f"用户 {user_id} {provider.upper()} 验证成功，已批准加入请求 (群组 {chat_id})")
         else:
             # 正常入群模式：恢复群组权限
             from aiogram.types import ReplyKeyboardRemove
@@ -1269,14 +1339,14 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
 
-            logger.info(f"用户 {user_id} Turnstile 验证成功 (群组 {chat_id})")
+            logger.info(f"用户 {user_id} {provider.upper()} 验证成功 (群组 {chat_id})")
 
         # 清除验证状态
         verification_service = VerificationService()
         await verification_service.clear_verification(chat_id, user_id)
 
     except Exception as e:
-        logger.error(f"处理 Turnstile 回调失败: {e}")
+        logger.error(f"处理 CAPTCHA 回调失败: {e}")
 
 
 async def handle_verification_success(
