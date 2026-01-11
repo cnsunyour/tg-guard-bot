@@ -1122,10 +1122,19 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
     from src.core.config import settings
 
+    # 调试：记录收到 WebApp 数据
+    logger.info(
+        f"✅ 收到 WebApp 数据 [from_user:{message.from_user.id}] "
+        f"[data_length:{len(message.web_app_data.data) if message.web_app_data else 0}]"
+    )
+    logger.debug(f"WebApp 原始数据: {message.web_app_data.data if message.web_app_data else 'None'}")
+
     try:
         data = json.loads(message.web_app_data.data)
+        logger.debug(f"WebApp 解析后数据: {data}")
 
         if data.get("action") != "turnstile_success":
+            logger.warning(f"WebApp 数据 action 不匹配: {data.get('action')}")
             return
 
         chat_id = int(data["chat_id"])
