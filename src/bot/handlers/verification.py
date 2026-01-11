@@ -1159,13 +1159,17 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         logger.debug(f"WebApp 解析后数据: {data}")
 
         # 支持两种 action 格式：
-        # 1. 新格式：captcha_success + provider 字段
-        # 2. 旧格式：turnstile_success (向后兼容)
+        # 1. 推荐格式：captcha_success + provider 字段
+        # 2. 兼容格式：{provider}_success（如 turnstile_success）
         action = data.get("action", "")
         if action == "captcha_success":
-            provider = data.get("provider", "turnstile")
-        elif action == "turnstile_success":
-            provider = "turnstile"  # 向后兼容
+            provider = data.get("provider", "")
+            if not provider:
+                logger.warning("WebApp 数据缺少 provider 字段")
+                return
+        elif action.endswith("_success"):
+            # 兼容旧格式：turnstile_success -> turnstile
+            provider = action.replace("_success", "")
         else:
             logger.warning(f"WebApp 数据 action 不匹配: {action}")
             return
@@ -1190,11 +1194,13 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                 )
             return
 
-        # 2. 验证签名（统一使用 captcha_signature_key 或 turnstile_signature_key）
-        # 优先使用 captcha_signature_key（通用签名密钥）
-        signature_key = settings.captcha_signature_key or settings.turnstile_signature_key
+        # 2. 验证签名（使用统一 CAPTCHA 签名密钥）
+        signature_key = settings.captcha_signature_key
         if not signature_key:
-            logger.error(f"未配置签名密钥 [provider:{provider}]")
+            logger.error(
+                f"未配置 CAPTCHA_SIGNATURE_KEY [provider:{provider}]\n"
+                f"请在 .env 文件中设置 CAPTCHA_SIGNATURE_KEY"
+            )
             return
 
         expected_sig = hmac.new(
@@ -1218,13 +1224,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
         # 3. 验证 Redis 中的 token 存在（一次性）
         redis = get_redis()
-        
-        # 根据 provider 选择 token 键
-        if provider == "turnstile":
-            token_key = RedisKeys.turnstile_token(chat_id, user_id)
-        else:
-            token_key = RedisKeys.captcha_token(chat_id, user_id)
-        
+
+        # 统一使用 captcha_token 键
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
         stored_token_data = await redis.get(token_key)
 
         # 检查 token
@@ -1241,25 +1243,21 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                 )
             return
 
-        # 解析 token（格式：provider:token[:key_index]）
-        if provider == "turnstile":
-            # 向后兼容：旧的 Turnstile WebApp 直接存储 token（无 provider 前缀）
-            stored_token = stored_token_data
-        else:
-            # 统一 CAPTCHA WebApp 存储格式：provider:token[:key_index]
-            token_parts = stored_token_data.split(":")
-            if len(token_parts) < 2 or token_parts[0] != provider:
-                logger.warning(
-                    f"CAPTCHA 验证 token 格式错误 [provider:{provider}] [user:{user_id}] [stored:{stored_token_data}]"
+        # 解析 token（统一格式：provider:token[:key_index]）
+        token_parts = stored_token_data.split(":")
+        if len(token_parts) < 2 or token_parts[0] != provider:
+            logger.warning(
+                f"CAPTCHA 验证 token 格式错误 [provider:{provider}] [user:{user_id}] [stored:{stored_token_data}]"
+            )
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text="❌ <b>验证失败</b>\n\n验证令牌格式错误，请重新尝试。",
+                    parse_mode="HTML",
                 )
-                with contextlib.suppress(Exception):
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text="❌ <b>验证失败</b>\n\n验证令牌格式错误，请重新尝试。",
-                        parse_mode="HTML",
-                    )
-                return
-            stored_token = token_parts[1]
+            return
+
+        stored_token = token_parts[1]
 
         if stored_token != verify_token:
             logger.warning(

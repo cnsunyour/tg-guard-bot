@@ -684,8 +684,7 @@ class VerificationService:
     ) -> VerificationChallenge:
         """生成 Turnstile 验证挑战
 
-        用户需要点击 WebApp 按钮完成 Cloudflare Turnstile 人机验证
-        现已集成到统一 CAPTCHA WebApp
+        使用统一 CAPTCHA WebApp 完成 Cloudflare Turnstile 人机验证
 
         Args:
             chat_id: 群组 ID
@@ -695,44 +694,35 @@ class VerificationService:
 
         Returns:
             VerificationChallenge 对象,包含 WebApp 按钮
+
+        Raises:
+            ValueError: 未配置 CAPTCHA_WEBAPP_URL
         """
         from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
         from src.core.config import settings
+
+        if not settings.captcha_webapp_url:
+            raise ValueError(
+                "Turnstile 验证需要配置 CAPTCHA_WEBAPP_URL\n"
+                "请部署统一 CAPTCHA WebApp 并设置环境变量"
+            )
 
         # 生成一次性 verify_token（防止重放攻击）
         verify_token = secrets.token_urlsafe(32)
 
         redis = get_redis()
 
-        # 优先使用统一 CAPTCHA WebApp，向后兼容旧的 Turnstile WebApp
-        webapp_base_url = settings.captcha_webapp_url or settings.turnstile_webapp_url
+        # 存储 token 到 Redis（统一格式：provider:token）
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
+        await redis.setex(token_key, timeout + 10, f"turnstile:{verify_token}")
 
-        if not webapp_base_url:
-            raise ValueError("未配置 CAPTCHA WebApp 或 Turnstile WebApp URL")
-
-        # 根据使用的 URL 决定 token 存储方式
-        if settings.captcha_webapp_url:
-            # 使用统一 WebApp：存储到 captcha_token
-            token_key = RedisKeys.captcha_token(chat_id, user_id)
-            await redis.setex(token_key, timeout + 10, f"turnstile:{verify_token}")
-
-            # 构建统一 WebApp URL（包含 provider 参数）
-            webapp_url = (
-                f"{webapp_base_url}"
-                f"?provider=turnstile&chat_id={chat_id}&user_id={user_id}"
-                f"&token={verify_token}"
-            )
-        else:
-            # 向后兼容：使用旧的 Turnstile WebApp
-            token_key = RedisKeys.turnstile_token(chat_id, user_id)
-            await redis.setex(token_key, timeout + 10, verify_token)
-
-            # 构建旧的 Turnstile WebApp URL（无 provider 参数）
-            webapp_url = (
-                f"{webapp_base_url}"
-                f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
-            )
+        # 构建统一 WebApp URL
+        webapp_url = (
+            f"{settings.captcha_webapp_url}"
+            f"?provider=turnstile&chat_id={chat_id}&user_id={user_id}"
+            f"&token={verify_token}"
+        )
 
         # 存储验证状态
         verify_key = RedisKeys.verification(chat_id, user_id)
