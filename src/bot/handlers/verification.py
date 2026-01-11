@@ -961,7 +961,7 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
 async def on_captcha_text_input(message: Message, bot: Bot) -> None:
     """处理验证码文本输入 - 私聊消息
 
-    注意：明确排除 web_app_data 消息，避免拦截 Turnstile 回调
+    注意：明确排除 web_app_data 消息，避免拦截 CAPTCHA WebApp 回调
     """
     # 调试日志
     logger.debug(
@@ -1230,7 +1230,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         # 检查 token
         if not stored_token_data:
             logger.warning(
-                f"{provider.upper()} token 不存在或已过期 [user:{user_id}]"
+                f"CAPTCHA 验证 token 不存在或已过期 [provider:{provider}] [user:{user_id}]"
             )
             # 通知用户
             with contextlib.suppress(Exception):
@@ -1243,14 +1243,14 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
         # 解析 token（格式：provider:token[:key_index]）
         if provider == "turnstile":
-            # Turnstile 直接存储 token
+            # 向后兼容：旧的 Turnstile WebApp 直接存储 token（无 provider 前缀）
             stored_token = stored_token_data
         else:
-            # 其他 provider 存储格式：provider:token[:key_index]
+            # 统一 CAPTCHA WebApp 存储格式：provider:token[:key_index]
             token_parts = stored_token_data.split(":")
             if len(token_parts) < 2 or token_parts[0] != provider:
                 logger.warning(
-                    f"{provider.upper()} token 格式错误 [user:{user_id}] [stored:{stored_token_data}]"
+                    f"CAPTCHA 验证 token 格式错误 [provider:{provider}] [user:{user_id}] [stored:{stored_token_data}]"
                 )
                 with contextlib.suppress(Exception):
                     await bot.send_message(
