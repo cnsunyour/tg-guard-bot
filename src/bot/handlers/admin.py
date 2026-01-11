@@ -104,6 +104,26 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
             ],
             [
                 InlineKeyboardButton(
+                    text="🤝 Friendly Captcha", callback_data=f"setverify:{message.chat.id}:friendly"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🖼️ hCaptcha 图片验证", callback_data=f"setverify:{message.chat.id}:hcaptcha"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔒 MTCaptcha 自适应", callback_data=f"setverify:{message.chat.id}:mtcaptcha"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚡ ALTCHA 工作证明", callback_data=f"setverify:{message.chat.id}:altcha"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🎲 随机验证", callback_data=f"setverify:{message.chat.id}:random"
                 )
             ],
@@ -146,6 +166,10 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "honeypot",
             "puzzle",
             "turnstile",
+            "friendly",
+            "hcaptcha",
+            "mtcaptcha",
+            "altcha",
             "random",
         ]:
             await callback.answer("❌ 无效的验证类型", show_alert=True)
@@ -164,6 +188,10 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "honeypot": "蜜罐验证",
             "puzzle": "拼图验证",
             "turnstile": "Turnstile 验证",
+            "friendly": "Friendly Captcha",
+            "hcaptcha": "hCaptcha 图片验证",
+            "mtcaptcha": "MTCaptcha 自适应",
+            "altcha": "ALTCHA 工作证明",
             "random": "随机验证",
         }
 
@@ -200,6 +228,10 @@ async def cmd_verify_config(message: Message) -> None:
             "honeypot": "蜜罐验证",
             "puzzle": "拼图验证",
             "turnstile": "Turnstile 验证",
+            "friendly": "Friendly Captcha",
+            "hcaptcha": "hCaptcha 图片验证",
+            "mtcaptcha": "MTCaptcha 自适应",
+            "altcha": "ALTCHA 工作证明",
             "random": "随机验证",
         }
 
