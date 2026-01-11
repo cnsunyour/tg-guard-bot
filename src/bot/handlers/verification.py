@@ -436,8 +436,20 @@ async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 验证答案
+        # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            # 验证状态不存在，可能是：
+            # 1. 用户已验证通过（点击了其他验证消息）
+            # 2. 用户已超时被踢
+            # 3. 用户点击了过期的验证消息
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            # 尝试删除过期的验证消息
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        # 验证答案
         if await verification_service.verify_answer(chat_id, user_id, answer):
             # 检查验证类型
             redis = get_redis()
@@ -496,8 +508,15 @@ async def on_slider_verify(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 验证答案
+        # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        # 验证答案
         if await verification_service.verify_answer(chat_id, user_id, position):
             # 检查验证类型
             redis = get_redis()
@@ -556,8 +575,15 @@ async def on_qa_verify(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 验证答案
+        # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        # 验证答案
         if await verification_service.verify_answer(chat_id, user_id, answer):
             # 检查验证类型
             redis = get_redis()
@@ -616,8 +642,15 @@ async def on_emoji_verify(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 验证答案
+        # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        # 验证答案
         if await verification_service.verify_answer(chat_id, user_id, answer):
             # 检查验证类型
             redis = get_redis()
@@ -676,8 +709,15 @@ async def on_honeypot_verify(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
-        # 验证答案
+        # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        # 验证答案
         if await verification_service.verify_answer(chat_id, user_id, answer):
             # 检查验证类型
             redis = get_redis()
@@ -830,7 +870,16 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
 
         chat_id = int(chat_id_str)
 
-        # 检查验证状态是否存在
+        # ✅ 检查验证状态是否存在
+        verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            # 验证状态不存在，清理 waiting 状态
+            await redis.delete(waiting_user_key)
+            waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
+            await redis.delete(waiting_key)
+            return
+
+        # 检查验证状态类型
         verification_key = RedisKeys.verification(chat_id, user_id)
         stored_value = await redis.get(verification_key)
         if not stored_value or not stored_value.startswith("captcha:"):
@@ -846,7 +895,6 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             return
 
         # 验证答案
-        verification_service = VerificationService()
         if await verification_service.verify_answer(chat_id, user_id, text_input):
             # 验证成功 - 清理所有相关键
             await redis.delete(waiting_key)
@@ -944,6 +992,14 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 这不是你的验证消息", show_alert=True)
             return
 
+        # ✅ 检查验证状态是否还存在
+        verification_service = VerificationService()
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
         # 踢出并封禁 1 小时
         await bot.ban_chat_member(
             chat_id=chat_id,
@@ -956,7 +1012,6 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
             await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
 
         # 清除验证状态
-        verification_service = VerificationService()
         await verification_service.clear_verification(chat_id, user_id)
 
         await callback.answer("已取消验证")
