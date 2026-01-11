@@ -79,17 +79,36 @@
         <!-- 调试信息显示区域 -->
         <div id="debug-info" class="debug-info">
             <h3>📋 回调数据（调试模式）</h3>
-            <p style="color: #666; font-size: 14px; margin: 10px 0;">请复制以下 JSON 数据并发送给 Bot：</p>
+            <p style="color: #666; font-size: 14px; margin: 10px 0;">方式 1: 手动复制发送</p>
             <pre id="callback-data"></pre>
             <button class="copy-btn" onclick="copyData()">📋 复制数据</button>
+
+            <p style="color: #666; font-size: 14px; margin: 20px 0 10px 0;">方式 2: 测试 tg.sendData()</p>
+            <button class="copy-btn" onclick="testSendData()" style="background: #2196F3;">🚀 测试发送数据</button>
+
+            <div id="send-status" style="margin-top: 10px; font-size: 14px;"></div>
         </div>
     </div>
 
     <script>
         // 初始化 Telegram WebApp
         const tg = window.Telegram.WebApp;
+
+        // 调试：输出 Telegram WebApp 信息
+        console.log('=== Telegram WebApp 调试信息 ===');
+        console.log('window.Telegram 存在:', !!window.Telegram);
+        console.log('window.Telegram.WebApp 存在:', !!window.Telegram?.WebApp);
+        console.log('tg.initData:', tg.initData);
+        console.log('tg.initDataUnsafe:', tg.initDataUnsafe);
+        console.log('tg.version:', tg.version);
+        console.log('tg.platform:', tg.platform);
+        console.log('tg.isExpanded:', tg.isExpanded);
+
         tg.ready();
         tg.expand();
+
+        console.log('tg.ready() 已调用');
+        console.log('tg.expand() 已调用');
 
         // 从 URL 获取参数
         const params = new URLSearchParams(window.location.search);
@@ -259,6 +278,45 @@
                     }
                     document.body.removeChild(textarea);
                 });
+            }
+        }
+
+        // 测试 tg.sendData()
+        function testSendData() {
+            const sendStatus = document.getElementById('send-status');
+
+            if (!window.callbackData) {
+                sendStatus.innerHTML = '<span style="color: red;">❌ 没有可发送的数据</span>';
+                return;
+            }
+
+            sendStatus.innerHTML = '<span style="color: #666;">📤 正在通过 tg.sendData() 发送...</span>';
+            console.log('=== 测试 tg.sendData() ===');
+            console.log('发送数据:', window.callbackData);
+
+            try {
+                // 检查 tg.sendData 是否存在
+                if (typeof tg.sendData !== 'function') {
+                    console.error('tg.sendData 不是一个函数！');
+                    sendStatus.innerHTML = '<span style="color: red;">❌ tg.sendData 不可用</span>';
+                    return;
+                }
+
+                // 调用 tg.sendData
+                tg.sendData(window.callbackData);
+                console.log('✅ tg.sendData() 已调用');
+
+                sendStatus.innerHTML = '<span style="color: #4CAF50;">✅ 已调用 tg.sendData()，请查看 Bot 日志</span>';
+
+                // 5 秒后自动关闭
+                setTimeout(() => {
+                    console.log('准备关闭 WebApp...');
+                    tg.close();
+                }, 5000);
+
+            } catch (e) {
+                console.error('tg.sendData() 调用失败:', e);
+                sendStatus.innerHTML = `<span style="color: red;">❌ 调用失败: ${e.message}</span>`;
             }
         }
     </script>
