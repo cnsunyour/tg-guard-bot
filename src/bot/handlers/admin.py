@@ -94,6 +94,16 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
             ],
             [
                 InlineKeyboardButton(
+                    text="🧩 拼图验证", callback_data=f"setverify:{message.chat.id}:puzzle"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔐 Turnstile 验证", callback_data=f"setverify:{message.chat.id}:turnstile"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🎲 随机验证", callback_data=f"setverify:{message.chat.id}:random"
                 )
             ],
@@ -127,7 +137,17 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
                 return
 
         # ✅ 参数白名单验证
-        if verify_type not in ["math", "slider", "qa", "emoji", "captcha", "honeypot", "random"]:
+        if verify_type not in [
+            "math",
+            "slider",
+            "qa",
+            "emoji",
+            "captcha",
+            "honeypot",
+            "puzzle",
+            "turnstile",
+            "random",
+        ]:
             await callback.answer("❌ 无效的验证类型", show_alert=True)
             logger.warning(f"无效的验证类型: {verify_type}")
             return
@@ -142,6 +162,8 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "emoji": "表情验证",
             "captcha": "图片验证码",
             "honeypot": "蜜罐验证",
+            "puzzle": "拼图验证",
+            "turnstile": "Turnstile 验证",
             "random": "随机验证",
         }
 
@@ -176,6 +198,8 @@ async def cmd_verify_config(message: Message) -> None:
             "emoji": "表情验证",
             "captcha": "图片验证码",
             "honeypot": "蜜罐验证",
+            "puzzle": "拼图验证",
+            "turnstile": "Turnstile 验证",
             "random": "随机验证",
         }
 

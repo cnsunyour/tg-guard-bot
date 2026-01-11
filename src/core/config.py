@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     ai_spam_max_length: int = Field(default=500, description="文本最大长度")
     ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
 
+    # Turnstile 验证配置（Cloudflare 无感人机验证）
+    turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
+    turnstile_webapp_url: str = Field(
+        default="",
+        description="Turnstile WebApp URL（如 https://verify.your-domain.pages.dev）",
+    )
+    turnstile_signature_key: str = Field(
+        default="",
+        description="与 WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
+    )
+
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数（触发禁言）")
