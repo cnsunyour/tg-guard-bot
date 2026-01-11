@@ -27,22 +27,39 @@ export async function onRequestPost(context) {
 
         // 验证 CAPTCHA
         let verified = false;
+        let verifyError = null;
 
         switch (provider) {
             case 'turnstile':
+                if (!env.TURNSTILE_SECRET_KEY) {
+                    return Response.json({ success: false, error: 'Turnstile not configured on server' });
+                }
                 verified = await verifyTurnstile(captcha_response, env.TURNSTILE_SECRET_KEY);
+                verifyError = 'Turnstile verification failed';
                 break;
 
             case 'friendly':
+                if (!env.FRIENDLY_KEYS) {
+                    return Response.json({ success: false, error: 'Friendly Captcha not configured on server' });
+                }
                 verified = await verifyFriendly(captcha_response, key_index, env.FRIENDLY_KEYS);
+                verifyError = 'Friendly Captcha verification failed';
                 break;
 
             case 'hcaptcha':
+                if (!env.HCAPTCHA_SECRET_KEY) {
+                    return Response.json({ success: false, error: 'hCaptcha not configured on server' });
+                }
                 verified = await verifyHCaptcha(captcha_response, env.HCAPTCHA_SECRET_KEY);
+                verifyError = 'hCaptcha verification failed';
                 break;
 
             case 'mtcaptcha':
+                if (!env.MTCAPTCHA_PRIVATE_KEY) {
+                    return Response.json({ success: false, error: 'MTCaptcha not configured on server' });
+                }
                 verified = await verifyMTCaptcha(captcha_response, env.MTCAPTCHA_PRIVATE_KEY);
+                verifyError = 'MTCaptcha verification failed';
                 break;
 
             default:
@@ -50,7 +67,8 @@ export async function onRequestPost(context) {
         }
 
         if (!verified) {
-            return Response.json({ success: false, error: 'Verification failed' });
+            console.error(`${provider} verification failed for user ${user_id} in chat ${chat_id}`);
+            return Response.json({ success: false, error: verifyError });
         }
 
         // 生成 HMAC 签名
@@ -93,13 +111,21 @@ async function verifyTurnstile(token, secretKey) {
  */
 async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
     try {
+        if (!friendlyKeysJson) {
+            console.error('FRIENDLY_KEYS environment variable not configured');
+            return false;
+        }
+
         const friendlyKeys = JSON.parse(friendlyKeysJson);
         const actualIndex = parseInt(keyIndex, 10) % friendlyKeys.length;
         const keyPair = friendlyKeys[actualIndex];
 
         if (!keyPair.apikey || !keyPair.sitekey) {
+            console.error('Invalid Friendly Captcha key configuration:', keyPair);
             throw new Error('Invalid Friendly Captcha key configuration');
         }
+
+        console.log('Verifying Friendly Captcha with sitekey:', keyPair.sitekey.substring(0, 10) + '...');
 
         const response = await fetch('https://api.friendlycaptcha.com/api/v1/siteverify', {
             method: 'POST',
@@ -114,6 +140,12 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
         });
 
         const result = await response.json();
+        console.log('Friendly Captcha API response:', result);
+
+        if (!result.success) {
+            console.error('Friendly Captcha verification failed:', result);
+        }
+
         return result.success === true;
     } catch (error) {
         console.error('Friendly Captcha verification error:', error);
