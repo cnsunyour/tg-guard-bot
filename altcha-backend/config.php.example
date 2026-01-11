@@ -1,0 +1,32 @@
+<?php
+/**
+ * ALTCHA 配置文件
+ *
+ * 使用说明：
+ * 1. 复制此文件为 config.php
+ * 2. 修改配置项
+ * 3. 确保 config.php 不被提交到 Git
+ */
+
+// ALTCHA HMAC 密钥（用于生成和验证挑战）
+// 与统一 WebApp 和 Bot 端共享
+// 生成方法: openssl rand -hex 32
+define('ALTCHA_HMAC_KEY', '<请使用上面的命令生成64字符随机密钥>');
+
+// Bot 签名密钥（用于生成验证成功后的签名）
+// 必须与 Bot 端的 CAPTCHA_SIGNATURE_KEY 一致
+// 生成方法: openssl rand -hex 32
+define('BOT_SIGNATURE_KEY', '<请使用上面的命令生成64字符随机密钥>');
+
+// CORS 设置（允许的域名）
+// 示例：'https://captcha.your-domain.pages.dev'
+define('ALLOWED_ORIGIN', 'https://captcha.your-domain.pages.dev');
+
+// 挑战难度设置
+// maxnumber: 工作证明的最大数字（越大越难）
+// expires: 挑战有效期（秒）
+define('POW_MAX_NUMBER', 100000);
+define('POW_EXPIRES', 300);
+
+// 调试模式（生产环境请设置为 false）
+define('DEBUG_MODE', false);
