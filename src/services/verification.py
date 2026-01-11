@@ -107,7 +107,7 @@ class VerificationService:
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(
             key,
-            timeout,
+            timeout + 10,  # ✅ TTL 比超时时间多 10 秒，避免竞态条件
             f"math:{correct_answer}",
         )
 
@@ -268,7 +268,7 @@ class VerificationService:
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(
             key,
-            timeout,  # ✅ P1-7: 使用传入的超时参数
+            timeout + 10,  # ✅ TTL 比超时时间多 10 秒，避免竞态条件
             f"slider:{correct_position}",  # 格式: slider:位置
         )
 
@@ -334,7 +334,7 @@ class VerificationService:
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(
             key,
-            timeout,
+            timeout + 10,  # ✅ TTL 比超时时间多 10 秒，避免竞态条件
             f"qa:{correct_index}",
         )
 
@@ -409,7 +409,7 @@ class VerificationService:
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(
             key,
-            timeout,
+            timeout + 10,  # ✅ TTL 比超时时间多 10 秒，避免竞态条件
             f"emoji:{correct_index}",
         )
 
@@ -474,7 +474,7 @@ class VerificationService:
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(
             key,
-            timeout,
+            timeout + 10,  # ✅ TTL 比超时时间多 10 秒，避免竞态条件
             f"captcha:{captcha_text.upper()}",
         )
 
@@ -553,7 +553,7 @@ class VerificationService:
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(
             key,
-            timeout,
+            timeout + 10,  # ✅ TTL 比超时时间多 10 秒，避免竞态条件
             f"honeypot:{correct_answer}",
         )
 
@@ -668,7 +668,7 @@ class VerificationService:
         # 8. 存储答案到 Redis
         redis = get_redis()
         key = RedisKeys.verification(chat_id, user_id)
-        await redis.setex(key, timeout, f"puzzle:{correct_idx}")
+        await redis.setex(key, timeout + 10, f"puzzle:{correct_idx}")  # ✅ TTL 比超时时间多 10 秒
 
         return VerificationChallenge(
             challenge_type="puzzle",
@@ -705,11 +705,11 @@ class VerificationService:
         # 存储 token 到 Redis
         redis = get_redis()
         token_key = RedisKeys.turnstile_token(chat_id, user_id)
-        await redis.setex(token_key, timeout, verify_token)
+        await redis.setex(token_key, timeout + 10, verify_token)  # ✅ TTL 比超时时间多 10 秒
 
         # 存储验证状态
         verify_key = RedisKeys.verification(chat_id, user_id)
-        await redis.setex(verify_key, timeout, "turnstile:pending")
+        await redis.setex(verify_key, timeout + 10, "turnstile:pending")  # ✅ TTL 比超时时间多 10 秒
 
         # 构建 WebApp URL（指向独立部署的 WebApp）
         webapp_url = (
