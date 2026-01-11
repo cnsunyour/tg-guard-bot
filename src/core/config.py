@@ -83,6 +83,44 @@ class Settings(BaseSettings):
         description="与 WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
     )
 
+    # ========== 统一 CAPTCHA 验证配置 ==========
+    captcha_webapp_url: str = Field(
+        default="",
+        description="统一 CAPTCHA WebApp URL（支持 Turnstile, Friendly, hCaptcha, MTCaptcha）",
+    )
+    captcha_signature_key: str = Field(
+        default="",
+        description="与 CAPTCHA WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
+    )
+
+    # Friendly Captcha 验证配置（隐私友好，支持多 key 轮换）
+    friendly_enabled: bool = Field(default=False, description="是否启用 Friendly Captcha 验证")
+    friendly_keys: list[dict] = Field(
+        default_factory=list,
+        description='Friendly Captcha key pairs for rotation (JSON array: [{"sitekey":"FC...","apikey":"fc-sk-..."}])',
+    )
+
+    # hCaptcha 验证配置（图片验证）
+    hcaptcha_enabled: bool = Field(default=False, description="是否启用 hCaptcha 验证")
+    hcaptcha_site_key: str = Field(default="", description="hCaptcha Site Key")
+    hcaptcha_secret_key: str = Field(default="", description="hCaptcha Secret Key")
+
+    # MTCaptcha 验证配置（自适应无感验证）
+    mtcaptcha_enabled: bool = Field(default=False, description="是否启用 MTCaptcha 验证")
+    mtcaptcha_site_key: str = Field(default="", description="MTCaptcha Site Key")
+    mtcaptcha_private_key: str = Field(default="", description="MTCaptcha Private Key")
+
+    # ALTCHA 验证配置（开源自托管，proof-of-work）
+    altcha_enabled: bool = Field(default=False, description="是否启用 ALTCHA 验证")
+    altcha_api_url: str = Field(
+        default="",
+        description="ALTCHA PHP 后端 URL（如 https://xxx.serv00.net/altcha）",
+    )
+    altcha_hmac_key: str = Field(
+        default="",
+        description="ALTCHA HMAC key（与 PHP 后端共享，用于挑战生成和验证）",
+    )
+
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
     max_warnings: int = Field(default=3, description="最大警告次数（触发禁言）")
@@ -130,6 +168,24 @@ class Settings(BaseSettings):
         """解析管理员 ID 列表"""
         if isinstance(v, str):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
+
+    @field_validator("friendly_keys", mode="before")
+    @classmethod
+    def parse_friendly_keys(cls, v: str | list[dict]) -> list[dict]:
+        """解析 Friendly Captcha keys JSON 数组"""
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            import json
+
+            try:
+                parsed = json.loads(v)
+                if not isinstance(parsed, list):
+                    raise ValueError("FRIENDLY_KEYS must be a JSON array")
+                return parsed
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in FRIENDLY_KEYS: {e}") from e
         return v
 
     def model_post_init(self, __context) -> None:
