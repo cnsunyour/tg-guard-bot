@@ -9,17 +9,26 @@
 ## ✨ 核心特性
 
 ### 🔐 入群验证
-- **7 种验证方式**：
-  - 数学验证（四则运算，最多两步）
-  - 滑块验证（点击绿色方块）
-  - 问答验证（28 道常识题库）
-  - 表情验证（50 组语义映射）
-  - 图片验证码（扭曲文字识别）
-  - 蜜罐验证（诱饵按钮检测）
-  - 随机验证（随机选择上述类型）
+- **13 种验证方式**：
+  - **内置验证**（7 种）：
+    - 数学验证（四则运算，最多两步）
+    - 滑块验证（点击绿色方块）
+    - 问答验证（28 道常识题库）
+    - 表情验证（50 组语义映射）
+    - 图片验证码（扭曲文字识别）
+    - 蜜罐验证（诱饵按钮检测）
+    - 拼图验证（图片拼图）
+  - **外部 CAPTCHA**（5 种）：
+    - 🔐 Turnstile - Cloudflare 无感验证
+    - 🤝 Friendly Captcha - 隐私友好，支持多 key 轮换
+    - 🖼️ hCaptcha - 图片验证
+    - 🔒 MTCaptcha - 自适应无感验证
+    - ⚡ ALTCHA - 开源 Proof-of-Work 验证（自托管）
+  - 🎲 随机验证（自动选择上述已启用的类型）
 - **可配置超时**：自定义验证时长（默认 120 秒，范围 30-300 秒）
 - **自动处理**：超时或失败自动踢出并封禁 1 小时
 - **私聊验证**：避免群内验证消息轰炸
+- **统一 WebApp**：所有外部 CAPTCHA 使用统一 Telegram WebApp 界面
 
 ### 👮 群管理
 - **踢人** `/kick` - 移出群组
@@ -287,6 +296,19 @@ tg-guard-bot/
 │       ├── database.py         # DB 连接
 │       ├── redis.py            # Redis 连接
 │       └── health.py           # 健康检查
+├── captcha-webapp/             # 统一 CAPTCHA WebApp
+│   ├── index.html              # 前端页面
+│   ├── functions/api/          # Cloudflare Functions
+│   │   ├── config.js           # 配置 API
+│   │   └── verify.js           # 验证 API
+│   ├── wrangler.toml           # Cloudflare 配置
+│   └── README.md               # 部署指南
+├── altcha-backend/             # ALTCHA PHP 后端
+│   ├── challenge.php           # 生成挑战
+│   ├── verify.php              # 验证解答
+│   ├── config.php.example      # 配置模板
+│   ├── composer.json           # Composer 依赖
+│   └── README.md               # Serv00 部署指南
 ├── scripts/                    # 工具脚本
 │   ├── migrate.py              # 数据库迁移
 │   ├── backup.py               # 数据库备份
@@ -305,6 +327,8 @@ tg-guard-bot/
 
 ### 环境变量
 
+#### 基础配置
+
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `BOT_TOKEN` | Telegram Bot Token | - | ✅ |
@@ -312,11 +336,62 @@ tg-guard-bot/
 | `DB_PASSWORD` | 数据库密码 | postgres | ❌ |
 | `REDIS_PASSWORD` | Redis 密码 | 空 | ❌ |
 | `LOG_LEVEL` | 日志级别 | INFO | ❌ |
+
+#### 反垃圾配置
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
 | `ENABLE_OCR` | 启用 OCR 功能 | false | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
 | `SPAM_THRESHOLD_EMBEDDING` | Embedding 阈值 | 0.75 | ❌ |
 
-完整配置参考 [.env.example](.env.example)
+#### CAPTCHA 验证配置（可选）
+
+所有外部 CAPTCHA 服务都需要先部署统一 WebApp 到 Cloudflare Pages。
+
+| 变量 | 说明 | 必填 |
+|------|------|------|
+| `CAPTCHA_WEBAPP_URL` | 统一 CAPTCHA WebApp 地址 | ✅ (使用外部 CAPTCHA 时) |
+| `CAPTCHA_SIGNATURE_KEY` | 签名密钥（64 字符 hex） | ✅ (使用外部 CAPTCHA 时) |
+
+**Friendly Captcha**（隐私友好，支持多 key 轮换）：
+```env
+FRIENDLY_ENABLED=true
+FRIENDLY_KEYS='[{"sitekey":"FCMAV...","apikey":"fc-sk-..."}]'
+```
+
+**hCaptcha**（图片验证）：
+```env
+HCAPTCHA_ENABLED=true
+HCAPTCHA_SITE_KEY=your_site_key
+HCAPTCHA_SECRET_KEY=your_secret_key
+```
+
+**MTCaptcha**（自适应验证）：
+```env
+MTCAPTCHA_ENABLED=true
+MTCAPTCHA_SITE_KEY=MTPublic-...
+MTCAPTCHA_PRIVATE_KEY=MTPrivate-...
+```
+
+**ALTCHA**（开源 PoW，需部署 PHP 后端到 Serv00）：
+```env
+ALTCHA_ENABLED=true
+ALTCHA_API_URL=https://xxx.serv00.net/altcha
+ALTCHA_HMAC_KEY=<64字符hex密钥>
+```
+
+**Turnstile**（已有，向后兼容）：
+```env
+TURNSTILE_ENABLED=true
+TURNSTILE_WEBAPP_URL=https://verify.xxx.pages.dev
+TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
+```
+
+📚 详细配置参考：
+- [.env.example](.env.example) - 完整配置模板
+- [captcha-webapp/README.md](captcha-webapp/README.md) - WebApp 部署指南
+- [altcha-backend/README.md](altcha-backend/README.md) - ALTCHA 后端部署指南
 
 ## 🔒 安全建议
 
@@ -346,6 +421,7 @@ tg-guard-bot/
 - [x] **Phase 5**: 图片 OCR（PaddleOCR）
 - [x] **Phase 6**: 部署优化（监控/备份/文档）
 - [x] **Phase 7**: 验证系统增强（7 种验证 + 动态超时配置）
+- [x] **Phase 8**: 多 CAPTCHA 集成（Friendly/hCaptcha/MTCaptcha/ALTCHA + 统一 WebApp）
 
 ## 🤝 贡献
 
