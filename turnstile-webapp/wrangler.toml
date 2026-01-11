@@ -1,6 +1,9 @@
 name = "tg-guard-turnstile"
 compatibility_date = "2024-01-01"
 
+# Pages 部署配置
+pages_build_output_dir = "."
+
 # Cloudflare Pages 配置
 # 部署时需要在 Cloudflare Dashboard 中设置以下环境变量：
 #
