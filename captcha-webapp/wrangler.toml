@@ -1,11 +1,9 @@
 name = "tg-guard-captcha"
 compatibility_date = "2024-01-01"
+pages_build_output_dir = "."
 
 [build]
 command = ""
-
-[site]
-bucket = "."
 
 # 环境变量在 Cloudflare Dashboard 中配置：
 # Settings → Environment variables → Production
