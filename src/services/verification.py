@@ -717,13 +717,18 @@ class VerificationService:
             f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
         )
 
-        # 创建 WebApp 按钮
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
+        # 创建 WebApp 按钮（使用 KeyboardButton 以支持 tg.sendData()）
+        # 注意：InlineKeyboardButton 不支持 tg.sendData()，必须使用 KeyboardButton
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
                 [
-                    InlineKeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
                 ],
-            ]
+            ],
+            resize_keyboard=True,  # 自动调整按钮大小
+            one_time_keyboard=True,  # 点击后自动隐藏键盘
         )
 
         question = (

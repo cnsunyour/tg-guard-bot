@@ -210,20 +210,20 @@
                         timestamp: result.timestamp
                     };
 
-                    // 显示回调数据（调试模式）
-                    const debugInfo = document.getElementById('debug-info');
-                    const callbackDataElement = document.getElementById('callback-data');
-                    callbackDataElement.textContent = JSON.stringify(callbackData, null, 2);
-                    debugInfo.classList.add('show');
+                    // 自动发送数据给 Bot（生产模式）
+                    setTimeout(() => {
+                        console.log('发送数据给 Bot:', JSON.stringify(callbackData, null, 2));
+                        tg.sendData(JSON.stringify(callbackData));
+                        console.log('tg.sendData() 已调用，WebApp 即将关闭');
+                        tg.close();
+                    }, 800);
 
-                    // 保存数据供复制功能使用
-                    window.callbackData = JSON.stringify(callbackData);
-
-                    // 注释掉自动发送和关闭（调试模式）
-                    // setTimeout(() => {
-                    //     tg.sendData(JSON.stringify(callbackData));
-                    //     tg.close();
-                    // }, 800);
+                    // 调试模式：显示回调数据（可选）
+                    // const debugInfo = document.getElementById('debug-info');
+                    // const callbackDataElement = document.getElementById('callback-data');
+                    // callbackDataElement.textContent = JSON.stringify(callbackData, null, 2);
+                    // debugInfo.classList.add('show');
+                    // window.callbackData = JSON.stringify(callbackData);
                 } else {
                     status.className = 'status error';
                     status.textContent = '❌ ' + (result.error || '验证失败，请重试');

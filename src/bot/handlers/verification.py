@@ -1238,6 +1238,8 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
 
             # 在私聊中通知用户
+            from aiogram.types import ReplyKeyboardRemove
+
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
@@ -1245,11 +1247,14 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     chat_id=user_id,
                     text=f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！",
                     parse_mode="HTML",
+                    reply_markup=ReplyKeyboardRemove(),  # 移除键盘
                 )
 
             logger.info(f"用户 {user_id} Turnstile 验证成功，已批准加入请求 (群组 {chat_id})")
         else:
             # 正常入群模式：恢复群组权限
+            from aiogram.types import ReplyKeyboardRemove
+
             await bot.unban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -1264,6 +1269,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     chat_id=user_id,
                     text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
                     parse_mode="HTML",
+                    reply_markup=ReplyKeyboardRemove(),  # 移除键盘
                 )
 
             # 在群内发送欢迎消息
