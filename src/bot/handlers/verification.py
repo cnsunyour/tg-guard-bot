@@ -1134,9 +1134,18 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         signature = data["signature"]
         timestamp = int(data["timestamp"])
 
+        logger.info(f"收到 Turnstile WebApp 回调 [user:{user_id}] [chat:{chat_id}]")
+
         # 1. 验证时间戳（防止重放，5 分钟内有效）
         if abs(time.time() - timestamp) > 300:
             logger.warning(f"Turnstile 回调时间戳过期 [user:{user_id}]")
+            # 通知用户
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text="❌ <b>验证失败</b>\n\n验证请求已过期，请重新尝试。",
+                    parse_mode="HTML",
+                )
             return
 
         # 2. 验证签名
@@ -1147,7 +1156,16 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         ).hexdigest()
 
         if not hmac.compare_digest(signature, expected_sig):
-            logger.warning(f"Turnstile 回调签名无效 [user:{user_id}]")
+            logger.warning(
+                f"Turnstile 回调签名无效 [user:{user_id}] [expected:{expected_sig[:8]}...] [got:{signature[:8]}...]"
+            )
+            # 通知用户
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text="❌ <b>验证失败</b>\n\n签名验证失败，请联系管理员检查配置。",
+                    parse_mode="HTML",
+                )
             return
 
         # 3. 验证 Redis 中的 token 存在（一次性）
@@ -1156,7 +1174,16 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         stored_token = await redis.get(token_key)
 
         if not stored_token or stored_token != verify_token:
-            logger.warning(f"Turnstile token 无效或已使用 [user:{user_id}]")
+            logger.warning(
+                f"Turnstile token 无效或已使用 [user:{user_id}] [stored:{stored_token}] [got:{verify_token[:8]}...]"
+            )
+            # 通知用户
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text="❌ <b>验证失败</b>\n\n验证令牌无效或已使用，请重新尝试。",
+                    parse_mode="HTML",
+                )
             return
 
         # 4. 删除 token（防止重复使用）
@@ -1319,13 +1346,18 @@ async def handle_verification_timeout(
         verification_service = VerificationService()
         if await verification_service.is_verification_pending(chat_id, user_id):
             # 验证超时
+            logger.info(f"用户 {user_id} 验证超时（{timeout}秒），开始处理...")
 
-            # 1. 踢出并封禁 1 小时
-            await bot.ban_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                until_date=datetime.now() + timedelta(hours=1),
-            )
+            # 1. 踢出并封禁 24 小时
+            try:
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=24),
+                )
+                logger.info(f"已踢出并封禁用户 {user_id} 24小时（验证超时）")
+            except Exception as e:
+                logger.error(f"踢出用户失败: {e}")
 
             # 2. ✅ 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -1339,7 +1371,7 @@ async def handle_verification_timeout(
                 )  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时，请重新加入并在规定时间内完成验证。",
+                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时（超过 {timeout} 秒）。\n\n为防止滥用，您已被临时限制加入该群组 24 小时。请在限制解除后重新加入并在规定时间内完成验证。",
                     parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
@@ -1348,7 +1380,9 @@ async def handle_verification_timeout(
             # 5. 清除验证状态
             await verification_service.clear_verification(chat_id, user_id)
 
-            logger.info(f"用户 {user_id} 私聊验证超时，已从群组 {chat_id} 踢出（群内无消息）")
+            logger.info(f"用户 {user_id} 验证超时处理完成（已踢出+封禁24小时）")
+        else:
+            logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
 
     except Exception as e:
         logger.error(f"处理验证超时失败: {e}")
@@ -1478,20 +1512,31 @@ async def handle_join_request_timeout(
         verification_service = VerificationService()
         if await verification_service.is_verification_pending(chat_id, user_id):
             # 验证超时
+            logger.info(f"用户 {user_id} 加入请求验证超时（{timeout}秒），开始处理...")
 
-            # 1. 拒绝加入请求并封禁1小时，防止立即重试
-            await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
-            await bot.ban_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                until_date=datetime.now() + timedelta(hours=1),
-            )
+            # 1. 拒绝加入请求
+            try:
+                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                logger.info(f"已拒绝用户 {user_id} 的加入请求")
+            except Exception as e:
+                logger.error(f"拒绝加入请求失败: {e}")
 
-            # 2. 删除私聊中的验证消息
+            # 2. 封禁 24 小时，防止频繁重试
+            try:
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    until_date=datetime.now() + timedelta(hours=24),
+                )
+                logger.info(f"已封禁用户 {user_id} 24小时（验证超时）")
+            except Exception as e:
+                logger.error(f"封禁用户失败: {e}")
+
+            # 3. 删除私聊中的验证消息
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=message_id)
 
-            # 3. 在私聊中通知用户（可选）
+            # 4. 在私聊中通知用户
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = (
@@ -1499,19 +1544,21 @@ async def handle_join_request_timeout(
                 )  # ✅ 安全修复：转义 HTML
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时。\n\n请重新发送加入请求并在规定时间内完成验证。",
-                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
+                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时（超过 {timeout} 秒）。\n\n为防止滥用，您已被临时限制加入该群组 24 小时。请在限制解除后重新申请，并在规定时间内完成验证。",
+                    parse_mode="HTML",
                 )
 
-            # 4. 清除验证状态
+            # 5. 清除验证状态
             await verification_service.clear_verification(chat_id, user_id)
 
-            # 5. 清除验证类型标记
+            # 6. 清除验证类型标记
             redis = get_redis()
             type_key = RedisKeys.verification_type(chat_id, user_id)
             await redis.delete(type_key)
 
-            logger.info(f"用户 {user_id} 加入请求验证超时，已拒绝加入群组 {chat_id}")
+            logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁24小时）")
+        else:
+            logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
 
     except Exception as e:
         logger.error(f"处理加入请求验证超时失败: {e}")
