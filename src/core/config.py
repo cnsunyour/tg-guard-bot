@@ -74,13 +74,14 @@ class Settings(BaseSettings):
 
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
+    # ⚠️ 已废弃：请使用 captcha_webapp_url 和 captcha_signature_key
     turnstile_webapp_url: str = Field(
         default="",
-        description="Turnstile WebApp URL（如 https://verify.your-domain.pages.dev）",
+        description="[已废弃] Turnstile WebApp URL，请改用 captcha_webapp_url",
     )
     turnstile_signature_key: str = Field(
         default="",
-        description="与 WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
+        description="[已废弃] Turnstile 签名密钥，请改用 captcha_signature_key",
     )
 
     # ========== 统一 CAPTCHA 验证配置 ==========

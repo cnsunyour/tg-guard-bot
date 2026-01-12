@@ -1,0 +1,13 @@
+name = "tg-guard-captcha"
+compatibility_date = "2024-01-01"
+pages_build_output_dir = "."
+
+# 环境变量在 Cloudflare Dashboard 中配置：
+# Settings → Environment variables → Production
+#
+# 必需配置（根据启用的 provider）：
+# - SIGNATURE_KEY: 与 Bot 共享的签名密钥（同 CAPTCHA_SIGNATURE_KEY）
+# - TURNSTILE_SITE_KEY, TURNSTILE_SECRET_KEY (如启用 Turnstile)
+# - FRIENDLY_KEYS: JSON 数组字符串 (如启用 Friendly Captcha)
+# - HCAPTCHA_SITE_KEY, HCAPTCHA_SECRET_KEY (如启用 hCaptcha)
+# - MTCAPTCHA_SITE_KEY, MTCAPTCHA_PRIVATE_KEY (如启用 MTCaptcha)

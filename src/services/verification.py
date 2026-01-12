@@ -684,7 +684,7 @@ class VerificationService:
     ) -> VerificationChallenge:
         """生成 Turnstile 验证挑战
 
-        用户需要点击 WebApp 按钮完成 Cloudflare Turnstile 人机验证
+        使用统一 CAPTCHA WebApp 完成 Cloudflare Turnstile 人机验证
 
         Args:
             chat_id: 群组 ID
@@ -694,33 +694,41 @@ class VerificationService:
 
         Returns:
             VerificationChallenge 对象,包含 WebApp 按钮
+
+        Raises:
+            ValueError: 未配置 CAPTCHA_WEBAPP_URL
         """
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
         from src.core.config import settings
+
+        if not settings.captcha_webapp_url:
+            raise ValueError(
+                "Turnstile 验证需要配置 CAPTCHA_WEBAPP_URL\n"
+                "请部署统一 CAPTCHA WebApp 并设置环境变量"
+            )
 
         # 生成一次性 verify_token（防止重放攻击）
         verify_token = secrets.token_urlsafe(32)
 
-        # 存储 token 到 Redis
         redis = get_redis()
-        token_key = RedisKeys.turnstile_token(chat_id, user_id)
-        await redis.setex(token_key, timeout + 10, verify_token)  # ✅ TTL 比超时时间多 10 秒
+
+        # 存储 token 到 Redis（统一格式：provider:token）
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
+        await redis.setex(token_key, timeout + 10, f"turnstile:{verify_token}")
+
+        # 构建 WebApp URL（使用独立页面）
+        webapp_url = (
+            f"{settings.captcha_webapp_url}/turnstile.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
+            f"&token={verify_token}"
+        )
 
         # 存储验证状态
         verify_key = RedisKeys.verification(chat_id, user_id)
-        await redis.setex(verify_key, timeout + 10, "turnstile:pending")  # ✅ TTL 比超时时间多 10 秒
-
-        # 构建 WebApp URL（指向独立部署的 WebApp）
-        webapp_url = (
-            f"{settings.turnstile_webapp_url}"
-            f"?chat_id={chat_id}&user_id={user_id}&token={verify_token}"
-        )
+        await redis.setex(verify_key, timeout + 10, "turnstile:pending")
 
         # 创建 WebApp 按钮（使用 KeyboardButton 以支持 tg.sendData()）
-        # 注意：InlineKeyboardButton 不支持 tg.sendData()，必须使用 KeyboardButton
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [
@@ -743,12 +751,289 @@ class VerificationService:
         )
 
     @staticmethod
+    async def generate_friendly_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成 Friendly Captcha 验证挑战
+
+        使用 Friendly Captcha 进行隐私友好的人机验证
+        支持多 key 轮换，通过 Redis INCR 实现 round-robin 分配
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+
+        Returns:
+            VerificationChallenge 对象,包含 WebApp 按钮
+        """
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+
+        from src.core.config import settings
+
+        # 验证配置
+        if not settings.friendly_enabled or not settings.friendly_keys:
+            raise ValueError("Friendly Captcha 未配置或未启用")
+
+        # 生成一次性 verify_token
+        verify_token = secrets.token_urlsafe(32)
+
+        # 使用 Redis INCR 实现 key 轮换（原子操作）
+        redis = get_redis()
+        index_key = RedisKeys.friendly_key_index()
+        current_index = await redis.incr(index_key)
+        key_index = (current_index - 1) % len(settings.friendly_keys)
+
+        # 存储 token 到 Redis（包含 key_index）
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
+        await redis.setex(token_key, timeout + 10, f"friendly:{verify_token}:{key_index}")
+
+        # 存储验证状态
+        verify_key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(verify_key, timeout + 10, "friendly:pending")
+
+        # 构建 WebApp URL（使用独立页面）
+        webapp_url = (
+            f"{settings.captcha_webapp_url}/friendly.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
+            f"&token={verify_token}&key_index={key_index}"
+        )
+
+        # 创建 WebApp 按钮
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [
+                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                ],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n"
+            f"请在 {timeout} 秒内点击下方按钮完成验证："
+        )
+
+        return VerificationChallenge(
+            challenge_type="friendly",
+            question=question,
+            answer="friendly",
+            keyboard=keyboard,
+        )
+
+    @staticmethod
+    async def generate_hcaptcha_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成 hCaptcha 验证挑战
+
+        使用 hCaptcha 进行图片验证
+        注意：免费版需要用户手动完成图片识别任务
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+
+        Returns:
+            VerificationChallenge 对象,包含 WebApp 按钮
+        """
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+
+        from src.core.config import settings
+
+        # 验证配置
+        if not settings.hcaptcha_enabled or not settings.hcaptcha_site_key:
+            raise ValueError("hCaptcha 未配置或未启用")
+
+        # 生成一次性 verify_token
+        verify_token = secrets.token_urlsafe(32)
+
+        # 存储 token 到 Redis
+        redis = get_redis()
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
+        await redis.setex(token_key, timeout + 10, f"hcaptcha:{verify_token}")
+
+        # 存储验证状态
+        verify_key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(verify_key, timeout + 10, "hcaptcha:pending")
+
+        # 构建 WebApp URL（使用独立页面）
+        webapp_url = (
+            f"{settings.captcha_webapp_url}/hcaptcha.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
+            f"&token={verify_token}"
+        )
+
+        # 创建 WebApp 按钮
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [
+                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                ],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n"
+            f"请在 {timeout} 秒内点击下方按钮完成验证："
+        )
+
+        return VerificationChallenge(
+            challenge_type="hcaptcha",
+            question=question,
+            answer="hcaptcha",
+            keyboard=keyboard,
+        )
+
+    @staticmethod
+    async def generate_mtcaptcha_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成 MTCaptcha 验证挑战
+
+        使用 MTCaptcha 进行自适应无感验证
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+
+        Returns:
+            VerificationChallenge 对象,包含 WebApp 按钮
+        """
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+
+        from src.core.config import settings
+
+        # 验证配置
+        if not settings.mtcaptcha_enabled or not settings.mtcaptcha_site_key:
+            raise ValueError("MTCaptcha 未配置或未启用")
+
+        # 生成一次性 verify_token
+        verify_token = secrets.token_urlsafe(32)
+
+        # 存储 token 到 Redis
+        redis = get_redis()
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
+        await redis.setex(token_key, timeout + 10, f"mtcaptcha:{verify_token}")
+
+        # 存储验证状态
+        verify_key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(verify_key, timeout + 10, "mtcaptcha:pending")
+
+        # 构建 WebApp URL（使用独立页面）
+        webapp_url = (
+            f"{settings.captcha_webapp_url}/mtcaptcha.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
+            f"&token={verify_token}"
+        )
+
+        # 创建 WebApp 按钮
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [
+                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                ],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n"
+            f"请在 {timeout} 秒内点击下方按钮完成验证："
+        )
+
+        return VerificationChallenge(
+            challenge_type="mtcaptcha",
+            question=question,
+            answer="mtcaptcha",
+            keyboard=keyboard,
+        )
+
+    @staticmethod
+    async def generate_altcha_challenge(
+        chat_id: int, user_id: int, username: str, timeout: int = 60
+    ) -> VerificationChallenge:
+        """生成 ALTCHA 验证挑战
+
+        使用 ALTCHA 进行开源 Proof-of-Work 验证
+        注意：需要独立部署 PHP 后端到 Serv00
+
+        Args:
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            username: 用户名
+            timeout: 验证超时时间(秒)
+
+        Returns:
+            VerificationChallenge 对象,包含 WebApp 按钮
+        """
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+
+        from src.core.config import settings
+
+        # 验证配置
+        if not settings.altcha_enabled or not settings.altcha_api_url:
+            raise ValueError("ALTCHA 未配置或未启用")
+
+        # 生成一次性 verify_token
+        verify_token = secrets.token_urlsafe(32)
+
+        # 存储 token 到 Redis
+        redis = get_redis()
+        token_key = RedisKeys.captcha_token(chat_id, user_id)
+        await redis.setex(token_key, timeout + 10, f"altcha:{verify_token}")
+
+        # 存储验证状态
+        verify_key = RedisKeys.verification(chat_id, user_id)
+        await redis.setex(verify_key, timeout + 10, "altcha:pending")
+
+        # 构建 WebApp URL（使用独立页面）
+        webapp_url = (
+            f"{settings.captcha_webapp_url}/altcha.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
+            f"&token={verify_token}"
+        )
+
+        # 创建 WebApp 按钮
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [
+                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
+                ],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
+        question = (
+            f"👋 欢迎 {escape_html(username)}！\n\n"
+            f"请在 {timeout} 秒内点击下方按钮完成验证："
+        )
+
+        return VerificationChallenge(
+            challenge_type="altcha",
+            question=question,
+            answer="altcha",
+            keyboard=keyboard,
+        )
+
+    @staticmethod
     async def generate_random_challenge(
         chat_id: int, user_id: int, username: str, timeout: int = 60
     ) -> VerificationChallenge:
         """生成随机类型的验证挑战
 
         从可用的验证类型中随机选择一种
+        自动检测哪些 CAPTCHA 服务已启用
 
         Args:
             chat_id: 群组 ID
@@ -756,8 +1041,28 @@ class VerificationService:
             username: 用户名
             timeout: 验证超时时间(秒)
         """
-        # 可用的验证类型（不包括 random 自身）
+        from src.core.config import settings
+
+        # 始终可用的验证类型（不需要外部服务）
         available_types = ["math", "slider", "qa", "emoji", "captcha", "honeypot", "puzzle"]
+
+        # 动态检测已启用的 CAPTCHA 服务
+        if settings.turnstile_enabled and settings.turnstile_webapp_url:
+            available_types.append("turnstile")
+
+        if settings.friendly_enabled and settings.friendly_keys:
+            available_types.append("friendly")
+
+        if settings.hcaptcha_enabled and settings.hcaptcha_site_key:
+            available_types.append("hcaptcha")
+
+        if settings.mtcaptcha_enabled and settings.mtcaptcha_site_key:
+            available_types.append("mtcaptcha")
+
+        if settings.altcha_enabled and settings.altcha_api_url:
+            available_types.append("altcha")
+
+        # 随机选择一种类型
         selected_type = secrets.choice(available_types)
 
         # 根据选择的类型生成对应的挑战
@@ -785,8 +1090,28 @@ class VerificationService:
             return await VerificationService.generate_puzzle_challenge(
                 chat_id, user_id, username, timeout
             )
-        else:  # honeypot
+        elif selected_type == "honeypot":
             return await VerificationService.generate_honeypot_challenge(
+                chat_id, user_id, username, timeout
+            )
+        elif selected_type == "turnstile":
+            return await VerificationService.generate_turnstile_challenge(
+                chat_id, user_id, username, timeout
+            )
+        elif selected_type == "friendly":
+            return await VerificationService.generate_friendly_challenge(
+                chat_id, user_id, username, timeout
+            )
+        elif selected_type == "hcaptcha":
+            return await VerificationService.generate_hcaptcha_challenge(
+                chat_id, user_id, username, timeout
+            )
+        elif selected_type == "mtcaptcha":
+            return await VerificationService.generate_mtcaptcha_challenge(
+                chat_id, user_id, username, timeout
+            )
+        else:  # altcha
+            return await VerificationService.generate_altcha_challenge(
                 chat_id, user_id, username, timeout
             )
 
