@@ -161,11 +161,11 @@
                 mt_service2.src = 'https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js';
                 (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(mt_service2);
 
-                // SDK 加载后清除加载状态
+                // SDK 加载后隐藏加载状态
                 setTimeout(() => {
                     const statusEl = document.getElementById('status');
                     if (statusEl.classList.contains('loading')) {
-                        statusEl.className = 'status';  // 清除状态类，但不隐藏元素
+                        statusEl.style.display = 'none';  // 隐藏加载提示
                     }
                 }, 1000);
             } catch (error) {
@@ -178,25 +178,20 @@
         window.handleVerification = async function(captchaToken) {
             showStatus('loading', '验证中...');
 
-            // 调试日志
-            const requestData = {
-                provider: 'mtcaptcha',
-                captcha_response: captchaToken,
-                chat_id: chatId,
-                user_id: userId,
-                verify_token: verifyToken,
-            };
-            console.log('Sending verification request:', requestData);
-
             try {
                 const response = await fetch('/api/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestData),
+                    body: JSON.stringify({
+                        provider: 'mtcaptcha',
+                        captcha_response: captchaToken,
+                        chat_id: chatId,
+                        user_id: userId,
+                        verify_token: verifyToken,
+                    }),
                 });
 
                 const result = await response.json();
-                console.log('Verification response:', result);
 
                 if (result.success) {
                     showStatus('success', '✅ 验证成功！');
