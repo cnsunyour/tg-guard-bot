@@ -104,17 +104,20 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
             ],
             [
                 InlineKeyboardButton(
-                    text="🤝 Friendly Captcha", callback_data=f"setverify:{message.chat.id}:friendly"
+                    text="🤝 Friendly Captcha",
+                    callback_data=f"setverify:{message.chat.id}:friendly",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🖼️ hCaptcha 图片验证", callback_data=f"setverify:{message.chat.id}:hcaptcha"
+                    text="🖼️ hCaptcha 图片验证",
+                    callback_data=f"setverify:{message.chat.id}:hcaptcha",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔒 MTCaptcha 自适应", callback_data=f"setverify:{message.chat.id}:mtcaptcha"
+                    text="🔒 MTCaptcha 自适应",
+                    callback_data=f"setverify:{message.chat.id}:mtcaptcha",
                 )
             ],
             [
