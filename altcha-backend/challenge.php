@@ -11,6 +11,8 @@ require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/config.php';
 
 use AltchaOrg\Altcha\Altcha;
+use AltchaOrg\Altcha\ChallengeOptions;
+use AltchaOrg\Altcha\Algorithm;
 
 // 设置响应头
 header('Content-Type: application/json; charset=utf-8');
@@ -35,17 +37,18 @@ try {
     // 创建 ALTCHA 实例
     $altcha = new Altcha(ALTCHA_HMAC_KEY);
 
+    // 创建挑战选项
+    $options = new ChallengeOptions(
+        algorithm: Algorithm::SHA256,
+        maxNumber: POW_MAX_NUMBER,
+        expires: (new \DateTimeImmutable())->setTimestamp(time() + POW_EXPIRES)
+    );
+
     // 生成挑战
-    $challenge = $altcha->createChallenge([
-        'maxnumber' => POW_MAX_NUMBER,
-        'expires' => time() + POW_EXPIRES,
-    ]);
+    $challenge = $altcha->createChallenge($options);
 
     // 返回挑战
-    echo json_encode([
-        'success' => true,
-        'challenge' => $challenge,
-    ]);
+    echo json_encode($challenge);
 
     // 调试日志
     if (defined('DEBUG_MODE') && DEBUG_MODE) {
