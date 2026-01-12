@@ -10,51 +10,6 @@
     <script type="module" src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.min.js" async defer></script>
     <script nomodule src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.compat.min.js" async defer></script>
 
-    <!-- MTCaptcha 配置和回调（必须在 SDK 加载前定义） -->
-    <script>
-        // 定义回调函数
-        function mtcaptcha_jsloaded(status) {
-            console.log('MTCaptcha jsloaded');
-        }
-
-        function mtcaptcha_rendered(status) {
-            console.log('MTCaptcha rendered');
-        }
-
-        function mtcaptcha_verified(status) {
-            console.log('MTCaptcha verified:', status);
-            // verifyWithBackend 会在 body 的脚本中定义
-            if (window.verifyWithBackend) {
-                const token = status.verifiedToken || status;
-                window.verifyWithBackend('mtcaptcha', token);
-            }
-        }
-
-        function mtcaptcha_error(status) {
-            console.error('MTCaptcha error:', status);
-            if (window.showStatus) {
-                window.showStatus('error', '❌ 验证加载失败');
-            }
-        }
-
-        function mtcaptcha_verifyexpired(status) {
-            console.log('MTCaptcha expired');
-            if (window.showStatus) {
-                window.showStatus('error', '❌ 验证已过期');
-            }
-        }
-
-        // 定义配置对象（使用函数引用，而非字符串）
-        var mtcaptchaConfig = {
-            sitekey: '',  // 稍后动态设置
-            'jsloaded-callback': mtcaptcha_jsloaded,
-            'rendered-callback': mtcaptcha_rendered,
-            'verified-callback': mtcaptcha_verified,
-            'error-callback': mtcaptcha_error,
-            'verifyexpired-callback': mtcaptcha_verifyexpired,
-        };
-    </script>
-
     <style>
         * {
             box-sizing: border-box;
@@ -443,12 +398,33 @@
 
         // ========== MTCaptcha ==========
         async function initMTCaptcha(config) {
-            // 更新 sitekey（config 和回调已在 head 中定义）
-            mtcaptchaConfig.sitekey = config.site_key;
+            // 在加载 SDK 前定义完整配置（不要提前定义空 sitekey）
+            window.mtcaptchaConfig = {
+                sitekey: config.site_key,
+                'jsloaded-callback': function(status) {
+                    console.log('MTCaptcha jsloaded');
+                },
+                'rendered-callback': function(status) {
+                    console.log('MTCaptcha rendered');
+                },
+                'verified-callback': function(status) {
+                    console.log('MTCaptcha verified:', status);
+                    const token = status.verifiedToken || status;
+                    verifyWithBackend('mtcaptcha', token);
+                },
+                'error-callback': function(status) {
+                    console.error('MTCaptcha error:', status);
+                    showStatus('error', '❌ 验证加载失败');
+                },
+                'verifyexpired-callback': function(status) {
+                    console.log('MTCaptcha expired');
+                    showStatus('error', '❌ 验证已过期');
+                }
+            };
 
-            console.log('MTCaptcha config updated:', mtcaptchaConfig);
+            console.log('MTCaptcha config defined:', window.mtcaptchaConfig);
 
-            // 官方示例加载两个 JS 文件（冗余备份机制）
+            // 配置定义完成后再加载 SDK
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
             await loadScript('https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js');
 
