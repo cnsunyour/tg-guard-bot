@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>入群验证</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <!-- Friendly Captcha v2 SDK (加载时机很重要，必须在页面脚本之前) -->
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.min.js" async defer></script>
+    <script nomodule src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.compat.min.js" async defer></script>
     <style>
         * {
             box-sizing: border-box;
@@ -304,34 +308,8 @@
             const isV1 = config.site_key.startsWith('FCMAV');
 
             if (isV1) {
-                // v1: 使用旧版 SDK (friendly-challenge 0.9.x)
+                // ========== v1 实现：使用 friendly-challenge 0.9.x SDK ==========
                 await loadScript('https://cdn.jsdelivr.net/npm/friendly-challenge@0.9.15/widget.min.js');
-
-                const widgetDiv = document.createElement('div');
-                widgetDiv.className = 'frc-captcha';
-                widgetDiv.setAttribute('data-sitekey', config.site_key);
-                widgetDiv.setAttribute('data-start', 'auto');
-                widgetDiv.setAttribute('data-lang', 'zh');
-                container.appendChild(widgetDiv);
-
-                const WidgetInstance = window.friendlyChallenge.WidgetInstance;
-                const widget = new WidgetInstance(widgetDiv, {
-                    sitekey: config.site_key,
-                    startMode: 'auto',
-                    language: 'zh',
-                    doneCallback: (solution) => {
-                        console.log('Friendly Captcha v1 完成:', solution.substring(0, 50) + '...');
-                        verifyWithBackend('friendly', solution);
-                    },
-                    errorCallback: (err) => {
-                        console.error('Friendly Captcha 错误:', err);
-                        showStatus('error', '❌ 验证失败，请刷新重试');
-                    },
-                });
-                window.friendlyWidget = widget;
-            } else {
-                // v2: 使用新版 SDK (@friendlycaptcha/sdk)
-                await loadScript('https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.compat.min.js');
 
                 // 创建 widget 容器
                 const widgetDiv = document.createElement('div');
@@ -341,7 +319,7 @@
                 widgetDiv.setAttribute('data-lang', 'zh');
                 container.appendChild(widgetDiv);
 
-                // 等待 SDK 加载完成
+                // 等待 v1 SDK 加载
                 await new Promise(resolve => {
                     const checkSDK = setInterval(() => {
                         if (window.friendlyChallenge) {
@@ -351,27 +329,55 @@
                     }, 100);
                 });
 
-                // v2 使用事件系统
+                // v1 使用 WidgetInstance + doneCallback
                 const widget = new window.friendlyChallenge.WidgetInstance(widgetDiv, {
                     sitekey: config.site_key,
                     startMode: 'auto',
                     language: 'zh',
+                    doneCallback: (solution) => {
+                        console.log('Friendly Captcha v1 完成:', solution.substring(0, 50) + '...');
+                        verifyWithBackend('friendly', solution);
+                    },
+                    errorCallback: (err) => {
+                        console.error('Friendly Captcha v1 错误:', err);
+                        showStatus('error', '❌ 验证失败，请刷新重试');
+                    },
                 });
 
-                // 监听完成事件
-                widget.addEventListener('frc:widget.complete', (event) => {
+                window.friendlyWidget = widget;
+            } else {
+                // ========== v2 实现：使用 @friendlycaptcha/sdk 自动初始化 ==========
+                // v2 SDK 已在 HTML head 中通过 script 标签加载
+                // SDK 会自动初始化所有带 frc-captcha 类的元素
+
+                // 创建 widget 容器（v2 使用 HTML 属性配置）
+                const widgetDiv = document.createElement('div');
+                widgetDiv.className = 'frc-captcha';
+                widgetDiv.setAttribute('data-sitekey', config.site_key);
+                widgetDiv.setAttribute('data-start', 'auto');  // 自动开始
+                widgetDiv.setAttribute('lang', 'zh');  // 语言设置
+                container.appendChild(widgetDiv);
+
+                // 等待 SDK 自动初始化完成并监听事件
+                // v2 使用事件系统，直接在 div 元素上监听
+                widgetDiv.addEventListener('frc:widget.complete', (event) => {
                     const response = event.detail.response;
                     console.log('Friendly Captcha v2 完成:', response.substring(0, 50) + '...');
                     verifyWithBackend('friendly', response);
                 });
 
-                // 监听错误事件
-                widget.addEventListener('frc:widget.error', (event) => {
-                    console.error('Friendly Captcha 错误:', event.detail);
+                widgetDiv.addEventListener('frc:widget.error', (event) => {
+                    console.error('Friendly Captcha v2 错误:', event.detail.error);
                     showStatus('error', '❌ 验证失败，请刷新重试');
                 });
 
-                window.friendlyWidget = widget;
+                widgetDiv.addEventListener('frc:widget.expire', (event) => {
+                    console.warn('Friendly Captcha v2 过期');
+                    showStatus('error', '❌ 验证已过期，请刷新重试');
+                });
+
+                // 保存引用（用于重置）
+                window.friendlyWidget = widgetDiv;
             }
         }
 
