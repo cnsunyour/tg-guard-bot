@@ -128,14 +128,14 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
         console.log('Verifying Friendly Captcha with sitekey:', keyPair.sitekey.substring(0, 10) + '...');
 
         // 自动检测 Friendly Captcha 版本
-        // v1: sitekey 以 "FCMAV" 开头
-        // v2: sitekey 以其他格式开头（如 "FCMJU"）
+        // v1: sitekey 以 "FCMAV" 开头 → api.friendlycaptcha.com
+        // v2: sitekey 以其他格式开头（如 "FCMJU"）→ global.frcapi.com
         const isV1 = keyPair.sitekey.startsWith('FCMAV');
 
-        // v2 API 端点（修正）
+        // v2 使用新的全球端点 global.frcapi.com
         const apiUrl = isV1
             ? 'https://api.friendlycaptcha.com/api/v1/siteverify'
-            : 'https://api.friendlycaptcha.com/api/v2/siteverify';
+            : 'https://global.frcapi.com/api/v2/captcha/siteverify';
 
         console.log(`Using Friendly Captcha ${isV1 ? 'v1' : 'v2'} API: ${apiUrl}`);
 
