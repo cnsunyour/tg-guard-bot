@@ -9,6 +9,52 @@
     <!-- Friendly Captcha v2 SDK (加载时机很重要，必须在页面脚本之前) -->
     <script type="module" src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.min.js" async defer></script>
     <script nomodule src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.compat.min.js" async defer></script>
+
+    <!-- MTCaptcha 配置和回调（必须在 SDK 加载前定义） -->
+    <script>
+        // 定义回调函数
+        function mtcaptcha_jsloaded(status) {
+            console.log('MTCaptcha jsloaded');
+        }
+
+        function mtcaptcha_rendered(status) {
+            console.log('MTCaptcha rendered');
+        }
+
+        function mtcaptcha_verified(status) {
+            console.log('MTCaptcha verified:', status);
+            // verifyWithBackend 会在 body 的脚本中定义
+            if (window.verifyWithBackend) {
+                const token = status.verifiedToken || status;
+                window.verifyWithBackend('mtcaptcha', token);
+            }
+        }
+
+        function mtcaptcha_error(status) {
+            console.error('MTCaptcha error:', status);
+            if (window.showStatus) {
+                window.showStatus('error', '❌ 验证加载失败');
+            }
+        }
+
+        function mtcaptcha_verifyexpired(status) {
+            console.log('MTCaptcha expired');
+            if (window.showStatus) {
+                window.showStatus('error', '❌ 验证已过期');
+            }
+        }
+
+        // 定义配置对象（SDK 会读取）
+        var mtcaptchaConfig = {
+            sitekey: '',  // 稍后动态设置
+            'jsloaded-callback': 'mtcaptcha_jsloaded',
+            'rendered-callback': 'mtcaptcha_rendered',
+            'verified-callback': 'mtcaptcha_verified',
+            'error-callback': 'mtcaptcha_error',
+            'verifyexpired-callback': 'mtcaptcha_verifyexpired',
+        };
+    </script>
+
     <style>
         * {
             box-sizing: border-box;
@@ -396,53 +442,11 @@
         }
 
         // ========== MTCaptcha ==========
-        // 必须在全局作用域定义回调函数（SDK 要求）
-        window.mtcaptcha_jsloaded = function(status) {
-            console.log('MTCaptcha jsloaded');
-        };
-
-        window.mtcaptcha_rendered = function(status) {
-            console.log('MTCaptcha rendered');
-        };
-
-        window.mtcaptcha_verified = function(status) {
-            console.log('MTCaptcha verified:', status);
-            const token = status.verifiedToken || status;
-            verifyWithBackend('mtcaptcha', token);
-        };
-
-        window.mtcaptcha_error = function(status) {
-            console.error('MTCaptcha error:', status);
-            showStatus('error', '❌ 验证加载失败');
-        };
-
-        window.mtcaptcha_verifyexpired = function(status) {
-            console.log('MTCaptcha expired');
-            showStatus('error', '❌ 验证已过期');
-        };
-
-        // 在全局作用域预先定义配置对象（SDK 加载时会读取）
-        window.mtcaptchaConfig = {
-            sitekey: '',  // 稍后动态设置
-            'jsloaded-callback': 'mtcaptcha_jsloaded',
-            'rendered-callback': 'mtcaptcha_rendered',
-            'verified-callback': 'mtcaptcha_verified',
-            'error-callback': 'mtcaptcha_error',
-            'verifyexpired-callback': 'mtcaptcha_verifyexpired',
-        };
-
         async function initMTCaptcha(config) {
-            // 只更新 sitekey（配置对象已在全局定义）
-            window.mtcaptchaConfig.sitekey = config.site_key;
+            // 更新 sitekey（config 和回调已在 head 中定义）
+            mtcaptchaConfig.sitekey = config.site_key;
 
-            console.log('MTCaptcha config updated:', window.mtcaptchaConfig);
-            console.log('Callbacks defined:', {
-                jsloaded: typeof window.mtcaptcha_jsloaded,
-                rendered: typeof window.mtcaptcha_rendered,
-                verified: typeof window.mtcaptcha_verified,
-                error: typeof window.mtcaptcha_error,
-                verifyexpired: typeof window.mtcaptcha_verifyexpired,
-            });
+            console.log('MTCaptcha config updated:', mtcaptchaConfig);
 
             // 官方示例加载两个 JS 文件（冗余备份机制）
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
