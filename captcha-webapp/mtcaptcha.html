@@ -178,20 +178,25 @@
         window.handleVerification = async function(captchaToken) {
             showStatus('loading', '验证中...');
 
+            // 调试日志
+            const requestData = {
+                provider: 'mtcaptcha',
+                captcha_response: captchaToken,
+                chat_id: chatId,
+                user_id: userId,
+                verify_token: verifyToken,
+            };
+            console.log('Sending verification request:', requestData);
+
             try {
                 const response = await fetch('/api/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        provider: 'mtcaptcha',
-                        captcha_response: captchaToken,
-                        chat_id: chatId,
-                        user_id: userId,
-                        verify_token: verifyToken,
-                    }),
+                    body: JSON.stringify(requestData),
                 });
 
                 const result = await response.json();
+                console.log('Verification response:', result);
 
                 if (result.success) {
                     showStatus('success', '✅ 验证成功！');
