@@ -6,7 +6,7 @@
     <title>MTCaptcha 验证</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-    <!-- MTCaptcha 配置（按照官方示例） -->
+    <!-- MTCaptcha 回调函数（必须在全局作用域） -->
     <script>
         // 回调函数
         function mtcaptchaVerifiedCallback(token) {
@@ -22,26 +22,6 @@
                 window.handleError();
             }
         }
-
-        // MTCaptcha 配置
-        var mtcaptchaConfig = {
-            sitekey: new URLSearchParams(window.location.search).get('sitekey') || '',
-            'verified-callback': 'mtcaptchaVerifiedCallback',
-            'error-callback': 'mtcaptchaErrorCallback',
-        };
-
-        // 加载 SDK（官方方式）
-        (function() {
-            var mt_service = document.createElement('script');
-            mt_service.async = true;
-            mt_service.src = 'https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js';
-            (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(mt_service);
-
-            var mt_service2 = document.createElement('script');
-            mt_service2.async = true;
-            mt_service2.src = 'https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js';
-            (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(mt_service2);
-        })();
     </script>
 
     <style>
@@ -144,6 +124,54 @@
             el.className = `status ${type}`;
             el.textContent = message;
         }
+
+        // 初始化 MTCaptcha
+        (async function initMTCaptcha() {
+            try {
+                showStatus('loading', '加载验证组件...');
+
+                // 从 API 获取配置
+                const response = await fetch(`/api/config?provider=mtcaptcha&chat_id=${chatId}&user_id=${userId}&token=${verifyToken}`);
+                const config = await response.json();
+
+                if (!config.site_key) {
+                    throw new Error('Failed to get site key');
+                }
+
+                console.log('MTCaptcha config loaded:', config.site_key);
+
+                // 定义完整配置（SDK 加载前）
+                window.mtcaptchaConfig = {
+                    sitekey: config.site_key,
+                    'verified-callback': 'mtcaptchaVerifiedCallback',
+                    'error-callback': 'mtcaptchaErrorCallback',
+                };
+
+                console.log('MTCaptcha config set:', window.mtcaptchaConfig);
+
+                // 加载 SDK（官方方式）
+                var mt_service = document.createElement('script');
+                mt_service.async = true;
+                mt_service.src = 'https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js';
+                (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(mt_service);
+
+                var mt_service2 = document.createElement('script');
+                mt_service2.async = true;
+                mt_service2.src = 'https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js';
+                (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(mt_service2);
+
+                // 清除加载状态
+                setTimeout(() => {
+                    const statusEl = document.getElementById('status');
+                    if (statusEl.classList.contains('loading')) {
+                        statusEl.style.display = 'none';
+                    }
+                }, 1000);
+            } catch (error) {
+                console.error('Failed to initialize MTCaptcha:', error);
+                showStatus('error', '❌ 加载失败，请刷新重试');
+            }
+        })();
 
         // 验证成功处理
         window.handleVerification = async function(captchaToken) {
