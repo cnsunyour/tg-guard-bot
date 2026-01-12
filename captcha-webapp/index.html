@@ -396,32 +396,52 @@
         }
 
         // ========== MTCaptcha ==========
+        // 必须在全局作用域定义回调函数（SDK 要求）
+        window.mtcaptcha_jsloaded = function(status) {
+            console.log('MTCaptcha jsloaded');
+        };
+
+        window.mtcaptcha_rendered = function(status) {
+            console.log('MTCaptcha rendered');
+        };
+
+        window.mtcaptcha_verified = function(status) {
+            console.log('MTCaptcha verified:', status);
+            const token = status.verifiedToken || status;
+            verifyWithBackend('mtcaptcha', token);
+        };
+
+        window.mtcaptcha_error = function(status) {
+            console.error('MTCaptcha error:', status);
+            showStatus('error', '❌ 验证加载失败');
+        };
+
+        window.mtcaptcha_verifyexpired = function(status) {
+            console.log('MTCaptcha expired');
+            showStatus('error', '❌ 验证已过期');
+        };
+
         async function initMTCaptcha(config) {
-            // 按照官方示例：先定义 config，再加载 script（SDK 会读取 window.mtcaptchaConfig）
+            // 按照官方示例：使用字符串引用全局函数
             window.mtcaptchaConfig = {
                 sitekey: config.site_key,
-                'jsloaded-callback': function(status) {
-                    console.log('MTCaptcha jsloaded');
-                },
-                'rendered-callback': function(status) {
-                    console.log('MTCaptcha rendered');
-                },
-                'verified-callback': function(status) {
-                    console.log('MTCaptcha verified:', status);
-                    const token = status.verifiedToken || status;
-                    verifyWithBackend('mtcaptcha', token);
-                },
-                'error-callback': function(status) {
-                    console.error('MTCaptcha error:', status);
-                    showStatus('error', '❌ 验证加载失败');
-                },
-                'verifyexpired-callback': function(status) {
-                    console.log('MTCaptcha expired');
-                    showStatus('error', '❌ 验证已过期');
-                }
+                'jsloaded-callback': 'mtcaptcha_jsloaded',
+                'rendered-callback': 'mtcaptcha_rendered',
+                'verified-callback': 'mtcaptcha_verified',
+                'error-callback': 'mtcaptcha_error',
+                'verifyexpired-callback': 'mtcaptcha_verifyexpired',
             };
 
-            // 官方示例加载两个 JS 文件（可能是冗余备份机制）
+            console.log('MTCaptcha config set:', window.mtcaptchaConfig);
+            console.log('Callbacks defined:', {
+                jsloaded: typeof window.mtcaptcha_jsloaded,
+                rendered: typeof window.mtcaptcha_rendered,
+                verified: typeof window.mtcaptcha_verified,
+                error: typeof window.mtcaptcha_error,
+                verifyexpired: typeof window.mtcaptcha_verifyexpired,
+            });
+
+            // 官方示例加载两个 JS 文件（冗余备份机制）
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
             await loadScript('https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js');
 
