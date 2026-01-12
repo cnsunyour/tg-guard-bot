@@ -242,6 +242,38 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
     # ==================== 用户信息反垃圾检测结束 ====================
 
     try:
+        # ✅ 检查用户是否已通过验证（例如之前验证成功但批准失败）
+        redis = get_redis()
+        approved_key = RedisKeys.verification_approved(chat_id, user_id)
+        is_approved = await redis.get(approved_key)
+
+        if is_approved:
+            # 用户已通过验证，直接批准加入请求
+            logger.info(f"用户 {user_id} 已通过验证，直接批准加入请求")
+
+            try:
+                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+                logger.info(f"已批准用户 {user_id} 的加入请求（已验证用户）")
+
+                # 清除验证标记
+                await redis.delete(approved_key)
+
+                # 在私聊中通知用户
+                with contextlib.suppress(Exception):
+                    chat = await bot.get_chat(chat_id)
+                    chat_title = escape_html(chat.title) if chat.title else "群组"
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ <b>加入成功！</b>\n\n您的加入请求已批准，欢迎加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                        parse_mode="HTML",
+                    )
+
+                return  # 已处理，直接返回
+
+            except Exception as e:
+                logger.error(f"批准已验证用户的加入请求失败: {e}")
+                # 批准失败，继续走正常验证流程
+
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
