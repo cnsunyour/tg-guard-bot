@@ -397,44 +397,34 @@
 
         // ========== MTCaptcha ==========
         async function initMTCaptcha(config) {
-            // 定义回调函数对象（使用函数引用而非字符串，更可靠）
-            const callbacks = {
-                jsloaded: function(status) {
+            // 按照官方示例：先定义 config，再加载 script（SDK 会读取 window.mtcaptchaConfig）
+            window.mtcaptchaConfig = {
+                sitekey: config.site_key,
+                'jsloaded-callback': function(status) {
                     console.log('MTCaptcha jsloaded');
                 },
-
-                rendered: function(status) {
+                'rendered-callback': function(status) {
                     console.log('MTCaptcha rendered');
                 },
-
-                verified: function(status) {
+                'verified-callback': function(status) {
                     console.log('MTCaptcha verified:', status);
                     const token = status.verifiedToken || status;
                     verifyWithBackend('mtcaptcha', token);
                 },
-
-                error: function(status) {
+                'error-callback': function(status) {
                     console.error('MTCaptcha error:', status);
                     showStatus('error', '❌ 验证加载失败');
                 },
-
-                verifyexpired: function(status) {
+                'verifyexpired-callback': function(status) {
                     console.log('MTCaptcha expired');
                     showStatus('error', '❌ 验证已过期');
                 }
             };
 
-            // 配置：直接使用函数引用（官方文档推荐方式）
-            window.mtcaptchaConfig = {
-                sitekey: config.site_key,
-                'jsloaded-callback': callbacks.jsloaded,
-                'rendered-callback': callbacks.rendered,
-                'verified-callback': callbacks.verified,
-                'error-callback': callbacks.error,
-                'verifyexpired-callback': callbacks.verifyexpired,
-            };
-
+            // 官方示例加载两个 JS 文件（可能是冗余备份机制）
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
+            await loadScript('https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js');
+
             document.getElementById('mtcaptcha-widget').classList.add('active');
         }
 
