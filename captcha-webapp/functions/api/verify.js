@@ -205,10 +205,25 @@ async function verifyHCaptcha(token, secretKey) {
  */
 async function verifyMTCaptcha(token, privateKey) {
     try {
+        console.log('Verifying MTCaptcha with token:', token.substring(0, 50) + '...');
+
         const url = `https://service.mtcaptcha.com/mtcv1/api/checktoken?privatekey=${encodeURIComponent(privateKey)}&token=${encodeURIComponent(token)}`;
         const response = await fetch(url, { method: 'GET' });
 
+        // 检查 HTTP 状态码
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`MTCaptcha API HTTP ${response.status}: ${errorText}`);
+            return false;
+        }
+
         const result = await response.json();
+        console.log('MTCaptcha API response:', result);
+
+        if (!result.success) {
+            console.error('MTCaptcha verification failed:', result);
+        }
+
         return result.success === true;
     } catch (error) {
         console.error('MTCaptcha verification error:', error);
