@@ -127,6 +127,9 @@
         </div>
 
         <div id="status" class="status"></div>
+
+        <!-- 调试信息区域 -->
+        <div id="debug" style="margin-top: 20px; padding: 12px; background: #f5f5f5; border-radius: 8px; font-size: 12px; font-family: monospace; white-space: pre-wrap; max-height: 200px; overflow-y: auto; display: none;"></div>
     </div>
 
     <script>
@@ -144,6 +147,24 @@
         const keyIndex = params.get('key_index') || 0;
 
         const statusEl = document.getElementById('status');
+        const debugEl = document.getElementById('debug');
+
+        // 调试日志函数（显示在页面上）
+        function debugLog(message, data) {
+            debugEl.style.display = 'block';
+            const timestamp = new Date().toLocaleTimeString();
+            let logText = `[${timestamp}] ${message}`;
+            if (data !== undefined) {
+                logText += '\n' + JSON.stringify(data, null, 2);
+            }
+            debugEl.textContent += logText + '\n\n';
+            debugEl.scrollTop = debugEl.scrollHeight;
+
+            // 同时输出到控制台
+            console.log(message, data);
+        }
+
+        debugLog('WebApp 初始化', { provider, chatId, userId });
 
         // 参数验证
         if (!chatId || !userId || !verifyToken) {
@@ -170,26 +191,39 @@
 
         // 调用后端验证 API
         async function verifyWithBackend(provider, captchaResponse) {
+            debugLog('开始后端验证', {
+                provider,
+                captcha_response_length: captchaResponse ? captchaResponse.length : 0
+            });
+
             showStatus('loading', '验证中...');
 
             try {
+                const requestBody = {
+                    provider,
+                    chat_id: chatId,
+                    user_id: userId,
+                    verify_token: verifyToken,
+                    captcha_response: captchaResponse,
+                    key_index: parseInt(keyIndex, 10),
+                };
+
+                debugLog('发送 API 请求', requestBody);
+
                 const response = await fetch('/api/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        provider,
-                        chat_id: chatId,
-                        user_id: userId,
-                        verify_token: verifyToken,
-                        captcha_response: captchaResponse,
-                        key_index: parseInt(keyIndex, 10),
-                    }),
+                    body: JSON.stringify(requestBody),
                 });
 
+                debugLog('收到 API 响应', { status: response.status });
+
                 const result = await response.json();
+                debugLog('API 响应内容', result);
 
                 if (result.success) {
                     showStatus('success', '✅ 验证成功！');
+                    debugLog('验证成功！准备发送数据回 Bot');
 
                     // 发送签名数据回 Bot
                     setTimeout(() => {
@@ -205,10 +239,12 @@
                         tg.close();
                     }, 800);
                 } else {
+                    debugLog('验证失败', { error: result.error });
                     showStatus('error', `❌ ${result.error || '验证失败，请重试'}`);
                     resetCaptcha(provider);
                 }
             } catch (error) {
+                debugLog('网络错误', { error: error.message });
                 console.error('Verification error:', error);
                 showStatus('error', '❌ 网络错误，请重试');
                 resetCaptcha(provider);
@@ -396,23 +432,29 @@
 
         // ========== MTCaptcha ==========
         async function initMTCaptcha(config) {
+            debugLog('初始化 MTCaptcha', { sitekey: config.site_key });
+
             // MTCaptcha 回调函数（接收 state 对象）
             window.mtcaptchaConfig = {
                 sitekey: config.site_key,
                 'verified-callback': function(state) {
-                    console.log('MTCaptcha verified, state:', state);
+                    debugLog('MTCaptcha 回调触发！', { state });
+
                     // MTCaptcha 的 token 在 state.verifiedToken 中
                     const token = state.verifiedToken || state;
-                    console.log('MTCaptcha token:', token);
+                    debugLog('MTCaptcha token', { token: token.substring ? token.substring(0, 80) : token });
+
                     verifyWithBackend('mtcaptcha', token);
                 },
                 'error-callback': function(state) {
-                    console.error('MTCaptcha error:', state);
+                    debugLog('MTCaptcha 错误', { state });
                     showStatus('error', '❌ 验证加载失败');
                 },
             };
 
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
+            debugLog('MTCaptcha SDK 加载完成');
+
             document.getElementById('mtcaptcha-widget').classList.add('active');
         }
 
