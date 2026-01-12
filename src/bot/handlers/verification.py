@@ -1327,7 +1327,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         if is_join_request:
             # 加入请求模式：批准加入请求
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
-            await redis.setex(approved_key, 3600, "1")  # 1小时
+            await redis.setex(approved_key, 600, "1")  # 10分钟
 
             try:
                 await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
@@ -1355,9 +1355,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             # 正常入群模式：恢复群组权限
             from aiogram.types import ReplyKeyboardRemove
 
-            # ✅ 设置"已验证"标记（1小时有效），防止恢复权限失败后用户重新加入被要求验证
+            # ✅ 设置"已验证"标记（10分钟有效），防止恢复权限失败后用户重新加入被要求验证
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
-            await redis.setex(approved_key, 3600, "1")  # 1小时
+            await redis.setex(approved_key, 600, "1")  # 10分钟
 
             try:
                 await bot.unban_chat_member(
@@ -1457,8 +1457,8 @@ async def handle_verification_success(
             redis = get_redis()
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
 
-            # 标记用户已验证（1小时有效期）
-            await redis.setex(approved_key, 3600, "1")
+            # 标记用户已验证（10分钟有效期）
+            await redis.setex(approved_key, 600, "1")  # 10分钟
 
             # 批准加入请求
             await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
