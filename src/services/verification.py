@@ -717,10 +717,10 @@ class VerificationService:
         token_key = RedisKeys.captcha_token(chat_id, user_id)
         await redis.setex(token_key, timeout + 10, f"turnstile:{verify_token}")
 
-        # 构建统一 WebApp URL
+        # 构建 WebApp URL（使用独立页面）
         webapp_url = (
-            f"{settings.captcha_webapp_url}"
-            f"?provider=turnstile&chat_id={chat_id}&user_id={user_id}"
+            f"{settings.captcha_webapp_url}/turnstile.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
         )
 
@@ -793,10 +793,10 @@ class VerificationService:
         verify_key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(verify_key, timeout + 10, "friendly:pending")
 
-        # 构建 WebApp URL
+        # 构建 WebApp URL（使用独立页面）
         webapp_url = (
-            f"{settings.captcha_webapp_url}"
-            f"?provider=friendly&chat_id={chat_id}&user_id={user_id}"
+            f"{settings.captcha_webapp_url}/friendly.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}&key_index={key_index}"
         )
 
@@ -861,10 +861,10 @@ class VerificationService:
         verify_key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(verify_key, timeout + 10, "hcaptcha:pending")
 
-        # 构建 WebApp URL
+        # 构建 WebApp URL（使用独立页面）
         webapp_url = (
-            f"{settings.captcha_webapp_url}"
-            f"?provider=hcaptcha&chat_id={chat_id}&user_id={user_id}"
+            f"{settings.captcha_webapp_url}/hcaptcha.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
         )
 
@@ -996,10 +996,10 @@ class VerificationService:
         verify_key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(verify_key, timeout + 10, "altcha:pending")
 
-        # 构建 WebApp URL
+        # 构建 WebApp URL（使用独立页面）
         webapp_url = (
-            f"{settings.captcha_webapp_url}"
-            f"?provider=altcha&chat_id={chat_id}&user_id={user_id}"
+            f"{settings.captcha_webapp_url}/altcha.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
         )
 

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Friendly Captcha 验证</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Friendly Captcha v2 SDK -->
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.min.js" async defer></script>
+    <script nomodule src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.compat.min.js" async defer></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-height: 100vh; padding: 20px;
+            background: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+        }
+        .container { text-align: center; max-width: 400px; width: 100%; }
+        h1 { font-size: 24px; font-weight: 600; margin-bottom: 10px; }
+        .subtitle { font-size: 14px; color: var(--tg-theme-hint-color, #999); margin-bottom: 30px; }
+        #captcha-widget { min-height: 100px; display: flex; align-items: center; justify-content: center; }
+        .status { margin-top: 20px; padding: 12px; border-radius: 8px; font-size: 14px; display: none; }
+        .status.loading { display: block; background: #e3f2fd; color: #1976d2; }
+        .status.success { display: block; background: #e8f5e9; color: #2e7d32; }
+        .status.error { display: block; background: #ffebee; color: #c62828; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 入群验证</h1>
+        <p class="subtitle">请完成以下验证</p>
+        <div id="captcha-widget"></div>
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const params = new URLSearchParams(window.location.search);
+        const chatId = params.get('chat_id');
+        const userId = params.get('user_id');
+        const verifyToken = params.get('token');
+        const keyIndex = params.get('key_index') || 0;
+
+        function showStatus(type, message) {
+            const el = document.getElementById('status');
+            el.className = `status ${type}`;
+            el.style.display = 'block';
+            el.textContent = message;
+        }
+
+        async function verifyWithBackend(solution) {
+            showStatus('loading', '验证中...');
+            try {
+                const res = await fetch('/api/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider: 'friendly',
+                        captcha_response: solution,
+                        chat_id: chatId,
+                        user_id: userId,
+                        verify_token: verifyToken,
+                        key_index: keyIndex,
+                    }),
+                });
+                const result = await res.json();
+                if (result.success) {
+                    showStatus('success', '✅ 验证成功！');
+                    setTimeout(() => {
+                        tg.sendData(JSON.stringify({
+                            action: 'captcha_success',
+                            provider: 'friendly',
+                            chat_id: chatId,
+                            user_id: userId,
+                            verify_token: verifyToken,
+                            signature: result.signature,
+                            timestamp: result.timestamp,
+                        }));
+                        tg.close();
+                    }, 800);
+                } else {
+                    showStatus('error', `❌ ${result.error || '验证失败'}`);
+                }
+            } catch (error) {
+                console.error('Verification error:', error);
+                showStatus('error', '❌ 网络错误，请重试');
+            }
+        }
+
+        (async function init() {
+            try {
+                showStatus('loading', '加载验证组件...');
+
+                const response = await fetch(`/api/config?provider=friendly&chat_id=${chatId}&user_id=${userId}&token=${verifyToken}`);
+                const config = await response.json();
+
+                if (!config.site_key) throw new Error('Failed to get site key');
+
+                const container = document.getElementById('captcha-widget');
+                const isV1 = config.site_key.startsWith('FCMAV');
+
+                if (isV1) {
+                    // v1 实现
+                    await new Promise((resolve) => {
+                        const script = document.createElement('script');
+                        script.src = 'https://cdn.jsdelivr.net/npm/friendly-challenge@0.9.15/widget.min.js';
+                        script.onload = resolve;
+                        document.head.appendChild(script);
+                    });
+
+                    const widgetDiv = document.createElement('div');
+                    widgetDiv.className = 'frc-captcha';
+                    widgetDiv.setAttribute('data-sitekey', config.site_key);
+                    widgetDiv.setAttribute('data-start', 'auto');
+                    widgetDiv.setAttribute('data-lang', 'zh');
+                    container.appendChild(widgetDiv);
+
+                    await new Promise(resolve => {
+                        const check = setInterval(() => {
+                            if (window.friendlyChallenge) { clearInterval(check); resolve(); }
+                        }, 100);
+                    });
+
+                    new window.friendlyChallenge.WidgetInstance(widgetDiv, {
+                        sitekey: config.site_key,
+                        startMode: 'auto',
+                        language: 'zh',
+                        doneCallback: (solution) => verifyWithBackend(solution),
+                        errorCallback: (err) => {
+                            console.error('Friendly Captcha v1 error:', err);
+                            showStatus('error', '❌ 验证失败，请刷新重试');
+                        },
+                    });
+                } else {
+                    // v2 实现（使用 HTML 属性自动初始化）
+                    const widgetDiv = document.createElement('div');
+                    widgetDiv.className = 'frc-captcha';
+                    widgetDiv.setAttribute('data-sitekey', config.site_key);
+                    widgetDiv.setAttribute('data-start', 'auto');
+                    widgetDiv.setAttribute('lang', 'zh');
+                    container.appendChild(widgetDiv);
+
+                    widgetDiv.addEventListener('frc:widget.complete', (event) => {
+                        verifyWithBackend(event.detail.response);
+                    });
+
+                    widgetDiv.addEventListener('frc:widget.error', (event) => {
+                        console.error('Friendly Captcha v2 error:', event.detail);
+                        showStatus('error', '❌ 验证失败，请刷新重试');
+                    });
+                }
+
+                setTimeout(() => {
+                    const statusEl = document.getElementById('status');
+                    if (statusEl.classList.contains('loading')) {
+                        statusEl.style.display = 'none';
+                    }
+                }, 1000);
+            } catch (error) {
+                console.error('Failed to initialize:', error);
+                showStatus('error', '❌ 加载失败，请刷新重试');
+            }
+        })();
+    </script>
+</body>
+</html>
