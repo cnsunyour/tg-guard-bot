@@ -264,34 +264,29 @@ async def main() -> None:
     # 启动回调
     await on_startup()
 
-    # 启动轮询（带重试）
-    max_retries = 5
+    # 启动轮询（无限重试，直到成功或手动停止）
     retry_delay = 5.0
+    max_delay = 60.0
+    attempt = 0
 
-    for attempt in range(max_retries):
+    while True:
+        attempt += 1
         try:
             # 启动轮询
-            logger.info(f"开始轮询... (尝试 {attempt + 1}/{max_retries})")
+            logger.info(f"开始轮询... (尝试 {attempt})")
             await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-            break  # 成功启动，退出重试循环
+            break  # 正常退出（通常不会到达这里，因为 polling 会一直运行）
 
         except (KeyboardInterrupt, SystemExit):
-            logger.info("收到停止信号")
+            logger.info("收到停止信号，正在退出...")
             break
 
         except Exception as e:
-            from aiogram.exceptions import TelegramNetworkError
-
-            if isinstance(e, TelegramNetworkError) and attempt < max_retries - 1:
-                logger.warning(
-                    f"启动轮询失败: {e}, "
-                    f"等待 {retry_delay} 秒后重试 (尝试 {attempt + 1}/{max_retries})"
-                )
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 60.0)  # 指数退避，最大 60 秒
-            else:
-                logger.error(f"启动轮询失败，无法恢复: {e}")
-                raise
+            logger.error(f"启动轮询失败 (尝试 {attempt}): {type(e).__name__}: {e}")
+            logger.warning(f"等待 {retry_delay:.1f} 秒后重试...")
+            await asyncio.sleep(retry_delay)
+            # 指数退避，最大 60 秒
+            retry_delay = min(retry_delay * 1.5, max_delay)
 
     # 关闭回调
     await on_shutdown()
