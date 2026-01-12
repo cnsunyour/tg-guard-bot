@@ -1285,12 +1285,26 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         # 清除类型标记
         await redis.delete(type_key)
 
-        # 6. 验证成功，恢复权限
+        # ✅ 6. 立即清除验证状态（防止超时任务踢人）
+        # 无论后续操作是否成功，验证已经通过，不应该再触发超时
+        verification_service = VerificationService()
+        await verification_service.clear_verification(chat_id, user_id)
+        logger.info(f"已清除用户 {user_id} 的验证状态 (群组 {chat_id})")
+
+        # 7. 验证成功，恢复权限
         if is_join_request:
             # 加入请求模式：批准加入请求
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
             await redis.setex(approved_key, 60, "1")
-            await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+
+            try:
+                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+                logger.info(
+                    f"用户 {user_id} {provider.upper()} 验证成功，已批准加入请求 (群组 {chat_id})"
+                )
+            except Exception as e:
+                logger.error(f"批准加入请求失败: {e}")
+                # 即使失败，用户已验证，approved_key 会在用户重新加入时生效
 
             # 在私聊中通知用户
             from aiogram.types import ReplyKeyboardRemove
@@ -1305,18 +1319,35 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     reply_markup=ReplyKeyboardRemove(),  # 移除键盘
                 )
 
-            logger.info(
-                f"用户 {user_id} {provider.upper()} 验证成功，已批准加入请求 (群组 {chat_id})"
-            )
         else:
             # 正常入群模式：恢复群组权限
             from aiogram.types import ReplyKeyboardRemove
 
-            await bot.unban_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                only_if_banned=False,
-            )
+            # ✅ 设置"已验证"标记（24小时有效），防止恢复权限失败后用户重新加入被要求验证
+            approved_key = RedisKeys.verification_approved(chat_id, user_id)
+            await redis.setex(approved_key, 86400, "1")  # 24小时
+
+            try:
+                await bot.unban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    only_if_banned=False,
+                )
+                logger.info(f"用户 {user_id} {provider.upper()} 验证成功，已恢复权限 (群组 {chat_id})")
+            except Exception as e:
+                logger.error(f"恢复群组权限失败: {e}")
+                # ✅ 即使失败，用户已验证，approved_key 会在用户重新加入时生效
+                # 通知用户需要重新加入
+                with contextlib.suppress(Exception):
+                    chat = await bot.get_chat(chat_id)
+                    chat_title = escape_html(chat.title) if chat.title else "群组"
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限。\n\n请重新加入群组：<b>{chat_title}</b>\n\n您已通过验证，重新加入时将自动获得权限！",
+                        parse_mode="HTML",
+                        reply_markup=ReplyKeyboardRemove(),
+                    )
+                return  # 提前返回，不发送欢迎消息
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
@@ -1343,12 +1374,29 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
             logger.info(f"用户 {user_id} {provider.upper()} 验证成功 (群组 {chat_id})")
 
-        # 清除验证状态
-        verification_service = VerificationService()
-        await verification_service.clear_verification(chat_id, user_id)
-
     except Exception as e:
         logger.error(f"处理 CAPTCHA 回调失败: {e}")
+
+        # ✅ 异常时也要清除验证状态，避免超时任务踢人
+        try:
+            # 尝试从异常上下文中获取 chat_id 和 user_id
+            if 'data' in locals() and 'chat_id' in data and 'user_id' in data:
+                chat_id = int(data["chat_id"])
+                user_id = int(data["user_id"])
+                verification_service = VerificationService()
+                await verification_service.clear_verification(chat_id, user_id)
+                logger.info(f"异常处理：已清除用户 {user_id} 的验证状态 (群组 {chat_id})")
+
+                # 通知用户验证失败
+                with contextlib.suppress(Exception):
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text="❌ <b>验证失败</b>\n\n处理验证时发生错误，请重新尝试。如果问题持续，请联系管理员。",
+                        parse_mode="HTML",
+                    )
+        except Exception as cleanup_error:
+            logger.error(f"清除验证状态失败: {cleanup_error}")
+
 
 
 async def handle_verification_success(
