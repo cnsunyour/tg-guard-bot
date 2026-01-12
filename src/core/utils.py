@@ -6,6 +6,8 @@ import re
 
 from loguru import logger
 
+from src.core.retry import retry_on_network_error
+
 
 def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
     """脱敏处理敏感文本，用于日志记录
@@ -72,6 +74,7 @@ async def check_admin_permission(message, bot) -> bool:
     return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
 
 
+@retry_on_network_error(max_retries=3, initial_delay=1.0)
 async def check_admin_permission_strict(bot, chat_id: int, user_id: int) -> bool:
     """严格的管理员权限检查（不信任缓存，直接查询 API）
 
