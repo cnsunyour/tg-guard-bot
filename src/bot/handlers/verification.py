@@ -1152,7 +1152,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         f"✅ 收到 WebApp 数据 [from_user:{message.from_user.id}] "
         f"[data_length:{len(message.web_app_data.data) if message.web_app_data else 0}]"
     )
-    logger.debug(f"WebApp 原始数据: {message.web_app_data.data if message.web_app_data else 'None'}")
+    logger.debug(
+        f"WebApp 原始数据: {message.web_app_data.data if message.web_app_data else 'None'}"
+    )
 
     try:
         data = json.loads(message.web_app_data.data)
@@ -1303,7 +1305,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     reply_markup=ReplyKeyboardRemove(),  # 移除键盘
                 )
 
-            logger.info(f"用户 {user_id} {provider.upper()} 验证成功，已批准加入请求 (群组 {chat_id})")
+            logger.info(
+                f"用户 {user_id} {provider.upper()} 验证成功，已批准加入请求 (群组 {chat_id})"
+            )
         else:
             # 正常入群模式：恢复群组权限
             from aiogram.types import ReplyKeyboardRemove

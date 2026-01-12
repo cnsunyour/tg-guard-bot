@@ -54,7 +54,7 @@
             try {
                 showStatus('loading', '加载验证组件...');
 
-                const response = await fetch(`/api/config?provider=hcaptcha&chat_id=${chatId}&user_id=${userId}&token=${verifyToken}`);
+                const response = await fetch(`/api/config?provider=hcaptcha`);
                 const config = await response.json();
 
                 if (!config.site_key) throw new Error('Failed to get site key');

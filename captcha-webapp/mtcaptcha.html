@@ -132,7 +132,7 @@
                 showStatus('loading', '加载验证组件...');
 
                 // 从 API 获取配置
-                const response = await fetch(`/api/config?provider=mtcaptcha&chat_id=${chatId}&user_id=${userId}&token=${verifyToken}`);
+                const response = await fetch(`/api/config?provider=mtcaptcha`);
                 const config = await response.json();
 
                 if (!config.site_key) {

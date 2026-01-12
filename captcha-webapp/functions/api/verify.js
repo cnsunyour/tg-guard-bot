@@ -107,7 +107,7 @@ async function verifyTurnstile(token, secretKey) {
 }
 
 /**
- * 验证 Friendly Captcha
+ * 验证 Friendly Captcha v2
  */
 async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
     try {
@@ -125,31 +125,16 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
             throw new Error('Invalid Friendly Captcha key configuration');
         }
 
-        console.log('Verifying Friendly Captcha with sitekey:', keyPair.sitekey.substring(0, 10) + '...');
+        console.log('Verifying Friendly Captcha v2 with sitekey:', keyPair.sitekey.substring(0, 10) + '...');
 
-        // 自动检测 Friendly Captcha 版本
-        // v1: sitekey 以 "FCMAV" 开头 → api.friendlycaptcha.com
-        // v2: sitekey 以其他格式开头（如 "FCMJU"）→ global.frcapi.com
-        const isV1 = keyPair.sitekey.startsWith('FCMAV');
+        // Friendly Captcha v2 API 端点
+        const apiUrl = 'https://global.frcapi.com/api/v2/captcha/siteverify';
 
-        // v2 使用新的全球端点 global.frcapi.com
-        const apiUrl = isV1
-            ? 'https://api.friendlycaptcha.com/api/v1/siteverify'
-            : 'https://global.frcapi.com/api/v2/captcha/siteverify';
-
-        console.log(`Using Friendly Captcha ${isV1 ? 'v1' : 'v2'} API: ${apiUrl}`);
-
-        // v1 和 v2 的请求格式不同
-        const requestBody = isV1
-            ? { solution: solution, sitekey: keyPair.sitekey }
-            : { response: solution, sitekey: keyPair.sitekey };
-
-        // 调试日志：查看发送的数据（隐藏敏感部分）
-        console.log('Request body:', JSON.stringify({
-            ...requestBody,
-            response: requestBody.response ? requestBody.response.substring(0, 50) + '...' : undefined,
-            solution: requestBody.solution ? requestBody.solution.substring(0, 50) + '...' : undefined,
-        }));
+        // v2 请求格式
+        const requestBody = {
+            response: solution,
+            sitekey: keyPair.sitekey
+        };
 
         const response = await fetch(apiUrl, {
             method: 'POST',

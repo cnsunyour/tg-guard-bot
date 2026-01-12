@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Friendly Captcha 验证</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Friendly Captcha v2 SDK -->
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.min.js" async defer></script>
-    <script nomodule src="https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.6/site.compat.min.js" async defer></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -36,8 +33,6 @@
     </div>
 
     <script>
-        console.log('Script started');
-
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
@@ -48,10 +43,7 @@
         const verifyToken = params.get('token');
         const keyIndex = params.get('key_index') || 0;
 
-        console.log('Params:', { chatId, userId, verifyToken, keyIndex });
-
         function showStatus(type, message) {
-            console.log('Status:', type, message);
             const el = document.getElementById('status');
             el.className = `status ${type}`;
             el.style.display = 'block';
@@ -59,7 +51,6 @@
         }
 
         async function verifyWithBackend(solution) {
-            console.log('Verifying with backend, solution length:', solution.length);
             showStatus('loading', '验证中...');
             try {
                 const res = await fetch('/api/verify', {
@@ -75,7 +66,6 @@
                     }),
                 });
                 const result = await res.json();
-                console.log('Backend response:', result);
 
                 if (result.success) {
                     showStatus('success', '✅ 验证成功！');
@@ -101,110 +91,63 @@
         }
 
         (async function init() {
-            console.log('Init function started');
             try {
                 showStatus('loading', '加载验证组件...');
 
-                console.log('Fetching config...');
-                const response = await fetch(`/api/config?provider=friendly&chat_id=${chatId}&user_id=${userId}&token=${verifyToken}`);
+                // 获取配置
+                const response = await fetch(`/api/config?provider=friendly&key_index=${keyIndex}`);
                 const config = await response.json();
-                console.log('Config loaded:', config);
 
                 if (!config.site_key) {
                     throw new Error('Failed to get site key');
                 }
 
+                // 创建 widget 元素（带正确的 sitekey）
                 const container = document.getElementById('captcha-widget');
-                const isV1 = config.site_key.startsWith('FCMAV');
-                console.log('Friendly Captcha version:', isV1 ? 'v1' : 'v2');
+                const widgetDiv = document.createElement('div');
+                widgetDiv.id = 'frc-widget';
+                widgetDiv.className = 'frc-captcha';
+                widgetDiv.setAttribute('data-sitekey', config.site_key);
+                widgetDiv.setAttribute('data-start', 'auto');
+                widgetDiv.setAttribute('lang', 'zh');
+                container.appendChild(widgetDiv);
 
-                if (isV1) {
-                    console.log('Loading v1 SDK...');
-                    await new Promise((resolve) => {
-                        const script = document.createElement('script');
-                        script.src = 'https://cdn.jsdelivr.net/npm/friendly-challenge@0.9.15/widget.min.js';
-                        script.onload = () => {
-                            console.log('v1 SDK loaded');
-                            resolve();
-                        };
-                        script.onerror = (err) => {
-                            console.error('v1 SDK load error:', err);
-                            resolve();
-                        };
-                        document.head.appendChild(script);
-                    });
+                // 动态加载 SDK（在 widget 元素创建之后）
+                const script1 = document.createElement('script');
+                script1.type = 'module';
+                script1.src = 'https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.36/site.min.js';
+                script1.async = true;
+                script1.defer = true;
+                document.head.appendChild(script1);
 
-                    console.log('Creating v1 widget...');
-                    const widgetDiv = document.createElement('div');
-                    widgetDiv.className = 'frc-captcha';
-                    widgetDiv.setAttribute('data-sitekey', config.site_key);
-                    widgetDiv.setAttribute('data-start', 'auto');
-                    widgetDiv.setAttribute('data-lang', 'zh');
-                    container.appendChild(widgetDiv);
+                const script2 = document.createElement('script');
+                script2.setAttribute('nomodule', '');
+                script2.src = 'https://cdn.jsdelivr.net/npm/@friendlycaptcha/sdk@0.1.36/site.compat.min.js';
+                script2.async = true;
+                script2.defer = true;
+                document.head.appendChild(script2);
 
-                    await new Promise(resolve => {
-                        const check = setInterval(() => {
-                            if (window.friendlyChallenge) {
-                                console.log('friendlyChallenge available');
-                                clearInterval(check);
-                                resolve();
-                            }
-                        }, 100);
-                        setTimeout(() => {
-                            clearInterval(check);
-                            console.error('Timeout waiting for friendlyChallenge');
-                            resolve();
-                        }, 5000);
-                    });
+                // 添加事件监听器
+                widgetDiv.addEventListener('frc:widget.complete', (event) => {
+                    verifyWithBackend(event.detail.response);
+                });
 
-                    if (window.friendlyChallenge) {
-                        console.log('Initializing v1 widget instance...');
-                        new window.friendlyChallenge.WidgetInstance(widgetDiv, {
-                            sitekey: config.site_key,
-                            startMode: 'auto',
-                            language: 'zh',
-                            doneCallback: (solution) => {
-                                console.log('v1 done callback triggered');
-                                verifyWithBackend(solution);
-                            },
-                            errorCallback: (err) => {
-                                console.error('v1 error callback:', err);
-                                showStatus('error', '❌ 验证失败，请刷新重试');
-                            },
-                        });
-                        console.log('v1 widget initialized');
-                    } else {
-                        throw new Error('friendlyChallenge not available');
-                    }
-                } else {
-                    console.log('Using v2 SDK (already loaded in head)');
-                    const widgetDiv = document.createElement('frc-captcha');
-                    widgetDiv.setAttribute('data-sitekey', config.site_key);
-                    widgetDiv.setAttribute('data-start', 'auto');
-                    widgetDiv.setAttribute('lang', 'zh');
-                    container.appendChild(widgetDiv);
-                    console.log('v2 widget element created');
+                widgetDiv.addEventListener('frc:widget.error', (event) => {
+                    console.error('Friendly Captcha 错误:', event.detail);
+                    showStatus('error', '❌ 验证失败，请刷新重试');
+                });
 
-                    widgetDiv.addEventListener('frc:widget.complete', (event) => {
-                        console.log('v2 complete event triggered');
-                        verifyWithBackend(event.detail.response);
-                    });
+                widgetDiv.addEventListener('frc:widget.ready', (event) => {
+                    console.log('Widget ready');
+                });
 
-                    widgetDiv.addEventListener('frc:widget.error', (event) => {
-                        console.error('v2 error event:', event.detail);
-                        showStatus('error', '❌ 验证失败，请刷新重试');
-                    });
-                }
-
+                // 隐藏加载提示
                 setTimeout(() => {
                     const statusEl = document.getElementById('status');
                     if (statusEl.classList.contains('loading')) {
-                        console.log('Hiding loading status');
                         statusEl.style.display = 'none';
                     }
-                }, 1000);
-
-                console.log('Init completed successfully');
+                }, 1500);
             } catch (error) {
                 console.error('Init error:', error);
                 showStatus('error', '❌ 加载失败：' + error.message);

@@ -812,8 +812,7 @@ class VerificationService:
         )
 
         question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内点击下方按钮完成验证："
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
         )
 
         return VerificationChallenge(
@@ -880,8 +879,7 @@ class VerificationService:
         )
 
         question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内点击下方按钮完成验证："
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
         )
 
         return VerificationChallenge(
@@ -947,8 +945,7 @@ class VerificationService:
         )
 
         question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内点击下方按钮完成验证："
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
         )
 
         return VerificationChallenge(
@@ -1015,8 +1012,7 @@ class VerificationService:
         )
 
         question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内点击下方按钮完成验证："
+            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
         )
 
         return VerificationChallenge(
