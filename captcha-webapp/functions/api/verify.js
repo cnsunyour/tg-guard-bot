@@ -131,9 +131,11 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
         // v1: sitekey 以 "FCMAV" 开头
         // v2: sitekey 以其他格式开头（如 "FCMJU"）
         const isV1 = keyPair.sitekey.startsWith('FCMAV');
+
+        // v2 API 端点（修正）
         const apiUrl = isV1
             ? 'https://api.friendlycaptcha.com/api/v1/siteverify'
-            : 'https://api.friendlycaptcha.com/api/v2/captcha/siteverify';
+            : 'https://api.friendlycaptcha.com/api/v2/siteverify';
 
         console.log(`Using Friendly Captcha ${isV1 ? 'v1' : 'v2'} API: ${apiUrl}`);
 
@@ -150,6 +152,13 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
             },
             body: JSON.stringify(requestBody),
         });
+
+        // 检查 HTTP 状态码
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Friendly Captcha API HTTP ${response.status}: ${errorText}`);
+            return false;
+        }
 
         const result = await response.json();
         console.log('Friendly Captcha API response:', result);
