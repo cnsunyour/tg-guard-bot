@@ -928,10 +928,10 @@ class VerificationService:
         verify_key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(verify_key, timeout + 10, "mtcaptcha:pending")
 
-        # 构建 WebApp URL
+        # 构建 WebApp URL（使用独立页面）
         webapp_url = (
-            f"{settings.captcha_webapp_url}"
-            f"?provider=mtcaptcha&chat_id={chat_id}&user_id={user_id}"
+            f"{settings.captcha_webapp_url}/mtcaptcha.html"
+            f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
         )
 
