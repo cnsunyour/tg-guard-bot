@@ -1339,17 +1339,48 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                 # 即使失败，用户已验证，approved_key 会在用户重新加入时生效
 
             # 在私聊中通知用户
-            from aiogram.types import ReplyKeyboardRemove
+            from aiogram.types import ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+            from datetime import datetime, timedelta
 
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！",
-                    parse_mode="HTML",
-                    reply_markup=ReplyKeyboardRemove(),  # 移除键盘
-                )
+
+                # 创建一次性邀请链接（10分钟有效）
+                invite_link = None
+                try:
+                    invite = await bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        expire_date=datetime.now() + timedelta(minutes=10),
+                        member_limit=1,  # 一次性链接
+                        creates_join_request=False,  # 直接加入，不需要批准
+                    )
+                    invite_link = invite.invite_link
+                    logger.info(f"已为用户 {user_id} 创建一次性邀请链接")
+                except Exception as e:
+                    logger.warning(f"创建邀请链接失败: {e}")
+
+                # 构建消息和按钮
+                text = f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！"
+
+                if invite_link:
+                    text += "\n\n💡 如果没有自动加入，请点击下方按钮手动加入："
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔗 点击加入群组", url=invite_link)]
+                    ])
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=ReplyKeyboardRemove(),
+                    )
 
         else:
             # 正常入群模式：恢复群组权限
@@ -1369,28 +1400,91 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"恢复群组权限失败: {e}")
                 # ✅ 即使失败，用户已验证，approved_key 会在用户重新加入时生效
-                # 通知用户需要重新加入
+                # 通知用户需要重新加入，并提供邀请链接
                 with contextlib.suppress(Exception):
+                    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                    from datetime import datetime, timedelta
+
                     chat = await bot.get_chat(chat_id)
                     chat_title = escape_html(chat.title) if chat.title else "群组"
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限。\n\n请重新加入群组：<b>{chat_title}</b>\n\n您已通过验证，重新加入时将自动获得权限！",
-                        parse_mode="HTML",
-                        reply_markup=ReplyKeyboardRemove(),
-                    )
+
+                    # 创建一次性邀请链接（10分钟有效）
+                    invite_link = None
+                    try:
+                        invite = await bot.create_chat_invite_link(
+                            chat_id=chat_id,
+                            expire_date=datetime.now() + timedelta(minutes=10),
+                            member_limit=1,  # 一次性链接
+                            creates_join_request=False,  # 直接加入，不需要批准
+                        )
+                        invite_link = invite.invite_link
+                        logger.info(f"已为用户 {user_id} 创建一次性邀请链接（恢复权限失败）")
+                    except Exception as link_error:
+                        logger.warning(f"创建邀请链接失败: {link_error}")
+
+                    text = f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限。\n\n请点击下方按钮加入群组：<b>{chat_title}</b>\n\n您已通过验证，将自动获得权限！"
+
+                    if invite_link:
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="🔗 点击加入群组", url=invite_link)]
+                        ])
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=text,
+                            parse_mode="HTML",
+                            reply_markup=keyboard,
+                        )
+                    else:
+                        await bot.send_message(
+                            chat_id=user_id,
+                            text=text,
+                            parse_mode="HTML",
+                            reply_markup=ReplyKeyboardRemove(),
+                        )
                 return  # 提前返回，不发送欢迎消息
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                from datetime import datetime, timedelta
+
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
-                    parse_mode="HTML",
-                    reply_markup=ReplyKeyboardRemove(),  # 移除键盘
-                )
+
+                # 创建一次性邀请链接（10分钟有效）
+                invite_link = None
+                try:
+                    invite = await bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        expire_date=datetime.now() + timedelta(minutes=10),
+                        member_limit=1,  # 一次性链接
+                        creates_join_request=False,  # 直接加入，不需要批准
+                    )
+                    invite_link = invite.invite_link
+                    logger.info(f"已为用户 {user_id} 创建一次性邀请链接")
+                except Exception as e:
+                    logger.warning(f"创建邀请链接失败: {e}")
+
+                text = f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！"
+
+                if invite_link:
+                    text += "\n\n💡 如果没有自动加入，请点击下方按钮手动加入："
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔗 点击加入群组", url=invite_link)]
+                    ])
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=ReplyKeyboardRemove(),
+                    )
 
             # 在群内发送欢迎消息
             user = message.from_user
@@ -1465,11 +1559,42 @@ async def handle_verification_success(
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！",
-                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
-                )
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                from datetime import datetime, timedelta
+
+                # 创建一次性邀请链接（10分钟有效）
+                invite_link = None
+                try:
+                    invite = await bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        expire_date=datetime.now() + timedelta(minutes=10),
+                        member_limit=1,  # 一次性链接
+                        creates_join_request=False,  # 直接加入，不需要批准
+                    )
+                    invite_link = invite.invite_link
+                    logger.info(f"已为用户 {user_id} 创建一次性邀请链接（加入请求）")
+                except Exception as e:
+                    logger.warning(f"创建邀请链接失败: {e}")
+
+                text = f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！"
+
+                if invite_link:
+                    text += "\n\n💡 如果没有自动加入，请点击下方按钮手动加入："
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔗 点击加入群组", url=invite_link)]
+                    ])
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
 
             await callback.answer("✅ 验证成功！")
             logger.info(f"用户 {user_id} 加入请求验证成功，已批准加入群组 {chat_id}")
@@ -1484,11 +1609,42 @@ async def handle_verification_success(
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
-                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
-                )
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                from datetime import datetime, timedelta
+
+                # 创建一次性邀请链接（10分钟有效）
+                invite_link = None
+                try:
+                    invite = await bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        expire_date=datetime.now() + timedelta(minutes=10),
+                        member_limit=1,  # 一次性链接
+                        creates_join_request=False,  # 直接加入，不需要批准
+                    )
+                    invite_link = invite.invite_link
+                    logger.info(f"已为用户 {user_id} 创建一次性邀请链接（正常入群）")
+                except Exception as e:
+                    logger.warning(f"创建邀请链接失败: {e}")
+
+                text = f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！"
+
+                if invite_link:
+                    text += "\n\n💡 如果没有自动加入，请点击下方按钮手动加入："
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔗 点击加入群组", url=invite_link)]
+                    ])
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
 
             # 在群内发送欢迎消息（仅此一条群内消息）
             welcome_msg = await bot.send_message(
