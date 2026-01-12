@@ -434,24 +434,34 @@
         async function initMTCaptcha(config) {
             debugLog('初始化 MTCaptcha', { sitekey: config.site_key });
 
-            // MTCaptcha 回调函数（接收 state 对象）
-            window.mtcaptchaConfig = {
-                sitekey: config.site_key,
-                'verified-callback': function(state) {
-                    debugLog('MTCaptcha 回调触发！', { state });
+            // 1️⃣ 先定义全局回调函数（必须在加载 SDK 之前）
+            window.mtcaptchaVerifiedCallback = function(state) {
+                debugLog('🎉 MTCaptcha 回调触发！', { state });
 
-                    // MTCaptcha 的 token 在 state.verifiedToken 中
-                    const token = state.verifiedToken || state;
-                    debugLog('MTCaptcha token', { token: token.substring ? token.substring(0, 80) : token });
+                // MTCaptcha 的 token 在 state.verifiedToken 中
+                const token = state.verifiedToken || state;
+                debugLog('MTCaptcha token', {
+                    token: typeof token === 'string' ? token.substring(0, 80) : token
+                });
 
-                    verifyWithBackend('mtcaptcha', token);
-                },
-                'error-callback': function(state) {
-                    debugLog('MTCaptcha 错误', { state });
-                    showStatus('error', '❌ 验证加载失败');
-                },
+                verifyWithBackend('mtcaptcha', token);
             };
 
+            window.mtcaptchaErrorCallback = function(state) {
+                debugLog('❌ MTCaptcha 错误', { state });
+                showStatus('error', '❌ 验证加载失败');
+            };
+
+            // 2️⃣ 再定义配置（使用函数名字符串，不是内联函数！）
+            window.mtcaptchaConfig = {
+                sitekey: config.site_key,
+                'verified-callback': 'mtcaptchaVerifiedCallback',  // ⚠️ 必须是字符串！
+                'error-callback': 'mtcaptchaErrorCallback',
+            };
+
+            debugLog('MTCaptcha 配置已设置', window.mtcaptchaConfig);
+
+            // 3️⃣ 最后加载 SDK
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
             debugLog('MTCaptcha SDK 加载完成');
 
