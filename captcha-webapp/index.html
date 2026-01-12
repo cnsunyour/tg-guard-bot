@@ -397,39 +397,41 @@
 
         // ========== MTCaptcha ==========
         async function initMTCaptcha(config) {
-            // 定义所有标准回调函数（避免 SDK 报错）
-            window.mtcaptchaJsloadedCallback = function(status) {
-                console.log('MTCaptcha jsloaded');
+            // 定义回调函数对象（使用函数引用而非字符串，更可靠）
+            const callbacks = {
+                jsloaded: function(status) {
+                    console.log('MTCaptcha jsloaded');
+                },
+
+                rendered: function(status) {
+                    console.log('MTCaptcha rendered');
+                },
+
+                verified: function(status) {
+                    console.log('MTCaptcha verified:', status);
+                    const token = status.verifiedToken || status;
+                    verifyWithBackend('mtcaptcha', token);
+                },
+
+                error: function(status) {
+                    console.error('MTCaptcha error:', status);
+                    showStatus('error', '❌ 验证加载失败');
+                },
+
+                verifyexpired: function(status) {
+                    console.log('MTCaptcha expired');
+                    showStatus('error', '❌ 验证已过期');
+                }
             };
 
-            window.mtcaptchaRenderedCallback = function(status) {
-                console.log('MTCaptcha rendered');
-            };
-
-            window.mtcaptchaVerifiedCallback = function(status) {
-                console.log('MTCaptcha verified:', status);
-                const token = status.verifiedToken || status;
-                verifyWithBackend('mtcaptcha', token);
-            };
-
-            window.mtcaptchaErrorCallback = function(status) {
-                console.error('MTCaptcha error:', status);
-                showStatus('error', '❌ 验证加载失败');
-            };
-
-            window.mtcaptchaExpiredCallback = function(status) {
-                console.log('MTCaptcha expired');
-                showStatus('error', '❌ 验证已过期');
-            };
-
-            // 配置所有回调（MTCaptcha 要求完整配置）
+            // 配置：直接使用函数引用（官方文档推荐方式）
             window.mtcaptchaConfig = {
                 sitekey: config.site_key,
-                'jsloaded-callback': 'mtcaptchaJsloadedCallback',
-                'rendered-callback': 'mtcaptchaRenderedCallback',
-                'verified-callback': 'mtcaptchaVerifiedCallback',
-                'error-callback': 'mtcaptchaErrorCallback',
-                'verifyexpired-callback': 'mtcaptchaExpiredCallback',
+                'jsloaded-callback': callbacks.jsloaded,
+                'rendered-callback': callbacks.rendered,
+                'verified-callback': callbacks.verified,
+                'error-callback': callbacks.error,
+                'verifyexpired-callback': callbacks.verifyexpired,
             };
 
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
