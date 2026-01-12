@@ -122,6 +122,7 @@
         function showStatus(type, message) {
             const el = document.getElementById('status');
             el.className = `status ${type}`;
+            el.style.display = 'block';  // 确保显示
             el.textContent = message;
         }
 
@@ -160,11 +161,11 @@
                 mt_service2.src = 'https://service2.mtcaptcha.com/mtcv1/client/mtcaptcha2.min.js';
                 (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(mt_service2);
 
-                // 清除加载状态
+                // SDK 加载后清除加载状态
                 setTimeout(() => {
                     const statusEl = document.getElementById('status');
                     if (statusEl.classList.contains('loading')) {
-                        statusEl.style.display = 'none';
+                        statusEl.className = 'status';  // 清除状态类，但不隐藏元素
                     }
                 }, 1000);
             } catch (error) {
