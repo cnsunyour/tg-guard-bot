@@ -12,7 +12,7 @@ require_once __DIR__ . '/config.php';
 
 use AltchaOrg\Altcha\Altcha;
 use AltchaOrg\Altcha\ChallengeOptions;
-use AltchaOrg\Altcha\Algorithm;
+use AltchaOrg\Altcha\Hasher\Algorithm;
 
 // 设置响应头
 header('Content-Type: application/json; charset=utf-8');
