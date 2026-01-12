@@ -127,16 +127,28 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
 
         console.log('Verifying Friendly Captcha with sitekey:', keyPair.sitekey.substring(0, 10) + '...');
 
-        const response = await fetch('https://api.friendlycaptcha.com/api/v1/siteverify', {
+        // 自动检测 Friendly Captcha 版本
+        // v1: sitekey 以 "FCMAV" 开头
+        // v2: sitekey 以其他格式开头（如 "FCMJU"）
+        const isV1 = keyPair.sitekey.startsWith('FCMAV');
+        const apiUrl = isV1
+            ? 'https://api.friendlycaptcha.com/api/v1/siteverify'
+            : 'https://api.friendlycaptcha.com/api/v2/captcha/siteverify';
+
+        console.log(`Using Friendly Captcha ${isV1 ? 'v1' : 'v2'} API: ${apiUrl}`);
+
+        // v1 和 v2 的请求格式不同
+        const requestBody = isV1
+            ? { solution: solution, sitekey: keyPair.sitekey }
+            : { response: solution, sitekey: keyPair.sitekey };
+
+        const response = await fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-API-Key': keyPair.apikey,
             },
-            body: JSON.stringify({
-                solution: solution,
-                sitekey: keyPair.sitekey,
-            }),
+            body: JSON.stringify(requestBody),
         });
 
         const result = await response.json();
