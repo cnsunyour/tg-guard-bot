@@ -144,6 +144,13 @@ async function verifyFriendly(solution, keyIndex, friendlyKeysJson) {
             ? { solution: solution, sitekey: keyPair.sitekey }
             : { response: solution, sitekey: keyPair.sitekey };
 
+        // 调试日志：查看发送的数据（隐藏敏感部分）
+        console.log('Request body:', JSON.stringify({
+            ...requestBody,
+            response: requestBody.response ? requestBody.response.substring(0, 50) + '...' : undefined,
+            solution: requestBody.solution ? requestBody.solution.substring(0, 50) + '...' : undefined,
+        }));
+
         const response = await fetch(apiUrl, {
             method: 'POST',
             headers: {
