@@ -421,18 +421,21 @@
             showStatus('error', '❌ 验证已过期');
         };
 
-        async function initMTCaptcha(config) {
-            // 按照官方示例：使用字符串引用全局函数
-            window.mtcaptchaConfig = {
-                sitekey: config.site_key,
-                'jsloaded-callback': 'mtcaptcha_jsloaded',
-                'rendered-callback': 'mtcaptcha_rendered',
-                'verified-callback': 'mtcaptcha_verified',
-                'error-callback': 'mtcaptcha_error',
-                'verifyexpired-callback': 'mtcaptcha_verifyexpired',
-            };
+        // 在全局作用域预先定义配置对象（SDK 加载时会读取）
+        window.mtcaptchaConfig = {
+            sitekey: '',  // 稍后动态设置
+            'jsloaded-callback': 'mtcaptcha_jsloaded',
+            'rendered-callback': 'mtcaptcha_rendered',
+            'verified-callback': 'mtcaptcha_verified',
+            'error-callback': 'mtcaptcha_error',
+            'verifyexpired-callback': 'mtcaptcha_verifyexpired',
+        };
 
-            console.log('MTCaptcha config set:', window.mtcaptchaConfig);
+        async function initMTCaptcha(config) {
+            // 只更新 sitekey（配置对象已在全局定义）
+            window.mtcaptchaConfig.sitekey = config.site_key;
+
+            console.log('MTCaptcha config updated:', window.mtcaptchaConfig);
             console.log('Callbacks defined:', {
                 jsloaded: typeof window.mtcaptcha_jsloaded,
                 rendered: typeof window.mtcaptcha_rendered,
