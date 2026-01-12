@@ -396,11 +396,28 @@
 
         // ========== MTCaptcha ==========
         async function initMTCaptcha(config) {
-            // MTCaptcha 需要全局配置
+            // MTCaptcha 需要全局回调函数（必须是函数名字符串，不能是内联函数）
+            window.mtcaptchaVerifiedCallback = function(state) {
+                console.log('MTCaptcha verified:', state);
+                const token = state.verifiedToken;
+                if (token) {
+                    verifyWithBackend('mtcaptcha', token);
+                } else {
+                    console.error('MTCaptcha: No verifiedToken in state');
+                    showStatus('error', '❌ 验证失败：未获取到 token');
+                }
+            };
+
+            window.mtcaptchaErrorCallback = function(state) {
+                console.error('MTCaptcha error:', state);
+                showStatus('error', '❌ 验证加载失败');
+            };
+
+            // MTCaptcha 全局配置（使用函数名字符串）
             window.mtcaptchaConfig = {
                 sitekey: config.site_key,
-                'verified-callback': (token) => verifyWithBackend('mtcaptcha', token),
-                'error-callback': () => showStatus('error', '❌ 验证加载失败'),
+                'verified-callback': 'mtcaptchaVerifiedCallback',
+                'error-callback': 'mtcaptchaErrorCallback',
             };
 
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
