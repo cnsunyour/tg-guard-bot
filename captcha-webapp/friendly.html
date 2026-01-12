@@ -178,13 +178,12 @@
                     }
                 } else {
                     console.log('Using v2 SDK (already loaded in head)');
-                    const widgetDiv = document.createElement('div');
-                    widgetDiv.className = 'frc-captcha';
+                    const widgetDiv = document.createElement('frc-captcha');
                     widgetDiv.setAttribute('data-sitekey', config.site_key);
                     widgetDiv.setAttribute('data-start', 'auto');
                     widgetDiv.setAttribute('lang', 'zh');
                     container.appendChild(widgetDiv);
-                    console.log('v2 widget div created');
+                    console.log('v2 widget element created');
 
                     widgetDiv.addEventListener('frc:widget.complete', (event) => {
                         console.log('v2 complete event triggered');
