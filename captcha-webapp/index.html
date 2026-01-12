@@ -434,38 +434,72 @@
         async function initMTCaptcha(config) {
             debugLog('初始化 MTCaptcha', { sitekey: config.site_key });
 
-            // 1️⃣ 先定义全局回调函数（必须在加载 SDK 之前）
-            window.mtcaptchaVerifiedCallback = function(state) {
-                debugLog('🎉 MTCaptcha 回调触发！', { state });
+            // 定义所有回调函数（诊断完整流程）
+            window.mtcaptchaJsloadedCallback = function(status) {
+                debugLog('📦 MTCaptcha jsloaded', { status });
+            };
 
-                // MTCaptcha 的 token 在 state.verifiedToken 中
-                const token = state.verifiedToken || state;
-                debugLog('MTCaptcha token', {
+            window.mtcaptchaRenderedCallback = function(status) {
+                debugLog('🎨 MTCaptcha rendered', { status });
+            };
+
+            window.mtcaptchaVerifiedCallback = function(status) {
+                debugLog('🎉 MTCaptcha verified 回调触发！', { status });
+
+                const token = status.verifiedToken || status;
+                debugLog('MTCaptcha token from callback', {
                     token: typeof token === 'string' ? token.substring(0, 80) : token
                 });
 
                 verifyWithBackend('mtcaptcha', token);
             };
 
-            window.mtcaptchaErrorCallback = function(state) {
-                debugLog('❌ MTCaptcha 错误', { state });
+            window.mtcaptchaErrorCallback = function(status) {
+                debugLog('❌ MTCaptcha error', { status });
                 showStatus('error', '❌ 验证加载失败');
             };
 
-            // 2️⃣ 再定义配置（使用函数名字符串，不是内联函数！）
+            window.mtcaptchaExpiredCallback = function(status) {
+                debugLog('⏰ MTCaptcha expired', { status });
+                showStatus('error', '❌ 验证已过期');
+            };
+
+            // 配置所有回调
             window.mtcaptchaConfig = {
                 sitekey: config.site_key,
-                'verified-callback': 'mtcaptchaVerifiedCallback',  // ⚠️ 必须是字符串！
+                'jsloaded-callback': 'mtcaptchaJsloadedCallback',
+                'rendered-callback': 'mtcaptchaRenderedCallback',
+                'verified-callback': 'mtcaptchaVerifiedCallback',
                 'error-callback': 'mtcaptchaErrorCallback',
+                'verifyexpired-callback': 'mtcaptchaExpiredCallback',
             };
 
             debugLog('MTCaptcha 配置已设置', window.mtcaptchaConfig);
 
-            // 3️⃣ 最后加载 SDK
             await loadScript('https://service.mtcaptcha.com/mtcv1/client/mtcaptcha.min.js');
             debugLog('MTCaptcha SDK 加载完成');
 
             document.getElementById('mtcaptcha-widget').classList.add('active');
+
+            // 10 秒后检查是否有 token（如果回调没触发，尝试手动获取）
+            setTimeout(() => {
+                debugLog('⏱️ 10 秒检查：检查是否有 mtcaptcha 对象');
+                if (window.mtcaptcha) {
+                    debugLog('✅ window.mtcaptcha 存在');
+                    try {
+                        const token = window.mtcaptcha.getVerifiedToken();
+                        debugLog('手动获取 token 结果', { token });
+                        if (token && token !== '.NOTVERIFIED' && token !== '.EXPIRED') {
+                            debugLog('⚠️ 检测到 token 存在但回调未触发，手动调用验证');
+                            verifyWithBackend('mtcaptcha', token);
+                        }
+                    } catch (e) {
+                        debugLog('❌ 手动获取 token 失败', { error: e.message });
+                    }
+                } else {
+                    debugLog('❌ window.mtcaptcha 不存在');
+                }
+            }, 10000);
         }
 
         // ========== ALTCHA ==========
