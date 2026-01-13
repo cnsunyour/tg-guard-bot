@@ -894,12 +894,13 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     await auto_delete_message(reply)
 
 
-@router.message(Command("spam"))
+@router.message(Command("spam", "report"))
 async def cmd_spam(message: Message, bot: Bot) -> None:
     """标记垃圾消息
 
     - 普通用户：创建举报记录，通知管理员
     - 管理员：直接封禁用户并添加到训练库
+    - 别名：/report
     """
     # 检查是否在群组中
     if message.chat.type == "private":
