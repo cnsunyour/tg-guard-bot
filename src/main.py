@@ -153,7 +153,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
 async def setup_bot_commands(bot: Bot) -> None:
     """设置 Bot 命令自动完成提示"""
-    from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
+    from aiogram.types import (
+        BotCommand,
+        BotCommandScopeAllChatAdministrators,
+        BotCommandScopeAllGroupChats,
+        BotCommandScopeAllPrivateChats,
+    )
 
     # 私聊命令列表（普通用户 + 超级管理员命令）
     private_commands = [
@@ -168,8 +173,14 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="whitelist_list", description="查看白名单（仅超管）"),
     ]
 
-    # 群组命令列表（只包含群组可用的命令）
-    group_commands = [
+    # 群组普通成员命令列表（仅基础功能）
+    group_member_commands = [
+        BotCommand(command="help", description="查看帮助信息"),
+        BotCommand(command="spam", description="举报垃圾消息"),
+    ]
+
+    # 群组管理员命令列表（完整管理功能）
+    group_admin_commands = [
         # 群组配置
         BotCommand(command="groupset", description="⚙️ 群组设置（统一入口）"),
         BotCommand(command="setverify", description="设置验证方式"),
@@ -209,12 +220,19 @@ async def setup_bot_commands(bot: Bot) -> None:
         )
         logger.info(f"✅ 已设置私聊命令列表 ({len(private_commands)} 个命令)")
 
-        # 设置群组命令
+        # 设置群组普通成员命令（优先级较低）
         await bot.set_my_commands(
-            commands=group_commands,
+            commands=group_member_commands,
             scope=BotCommandScopeAllGroupChats(),
         )
-        logger.info(f"✅ 已设置群组命令列表 ({len(group_commands)} 个命令)")
+        logger.info(f"✅ 已设置群组普通成员命令列表 ({len(group_member_commands)} 个命令)")
+
+        # 设置群组管理员命令（优先级较高，会覆盖普通成员的命令）
+        await bot.set_my_commands(
+            commands=group_admin_commands,
+            scope=BotCommandScopeAllChatAdministrators(),
+        )
+        logger.info(f"✅ 已设置群组管理员命令列表 ({len(group_admin_commands)} 个命令)")
 
     except Exception as e:
         logger.error(f"设置命令列表失败: {e}")
