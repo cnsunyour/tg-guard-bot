@@ -9,12 +9,16 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 
 from src.core.config import settings
 
-# 声明式基类
-Base = declarative_base()
+
+# 声明式基类（SQLAlchemy 2.0 风格）
+class Base(DeclarativeBase):
+    """ORM 模型基类"""
+
+    pass
 
 # 全局引擎和会话工厂
 _engine: AsyncEngine | None = None
