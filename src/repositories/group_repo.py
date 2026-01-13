@@ -114,6 +114,17 @@ class GroupRepository:
                 await session.commit()
 
     @staticmethod
+    async def update_antichannel_settings(chat_id: int, enabled: bool) -> None:
+        """更新反频道马甲设置"""
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.anti_channel_enabled = enabled
+                await session.commit()
+
+    @staticmethod
     async def get_whitelisted_groups() -> list[Group]:
         """获取所有白名单群组"""
         async with get_db_session() as session:

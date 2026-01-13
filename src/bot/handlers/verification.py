@@ -1088,7 +1088,9 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
             chat_id=user_id,
             message_id=callback.message.message_id,
             caption=challenge.question,
-            reply_markup=challenge.keyboard if isinstance(challenge.keyboard, InlineKeyboardMarkup) else None,
+            reply_markup=(
+                challenge.keyboard if isinstance(challenge.keyboard, InlineKeyboardMarkup) else None
+            ),
         )
         await callback.answer("🔄 已刷新验证码", show_alert=False)
 
