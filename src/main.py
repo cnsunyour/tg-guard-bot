@@ -25,6 +25,7 @@ def before_send(event, _hint):
         for exc_value in event["exception"]["values"]:
             exc_type = exc_value.get("type", "")
             exc_module = exc_value.get("module", "")
+            exc_message = exc_value.get("value", "")  # 获取异常消息
 
             # 网络相关的临时性错误
             network_errors = [
@@ -39,9 +40,25 @@ def before_send(event, _hint):
                 "OSError",  # 操作系统错误（网络相关）
             ]
 
-            # 检查是否是网络错误
+            # 检查是否是网络错误（通过类型）
             if exc_type in network_errors:
                 # 返回 None 表示丢弃该事件，不发送到 Sentry
+                return None
+
+            # 检查异常消息中是否包含网络错误关键词
+            network_error_keywords = [
+                "ServerDisconnectedError",
+                "Server disconnected",
+                "ClientConnectorError",
+                "Cannot connect to host",
+                "Connection refused",
+                "Connection reset",
+                "Failed to fetch updates",
+                "Network is unreachable",
+                "Temporary failure in name resolution",
+            ]
+
+            if any(keyword in exc_message for keyword in network_error_keywords):
                 return None
 
             # 检查是否是 aiogram 的可恢复错误
