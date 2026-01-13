@@ -151,13 +151,85 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     return bot, dp
 
 
-async def on_startup() -> None:
+async def setup_bot_commands(bot: Bot) -> None:
+    """设置 Bot 命令自动完成提示"""
+    from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
+
+    # 私聊命令列表
+    private_commands = [
+        BotCommand(command="start", description="启动 Bot"),
+        BotCommand(command="help", description="查看帮助信息"),
+    ]
+
+    # 群组命令列表
+    group_commands = [
+        # 群组配置
+        BotCommand(command="groupset", description="群组设置（统一入口）"),
+        BotCommand(command="setverify", description="设置验证方式"),
+        BotCommand(command="settimeout", description="设置验证超时时间"),
+        BotCommand(command="verifyconfig", description="查看验证配置"),
+        BotCommand(command="antispam", description="反垃圾配置"),
+        BotCommand(command="antichannel", description="反频道马甲配置"),
+        BotCommand(command="activity", description="活跃度系统开关"),
+        BotCommand(command="activityskip", description="活跃度跳过阈值"),
+        # 群成员管理
+        BotCommand(command="kick", description="踢出成员"),
+        BotCommand(command="mute", description="禁言成员"),
+        BotCommand(command="unmute", description="解除禁言"),
+        BotCommand(command="ban", description="封禁成员"),
+        BotCommand(command="unban", description="解除封禁"),
+        BotCommand(command="warn", description="警告成员"),
+        BotCommand(command="warnings", description="查看警告记录"),
+        BotCommand(command="clearwarnings", description="清除警告"),
+        # 消息管理
+        BotCommand(command="delbefore", description="删除往前的消息"),
+        BotCommand(command="delafter", description="删除往后的消息"),
+        BotCommand(command="delrange", description="删除消息范围"),
+        # 举报系统
+        BotCommand(command="spam", description="举报垃圾消息"),
+        BotCommand(command="notspam", description="标记非垃圾消息"),
+        BotCommand(command="reports", description="查看举报列表"),
+        BotCommand(command="approve", description="处理举报"),
+        # 统计与管理
+        BotCommand(command="stats", description="查看统计信息"),
+        BotCommand(command="health", description="健康检查"),
+        BotCommand(command="help", description="查看帮助信息"),
+        # 白名单管理
+        BotCommand(command="whitelist_add", description="添加白名单"),
+        BotCommand(command="whitelist_remove", description="移除白名单"),
+        BotCommand(command="whitelist_list", description="查看白名单"),
+    ]
+
+    try:
+        # 设置私聊命令
+        await bot.set_my_commands(
+            commands=private_commands,
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+        logger.info(f"✅ 已设置私聊命令列表 ({len(private_commands)} 个命令)")
+
+        # 设置群组命令
+        await bot.set_my_commands(
+            commands=group_commands,
+            scope=BotCommandScopeAllGroupChats(),
+        )
+        logger.info(f"✅ 已设置群组命令列表 ({len(group_commands)} 个命令)")
+
+    except Exception as e:
+        logger.error(f"设置命令列表失败: {e}")
+
+
+async def on_startup(bot: Bot) -> None:
     """启动时执行"""
     logger.info("Bot 正在启动...")
 
     # 初始化数据库
     logger.info("初始化数据库...")
     await init_db()
+
+    # 设置命令自动完成
+    logger.info("设置命令自动完成...")
+    await setup_bot_commands(bot)
 
     logger.info("Bot 启动完成")
 
@@ -262,7 +334,7 @@ async def main() -> None:
     bot, dp = await setup_bot()
 
     # 启动回调
-    await on_startup()
+    await on_startup(bot)
 
     # 启动轮询（无限重试，直到成功或手动停止）
     retry_delay = 5.0
