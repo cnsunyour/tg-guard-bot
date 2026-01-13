@@ -861,9 +861,9 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
             await auto_delete_message(reply)
             return
 
-    # 情况3：纯数字 - 无法验证，直接使用
+    # 情况3：纯数字 - 表示当前群组内的消息ID，无需验证群组归属
     else:
-        logger.debug("使用纯数字消息ID，无法验证群组归属")
+        logger.debug("使用纯数字消息ID（当前群组内），无需验证群组归属")
 
     # 执行删除
     start_message_id = message.reply_to_message.message_id
