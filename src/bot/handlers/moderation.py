@@ -794,32 +794,76 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
         return
 
-    # 解析消息链接，获取群组ID和消息ID
-    link_chat_id, end_message_id = parse_message_link_with_chat(parts[1])
+    # 解析消息链接，获取群组ID、消息ID和用户名
+    link_chat_id, end_message_id, link_username = parse_message_link_with_chat(parts[1])
 
     if end_message_id is None:
         reply = await message.answer(
             "❌ 无法解析消息ID\n\n"
             "支持的格式：\n"
             "1. 纯数字：12345\n"
-            "2. 消息链接：https://t.me/c/1234567890/12345"
+            "2. 私有群组链接：https://t.me/c/1234567890/12345\n"
+            "3. 公开群组链接：https://t.me/groupname/12345"
         )
         await auto_delete_message(reply)
         return
 
     # ✅ 验证链接是否属于当前群组
+    # 情况1：私有群组链接 - 通过 chat_id 验证
     if link_chat_id is not None:
-        # 如果链接包含群组ID，验证是否匹配当前群组
         if link_chat_id != message.chat.id:
             reply = await message.answer(
                 "❌ 消息链接不属于当前群组\n\n"
-                f"链接所属群组: {link_chat_id}\n"
-                f"当前群组: {message.chat.id}\n\n"
+                f"链接所属群组ID: {link_chat_id}\n"
+                f"当前群组ID: {message.chat.id}\n\n"
                 "💡 提示：请确保复制的是本群组的消息链接"
             )
             await auto_delete_message(reply)
             return
-        logger.debug(f"验证通过：消息链接属于当前群组 {message.chat.id}")
+        logger.debug(f"验证通过：私有群组链接属于当前群组 {message.chat.id}")
+
+    # 情况2：公开群组链接 - 通过 username 验证
+    elif link_username is not None:
+        try:
+            # 获取当前群组信息
+            current_chat = await bot.get_chat(message.chat.id)
+            current_username = current_chat.username
+
+            if current_username is None:
+                reply = await message.answer(
+                    "❌ 当前群组未设置公开用户名，无法验证公开链接\n\n"
+                    "💡 提示：\n"
+                    "• 对于私有群组，请使用消息ID或私有链接\n"
+                    "• 或在群组设置中添加公开用户名"
+                )
+                await auto_delete_message(reply)
+                return
+
+            # 验证 username 是否匹配（不区分大小写）
+            if link_username.lower() != current_username.lower():
+                reply = await message.answer(
+                    "❌ 消息链接不属于当前群组\n\n"
+                    f"链接所属群组: @{link_username}\n"
+                    f"当前群组: @{current_username}\n\n"
+                    "💡 提示：请确保复制的是本群组的消息链接"
+                )
+                await auto_delete_message(reply)
+                return
+
+            logger.debug(
+                f"验证通过：公开群组链接属于当前群组 @{current_username} "
+                f"(匹配 @{link_username})"
+            )
+
+        except Exception as e:
+            logger.error(f"获取群组信息失败: {e}")
+            reply = await message.answer("❌ 验证群组信息失败，请稍后重试")
+            await auto_delete_message(reply)
+            return
+
+    # 情况3：纯数字 - 无法验证，直接使用
+    else:
+        logger.debug("使用纯数字消息ID，无法验证群组归属")
 
     # 执行删除
     start_message_id = message.reply_to_message.message_id
