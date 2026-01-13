@@ -1072,7 +1072,7 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="✅ 批准", callback_data=f"report_approve:{report.id}"
+                            text="✅ 接受", callback_data=f"report_approve:{report.id}"
                         ),
                         InlineKeyboardButton(
                             text="❌ 拒绝", callback_data=f"report_reject:{report.id}"
@@ -1502,9 +1502,9 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
         _, report_id_str = callback.data.split(":")
         report_id = int(report_id_str)
 
-        # 权限验证：只有管理员可以批准
+        # 权限验证：只有管理员可以接受
         if not await check_admin_permission_strict_message(callback.message, bot):
-            await callback.answer("❌ 只有管理员可以批准举报", show_alert=True)
+            await callback.answer("❌ 只有管理员可以接受举报", show_alert=True)
             return
 
         # 获取举报记录
@@ -1569,7 +1569,7 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
 
             # 更新消息（移除按钮）
             await callback.message.edit_text(
-                f"✅ 举报已批准处理\n"
+                f"✅ 举报已接受处理\n"
                 f"• 举报ID: #{report_id}\n"
                 f"• 原因: {escape_html(report.reason or '无')}\n"
                 f"• 被举报用户: {report.reported_user_id}\n"
@@ -1578,9 +1578,9 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
                 f"✓ 消息已删除\n"
                 f"✓ 已添加到训练库"
             )
-            await callback.answer("✅ 举报已批准并处理", show_alert=True)
+            await callback.answer("✅ 举报已接受并处理", show_alert=True)
 
-            logger.info(f"管理员 {callback.from_user.id} 通过按钮批准了举报 #{report_id}")
+            logger.info(f"管理员 {callback.from_user.id} 通过按钮接受了举报 #{report_id}")
 
         else:
             await callback.answer(f"❌ 封禁失败: {error_msg}", show_alert=True)
