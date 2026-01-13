@@ -674,8 +674,8 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
 
     try:
         count = int(parts[1])
-        if count <= 0 or count > 100:
-            reply = await message.answer("❌ 删除数量必须在 1-100 之间")
+        if count <= 0 or count > 1000:
+            reply = await message.answer("❌ 删除数量必须在 1-1000 之间")
             await auto_delete_message(reply)
             return
     except ValueError:
@@ -734,8 +734,8 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
 
     try:
         count = int(parts[1])
-        if count <= 0 or count > 100:
-            reply = await message.answer("❌ 删除数量必须在 1-100 之间")
+        if count <= 0 or count > 1000:
+            reply = await message.answer("❌ 删除数量必须在 1-1000 之间")
             await auto_delete_message(reply)
             return
     except ValueError:
