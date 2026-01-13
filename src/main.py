@@ -155,16 +155,23 @@ async def setup_bot_commands(bot: Bot) -> None:
     """设置 Bot 命令自动完成提示"""
     from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 
-    # 私聊命令列表
+    # 私聊命令列表（普通用户 + 超级管理员命令）
     private_commands = [
-        BotCommand(command="start", description="启动 Bot"),
+        # 普通命令
+        BotCommand(command="start", description="启动 Bot / 查看帮助"),
         BotCommand(command="help", description="查看帮助信息"),
+        # 超级管理员命令
+        BotCommand(command="health", description="健康检查（仅超管）"),
+        BotCommand(command="stats", description="统计信息（仅超管）"),
+        BotCommand(command="whitelist_add", description="添加白名单（仅超管）"),
+        BotCommand(command="whitelist_remove", description="移除白名单（仅超管）"),
+        BotCommand(command="whitelist_list", description="查看白名单（仅超管）"),
     ]
 
-    # 群组命令列表
+    # 群组命令列表（只包含群组可用的命令）
     group_commands = [
         # 群组配置
-        BotCommand(command="groupset", description="群组设置（统一入口）"),
+        BotCommand(command="groupset", description="⚙️ 群组设置（统一入口）"),
         BotCommand(command="setverify", description="设置验证方式"),
         BotCommand(command="settimeout", description="设置验证超时时间"),
         BotCommand(command="verifyconfig", description="查看验证配置"),
@@ -190,14 +197,8 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="notspam", description="标记非垃圾消息"),
         BotCommand(command="reports", description="查看举报列表"),
         BotCommand(command="approve", description="处理举报"),
-        # 统计与管理
-        BotCommand(command="stats", description="查看统计信息"),
-        BotCommand(command="health", description="健康检查"),
+        # 帮助
         BotCommand(command="help", description="查看帮助信息"),
-        # 白名单管理
-        BotCommand(command="whitelist_add", description="添加白名单"),
-        BotCommand(command="whitelist_remove", description="移除白名单"),
-        BotCommand(command="whitelist_list", description="查看白名单"),
     ]
 
     try:
