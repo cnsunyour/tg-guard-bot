@@ -335,3 +335,74 @@ def parse_message_link(text: str) -> int | None:
     masked_text = mask_sensitive_text(text, keep_chars=15)
     logger.debug(f"无法从文本中解析消息ID: {masked_text}")
     return None
+
+
+def parse_message_link_with_chat(text: str) -> tuple[int | None, int | None]:
+    """从消息链接中提取群组ID和消息ID
+
+    支持的格式：
+    1. 纯数字：123456 -> (None, 123456)
+    2. 私有群组链接：https://t.me/c/1234567890/123456 -> (-1001234567890, 123456)
+    3. 公开频道/群组链接：https://t.me/channel_name/123456 -> (None, 123456)
+
+    Args:
+        text: 消息链接或消息ID字符串
+
+    Returns:
+        (chat_id, message_id) 元组
+        - 私有群组：返回完整的 chat_id (带 -100 前缀)
+        - 纯数字/公开链接：chat_id 为 None
+        - 解析失败：(None, None)
+    """
+    if not text or not isinstance(text, str):
+        return None, None
+
+    text = text.strip()
+
+    # 1. 尝试直接解析为数字
+    if text.isdigit():
+        message_id = int(text)
+        if message_id > 0:
+            return None, message_id
+        return None, None
+
+    # 2. 解析私有群组链接：https://t.me/c/1234567890/123456
+    # 提取群组ID和消息ID
+    private_pattern = r"t\.me/c/(\d+)/(\d+)"
+    match = re.search(private_pattern, text)
+    if match:
+        # 提取链接中的群组ID（不带前缀）
+        chat_id_str = match.group(1)
+        message_id_str = match.group(2)
+
+        try:
+            # 转换为完整的 chat_id（加上 -100 前缀）
+            # Telegram 私有群组的 chat_id 格式：-100 + 链接中的数字
+            # 例如：链接中是 1234567890，实际 chat_id 是 -1001234567890
+            chat_id = int(f"-100{chat_id_str}")
+            message_id = int(message_id_str)
+
+            if message_id > 0:
+                logger.debug(f"从私有群组链接解析: chat_id={chat_id}, message_id={message_id}")
+                return chat_id, message_id
+        except (ValueError, OverflowError) as e:
+            logger.debug(f"解析私有群组链接失败: {e}")
+            return None, None
+
+    # 3. 解析公开频道/群组链接：https://t.me/channel_name/123456
+    # 公开链接无法获取 chat_id，只返回 message_id
+    public_pattern = r"t\.me/[^/]+/(\d+)"
+    match = re.search(public_pattern, text)
+    if match:
+        try:
+            message_id = int(match.group(1))
+            if message_id > 0:
+                logger.debug(f"从公开链接解析: message_id={message_id} (无 chat_id)")
+                return None, message_id
+        except ValueError:
+            pass
+
+    # 解析失败
+    masked_text = mask_sensitive_text(text, keep_chars=15)
+    logger.debug(f"无法从文本中解析消息链接: {masked_text}")
+    return None, None

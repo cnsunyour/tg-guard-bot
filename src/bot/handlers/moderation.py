@@ -14,7 +14,7 @@ from src.core.utils import (
     auto_delete_message,
     check_admin_permission_strict_message,
     escape_html,
-    parse_message_link,
+    parse_message_link_with_chat,
 )
 from src.repositories.report_repo import ReportRepository
 from src.repositories.spam_repo import SpamRepository
@@ -794,8 +794,8 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
         return
 
-    # 使用 parse_message_link 解析消息ID或链接
-    end_message_id = parse_message_link(parts[1])
+    # 解析消息链接，获取群组ID和消息ID
+    link_chat_id, end_message_id = parse_message_link_with_chat(parts[1])
 
     if end_message_id is None:
         reply = await message.answer(
@@ -806,6 +806,20 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
         )
         await auto_delete_message(reply)
         return
+
+    # ✅ 验证链接是否属于当前群组
+    if link_chat_id is not None:
+        # 如果链接包含群组ID，验证是否匹配当前群组
+        if link_chat_id != message.chat.id:
+            reply = await message.answer(
+                "❌ 消息链接不属于当前群组\n\n"
+                f"链接所属群组: {link_chat_id}\n"
+                f"当前群组: {message.chat.id}\n\n"
+                "💡 提示：请确保复制的是本群组的消息链接"
+            )
+            await auto_delete_message(reply)
+            return
+        logger.debug(f"验证通过：消息链接属于当前群组 {message.chat.id}")
 
     # 执行删除
     start_message_id = message.reply_to_message.message_id
