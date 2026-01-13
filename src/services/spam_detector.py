@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from typing import Any
+from typing import Any, TypedDict
 
 from loguru import logger
 
@@ -17,6 +17,18 @@ from src.ml.embedder import get_embedder
 from src.ml.ocr import get_ocr_extractor
 from src.ml.rule_engine import get_rule_engine
 from src.repositories.spam_repo import SpamRepository
+
+
+class DetectionResult(TypedDict):
+    """检测结果类型"""
+
+    is_spam: bool
+    confidence: float
+    original_confidence: float  # 原始置信度
+    activity_reduction: float  # 活跃度减少值
+    stage: str | None
+    reasons: list[str]
+    details: dict[str, Any]
 
 
 class SpamDetector:
@@ -32,7 +44,7 @@ class SpamDetector:
 
     async def detect(
         self, text: str, user_id: int, chat_id: int, activity: int | None = None
-    ) -> dict[str, Any]:
+    ) -> DetectionResult:
         """检测文本是否为垃圾信息
 
         Args:
@@ -44,7 +56,7 @@ class SpamDetector:
         Returns:
             检测结果字典
         """
-        result = {
+        result: DetectionResult = {
             "is_spam": False,
             "confidence": 0.0,
             "original_confidence": 0.0,  # 原始置信度
@@ -126,7 +138,7 @@ class SpamDetector:
 
     async def detect_with_ai(
         self, text: str, user_id: int, chat_id: int, activity: int | None = None
-    ) -> dict[str, Any]:
+    ) -> DetectionResult:
         """并行检测入口 - 同时运行传统三阶段管道和 AI API 检测
 
         Args:
@@ -174,12 +186,12 @@ class SpamDetector:
 
     async def _merge_detection_results(
         self,
-        traditional: dict[str, Any] | None,
+        traditional: DetectionResult | None,
         ai: dict[str, Any] | None,
         text: str,
         user_id: int,
         activity: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> DetectionResult:
         """合并传统检测和 AI 检测结果
 
         合并策略：
@@ -204,6 +216,8 @@ class SpamDetector:
             return {
                 "is_spam": False,
                 "confidence": 0.0,
+                "original_confidence": 0.0,
+                "activity_reduction": 0.0,
                 "stage": "failed",
                 "reasons": ["所有检测器都失败"],
                 "details": {},
@@ -212,12 +226,22 @@ class SpamDetector:
         # 传统检测失败 → 使用 AI 结果
         if traditional is None:
             logger.warning(f"传统检测失败，使用 AI 结果 [用户:{user_id}]")
+            assert ai is not None  # 类型检查
             if ai["is_spam"]:
                 await self._handle_ai_spam_detection(text, ai, user_id)
             else:
                 # 处理高置信度负样本
                 await self._handle_ai_negative_detection(text, ai, user_id)
-            return ai
+            # AI 结果需要转换为 DetectionResult 格式
+            return {
+                "is_spam": ai.get("is_spam", False),
+                "confidence": ai.get("confidence", 0.0),
+                "original_confidence": ai.get("original_confidence", 0.0),
+                "activity_reduction": ai.get("activity_reduction", 0.0),
+                "stage": ai.get("stage"),
+                "reasons": ai.get("reasons", []),
+                "details": ai.get("details", {}),
+            }
 
         # AI 检测失败 → 使用传统结果
         if ai is None:
@@ -236,7 +260,16 @@ class SpamDetector:
         if ai["is_spam"]:
             logger.info(f"AI 检测为垃圾 [用户:{user_id}] [置信度:{ai['confidence']:.2f}]")
             await self._handle_ai_spam_detection(text, ai, user_id)
-            return ai
+            # AI 结果需要转换为 DetectionResult 格式
+            return {
+                "is_spam": ai.get("is_spam", False),
+                "confidence": ai.get("confidence", 0.0),
+                "original_confidence": ai.get("original_confidence", 0.0),
+                "activity_reduction": ai.get("activity_reduction", 0.0),
+                "stage": ai.get("stage"),
+                "reasons": ai.get("reasons", []),
+                "details": ai.get("details", {}),
+            }
 
         # 策略 3: 都不是垃圾 → 使用传统结果 + 检查是否入库负样本
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
@@ -350,8 +383,8 @@ class SpamDetector:
             logger.error(f"AI 负样本入库失败 [用户:{user_id}]: {e}")
 
     def _apply_activity_adjustment(
-        self, result: dict[str, Any], activity: int | None, user_id: int
-    ) -> dict[str, Any]:
+        self, result: DetectionResult, activity: int | None, user_id: int
+    ) -> DetectionResult:
         """应用活跃度置信度调整
 
         Args:
@@ -405,7 +438,7 @@ class SpamDetector:
 
         return result
 
-    async def detect_image(self, image_path: str, user_id: int, chat_id: int) -> dict[str, Any]:
+    async def detect_image(self, image_path: str, user_id: int, chat_id: int) -> DetectionResult:
         """检测图片是否为垃圾信息（通过 OCR 提取文字）
 
         Args:
@@ -416,9 +449,11 @@ class SpamDetector:
         Returns:
             检测结果字典
         """
-        result = {
+        result: DetectionResult = {
             "is_spam": False,
             "confidence": 0.0,
+            "original_confidence": 0.0,
+            "activity_reduction": 0.0,
             "stage": None,
             "reasons": [],
             "details": {},

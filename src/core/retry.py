@@ -5,7 +5,7 @@
 
 import asyncio
 import functools
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import ParamSpec, TypeVar
 
 from aiogram.exceptions import (
@@ -24,7 +24,7 @@ def retry_on_network_error(
     initial_delay: float = 1.0,
     backoff_factor: float = 2.0,
     max_delay: float = 10.0,
-) -> Callable[[Callable[P, T]], Callable[P, T]]:
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """网络错误自动重试装饰器
 
     Args:
@@ -47,10 +47,10 @@ def retry_on_network_error(
             return member.status in ["creator", "administrator"]
     """
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @functools.wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            last_exception = None
+            last_exception: BaseException | None = None
             delay = initial_delay
 
             for attempt in range(max_retries + 1):

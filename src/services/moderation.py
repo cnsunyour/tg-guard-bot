@@ -268,7 +268,7 @@ class ModerationService:
             )
 
             # 记录日志
-            details = {"reason": reason} if reason else {}
+            details: dict[str, str | bool] = {"reason": reason} if reason else {}
             if revoke_messages:
                 details["revoke_messages"] = True
 
@@ -359,6 +359,8 @@ class ModerationService:
         """
         try:
             # 验证目标用户不是管理员
+            not_admin: bool
+            error_msg: str | None
             not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
             if not not_admin:
                 logger.warning(f"尝试警告管理员 {user_id}，操作已阻止")

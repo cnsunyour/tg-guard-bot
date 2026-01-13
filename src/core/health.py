@@ -162,7 +162,7 @@ class HealthChecker:
 
 
 # 全局健康检查器实例
-_health_checker: HealthChecker = None
+_health_checker: HealthChecker | None = None
 
 
 def get_health_checker() -> HealthChecker:

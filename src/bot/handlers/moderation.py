@@ -54,6 +54,8 @@ def parse_user_from_message(message: Message) -> int | None:
 
     # 3. 检查命令参数中是否有用户ID
     if message.text:
+        if not message.text:
+            return None
         parts = message.text.split(maxsplit=1)
         if len(parts) > 1:
             arg = parts[1].strip().split()[0]  # 只取第一个参数
@@ -153,6 +155,9 @@ def parse_spam_args(text: str) -> tuple[bool, str]:
 @router.message(Command("kick"))
 async def cmd_kick(message: Message, bot: Bot) -> None:
     """踢出用户"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -175,6 +180,9 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         return
 
     # 获取原因
+    if not message.text:
+        return
+
     parts = message.text.split(maxsplit=2)
     # 判断是回复消息还是命令参数模式
     if message.reply_to_message:
@@ -215,6 +223,9 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
 @router.message(Command("mute"))
 async def cmd_mute(message: Message, bot: Bot) -> None:
     """禁言用户"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -238,6 +249,9 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         return
 
     # 解析时长和原因
+    if not message.text:
+        return
+
     parts = message.text.split(maxsplit=3)
     duration = None
     reason = None
@@ -295,6 +309,9 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
 
     统一解除用户的所有限制，无论是禁言还是封禁
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -336,6 +353,9 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, bot: Bot) -> None:
     """封禁用户"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -358,6 +378,9 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         return
 
     # 获取原因
+    if not message.text:
+        return
+
     parts = message.text.split(maxsplit=2)
     # 判断是回复消息还是命令参数模式
     if message.reply_to_message:
@@ -401,6 +424,9 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
 
     统一解除用户的所有限制，无论是禁言还是封禁
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -442,6 +468,9 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
 @router.message(Command("warn"))
 async def cmd_warn(message: Message, bot: Bot) -> None:
     """警告用户"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -464,6 +493,9 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         return
 
     # 获取原因
+    if not message.text:
+        return
+
     parts = message.text.split(maxsplit=2)
     # 判断是回复消息还是命令参数模式
     if message.reply_to_message:
@@ -536,6 +568,9 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
 @router.message(Command("warnings"))
 async def cmd_warnings(message: Message, bot: Bot) -> None:
     """查看用户警告记录"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -602,6 +637,9 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
 @router.message(Command("clearwarnings"))
 async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
     """清除用户警告"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -645,6 +683,9 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
 
     用法：回复某条消息，然后使用 /delbefore <N> 删除包含该消息在内的共N条消息
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -666,6 +707,9 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
         return
 
     # 解析参数
+    if not message.text:
+        return
+
     parts = message.text.split()
     if len(parts) < 2:
         reply = await message.answer("❌ 请指定要删除的消息数量")
@@ -705,6 +749,9 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
 
     用法：回复某条消息，然后使用 /delafter <N> 删除包含该消息在内的共N条消息
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -726,6 +773,9 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
         return
 
     # 解析参数
+    if not message.text:
+        return
+
     parts = message.text.split()
     if len(parts) < 2:
         reply = await message.answer("❌ 请指定要删除的消息数量")
@@ -765,6 +815,9 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
 
     用法：回复起始消息，然后使用 /delrange <结束消息ID或链接> 删除两条消息之间的所有消息
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -788,6 +841,9 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
         return
 
     # 解析参数
+    if not message.text:
+        return
+
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
         reply = await message.answer("❌ 请指定结束消息ID或消息链接")
@@ -931,10 +987,11 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
         return
 
     # 获取目标用户ID
+    assert message.from_user  # 类型缩小
     target_user_id = message.reply_to_message.from_user.id
 
     # 解析参数：检测 -d 参数和原因
-    delete_all, reason = parse_spam_args(message.text)
+    delete_all, reason = parse_spam_args(message.text or "")
 
     # 获取消息文本内容
     spam_text = ""
@@ -1108,6 +1165,9 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
 
     仅管理员可用
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -1120,6 +1180,9 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
         return
 
     # 解析命令参数
+    if not message.text:
+        return
+
     args = message.text.split(maxsplit=2)
 
     # 场景判断：回复消息 vs 指定 message_id
@@ -1378,6 +1441,9 @@ async def _process_report_rejection(
 @router.message(Command("reports"))
 async def cmd_reports(message: Message, bot: Bot) -> None:
     """查看待处理的举报列表（仅管理员）"""
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -1435,6 +1501,9 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
 
     用法：/approve <report_id>
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -1446,6 +1515,9 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         return
 
     # 解析参数
+    if not message.text:
+        return
+
     parts = message.text.split()
     if len(parts) < 2:
         reply = await message.answer(
@@ -1476,11 +1548,11 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         report = await ReportRepository.get_report_by_id(report_id)
         reply = await message.answer(
             f"✅ 举报#{report_id}已处理\n"
-            f"• 用户已封禁: {report.reported_user_id}\n"
+            f"• 用户已封禁: {(report.reported_user_id if report else 0)}\n"
             f"• 消息已删除\n"
             f"• 已添加到训练库\n"
-            f"• 举报者: {report.reporter_id}\n"
-            f"• 原因: {escape_html(report.reason or '无')}"
+            f"• 举报者: {(report.reporter_id if report else 0)}\n"
+            f"• 原因: {escape_html((report.reason if report else "未知") or '无')}"
         )
         logger.info(f"管理员 {message.from_user.id} 通过命令接受了举报 #{report_id}")
     else:
@@ -1495,6 +1567,9 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
 
     用法：/reject <report_id>
     """
+    if not message.from_user:
+        return
+
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer("❌ 此命令只能在群组中使用")
@@ -1506,6 +1581,9 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
         return
 
     # 解析参数
+    if not message.text:
+        return
+
     parts = message.text.split()
     if len(parts) < 2:
         reply = await message.answer(
@@ -1533,9 +1611,9 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
         report = await ReportRepository.get_report_by_id(report_id)
         reply = await message.answer(
             f"✅ 举报#{report_id}已拒绝\n"
-            f"• 被举报用户: {report.reported_user_id}\n"
-            f"• 举报者: {report.reporter_id}\n"
-            f"• 原因: {escape_html(report.reason or '无')}\n\n"
+            f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
+            f"• 举报者: {(report.reporter_id if report else 0)}\n"
+            f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n\n"
             f"💡 此举报已被标记为误报或不需要处理"
         )
         await auto_delete_message(reply)
@@ -1548,12 +1626,25 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
 async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
     """处理举报接受回调（通过按钮）"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 数据错误", show_alert=True)
+            return
+
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer("❌ 消息不可访问", show_alert=True)
+            return
+
+        message: Message = callback.message
+
         # 解析举报ID
         _, report_id_str = callback.data.split(":")
         report_id = int(report_id_str)
 
         # 权限验证：只有管理员可以接受
-        if not await check_admin_permission_strict_message(callback.message, bot):
+        if not await check_admin_permission_strict_message(message, bot):
             await callback.answer("❌ 只有管理员可以接受举报", show_alert=True)
             return
 
@@ -1561,7 +1652,7 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
         success, msg = await _process_report_approval(
             bot=bot,
             report_id=report_id,
-            chat_id=callback.message.chat.id,
+            chat_id=message.chat.id,
             operator_id=callback.from_user.id,
         )
 
@@ -1570,11 +1661,11 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
             report = await ReportRepository.get_report_by_id(report_id)
 
             # 更新消息（移除按钮）
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"✅ 举报已接受处理\n"
                 f"• 举报ID: #{report_id}\n"
-                f"• 原因: {escape_html(report.reason or '无')}\n"
-                f"• 被举报用户: {report.reported_user_id}\n"
+                f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
+                f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
                 f"• 处理者: {callback.from_user.full_name}\n\n"
                 f"✓ 用户已封禁\n"
                 f"✓ 消息已删除\n"
@@ -1593,19 +1684,32 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
 async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
     """处理举报拒绝回调（通过按钮）"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 数据错误", show_alert=True)
+            return
+
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer("❌ 消息不可访问", show_alert=True)
+            return
+
+        message: Message = callback.message
+
         # 解析举报ID
         _, report_id_str = callback.data.split(":")
         report_id = int(report_id_str)
 
         # 权限验证：只有管理员可以拒绝
-        if not await check_admin_permission_strict_message(callback.message, bot):
+        if not await check_admin_permission_strict_message(message, bot):
             await callback.answer("❌ 只有管理员可以拒绝举报", show_alert=True)
             return
 
         # 调用辅助函数处理
         success, msg = await _process_report_rejection(
             report_id=report_id,
-            chat_id=callback.message.chat.id,
+            chat_id=message.chat.id,
             operator_id=callback.from_user.id,
         )
 
@@ -1614,11 +1718,11 @@ async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
             report = await ReportRepository.get_report_by_id(report_id)
 
             # 更新消息（移除按钮）
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"❌ 举报已拒绝\n"
                 f"• 举报ID: #{report_id}\n"
-                f"• 原因: {escape_html(report.reason or '无')}\n"
-                f"• 被举报用户: {report.reported_user_id}\n"
+                f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
+                f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
                 f"• 处理者: {callback.from_user.full_name}\n\n"
                 f"💡 此举报已被标记为误报或不需要处理"
             )

@@ -227,4 +227,5 @@ class Settings(BaseSettings):
 
 
 # 全局配置实例
-settings = Settings()
+# mypy 不理解 pydantic-settings 会从环境变量读取必需字段
+settings = Settings()  # type: ignore[call-arg]

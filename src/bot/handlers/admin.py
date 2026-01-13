@@ -513,6 +513,10 @@ COMMAND_HELP = {
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     """帮助命令 - 支持查看具体命令的详细用法"""
+    # 类型检查
+    if not message.text:
+        return
+
     # 解析参数
     args = message.text.split(maxsplit=1)
 
@@ -569,7 +573,7 @@ async def cmd_groupset(message: Message, bot: Bot) -> None:
         }
         verify_text = verify_type_map.get(group.verification_type, "未知")
 
-        antispam_text = "✅" if group.anti_spam_enabled else "❌"
+        antispam_text = "✅" if group.antispam_enabled else "❌"
         antichannel_text = "✅" if group.anti_channel_enabled else "❌"
         activity_text = "✅" if group.activity_enabled else "❌"
 
@@ -639,6 +643,20 @@ async def cmd_groupset(message: Message, bot: Bot) -> None:
 async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
     """处理群组设置菜单回调"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 数据错误", show_alert=True)
+            return
+
+        # 类型缩小：确保 message 不是 InaccessibleMessage
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer("❌ 消息不可访问", show_alert=True)
+            return
+
+        message: Message = callback.message
+
         _, chat_id_str, menu_type = callback.data.split(":")
         chat_id = int(chat_id_str)
 
@@ -731,7 +749,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                     ],
                 ]
             )
-            await callback.message.edit_text("请选择验证方式：", reply_markup=keyboard)
+            await message.edit_text("请选择验证方式：", reply_markup=keyboard)
 
         elif menu_type == "timeout":
             # 验证超时设置 - 显示当前配置和设置方法
@@ -745,7 +763,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                     ]
                 ]
             )
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"⏱️ <b>验证超时设置</b>\n\n"
                 f"当前超时时间：{timeout} 秒\n\n"
                 f"<b>修改方法：</b>\n"
@@ -757,7 +775,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
 
         elif menu_type == "antispam":
             # 反垃圾配置
-            current_status = "✅ 已启用" if group.anti_spam_enabled else "❌ 已禁用"
+            current_status = "✅ 已启用" if group.antispam_enabled else "❌ 已禁用"
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -777,7 +795,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                     ],
                 ]
             )
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"🛡️ <b>反垃圾配置</b>\n\n"
                 f"当前状态: {current_status}\n\n"
                 f"💡 <b>说明</b>：\n"
@@ -811,7 +829,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                     ],
                 ]
             )
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"🎭 <b>反频道马甲配置</b>\n\n"
                 f"当前状态: {current_status}\n\n"
                 f"💡 <b>说明</b>：\n"
@@ -845,7 +863,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                     ],
                 ]
             )
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"📊 <b>活跃度系统设置</b>\n\n"
                 f"当前状态: {status_text}\n\n"
                 f"<b>说明：</b>\n"
@@ -880,7 +898,7 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                     ]
                 ]
             )
-            await callback.message.edit_text(
+            await message.edit_text(
                 f"📈 <b>活跃度跳过阈值设置</b>\n\n"
                 f"当前配置：\n"
                 f"• 群组阈值：{group_threshold}\n"
@@ -906,6 +924,20 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
 async def on_groupset_back(callback: CallbackQuery, bot: Bot) -> None:
     """返回群组设置主菜单"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 数据错误", show_alert=True)
+            return
+
+        # 类型缩小：确保 message 不是 InaccessibleMessage
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer("❌ 消息不可访问", show_alert=True)
+            return
+
+        message: Message = callback.message
+
         _, chat_id_str = callback.data.split(":")
         chat_id = int(chat_id_str)
 
@@ -936,7 +968,7 @@ async def on_groupset_back(callback: CallbackQuery, bot: Bot) -> None:
         }
         verify_text = verify_type_map.get(group.verification_type, "未知")
 
-        antispam_text = "✅" if group.anti_spam_enabled else "❌"
+        antispam_text = "✅" if group.antispam_enabled else "❌"
         antichannel_text = "✅" if group.anti_channel_enabled else "❌"
         activity_text = "✅" if group.activity_enabled else "❌"
 
@@ -982,7 +1014,7 @@ async def on_groupset_back(callback: CallbackQuery, bot: Bot) -> None:
             ]
         )
 
-        await callback.message.edit_text(
+        await message.edit_text(
             f"⚙️ <b>群组设置</b>\n\n"
             f"<b>当前配置：</b>\n"
             f"• 验证方式：{verify_text}\n"
@@ -1094,13 +1126,27 @@ async def cmd_set_verify(message: Message, bot: Bot) -> None:
 async def on_setverify_callback(callback: CallbackQuery) -> None:
     """处理验证方式设置回调"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 数据错误", show_alert=True)
+            return
+
+        # 类型缩小：确保 message 不是 InaccessibleMessage
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer("❌ 消息不可访问", show_alert=True)
+            return
+
+        message: Message = callback.message
+
         _, chat_id_str, verify_type = callback.data.split(":")
         chat_id = int(chat_id_str)
 
         # ✅ 权限验证
         if callback.from_user.id not in settings.admin_ids:
             try:
-                member = await callback.bot.get_chat_member(chat_id, callback.from_user.id)
+                member = await callback.bot.get_chat_member(chat_id, callback.from_user.id)  # type: ignore[union-attr]
                 if member.status not in ["creator", "administrator"]:
                     await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
                     logger.warning(
@@ -1151,7 +1197,7 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
             "random": "随机验证",
         }
 
-        await callback.message.edit_text(
+        await message.edit_text(
             f"✅ 验证方式已设置为：{verify_type_names.get(verify_type, verify_type)}"
         )
         await callback.answer("设置成功")
@@ -1241,6 +1287,9 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
 
     try:
         # 解析超时时间参数
+        if not message.text:
+            return
+
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
             reply = await message.answer(
@@ -1313,6 +1362,9 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
 async def cmd_health(message: Message) -> None:
     """健康检查命令（仅超级管理员）"""
     # 检查是否是超级管理员
+    if not message.from_user:
+        return
+
     if message.from_user.id not in settings.admin_ids:
         await message.answer("❌ 只有超级管理员可以使用此命令")
         return
@@ -1370,6 +1422,9 @@ async def cmd_health(message: Message) -> None:
 async def cmd_stats(message: Message) -> None:
     """统计信息命令（仅超级管理员）"""
     # 检查是否是超级管理员
+    if not message.from_user:
+        return
+
     if message.from_user.id not in settings.admin_ids:
         await message.answer("❌ 只有超级管理员可以使用此命令")
         return
@@ -1414,6 +1469,9 @@ async def cmd_stats(message: Message) -> None:
 
 @router.message(Command("whitelist_add"))
 async def cmd_whitelist_add(message: Message) -> None:
+    if not message.from_user:
+        return
+
     """添加群组到白名单（仅超级管理员）
 
     用法: /whitelist_add <chat_id> [群组名称]
@@ -1426,6 +1484,9 @@ async def cmd_whitelist_add(message: Message) -> None:
 
     try:
         # 解析参数
+        if not message.text:
+            return
+
         args = message.text.split(maxsplit=2)
         if len(args) < 2:
             await message.answer(
@@ -1464,6 +1525,9 @@ async def cmd_whitelist_add(message: Message) -> None:
 
 @router.message(Command("whitelist_remove"))
 async def cmd_whitelist_remove(message: Message) -> None:
+    if not message.from_user:
+        return
+
     """从白名单移除群组（仅超级管理员）
 
     用法: /whitelist_remove <chat_id>
@@ -1476,6 +1540,9 @@ async def cmd_whitelist_remove(message: Message) -> None:
 
     try:
         # 解析参数
+        if not message.text:
+            return
+
         args = message.text.split()
         if len(args) != 2:
             await message.answer(
@@ -1518,6 +1585,9 @@ async def cmd_whitelist_remove(message: Message) -> None:
 async def cmd_whitelist_list(message: Message) -> None:
     """列出所有白名单群组（仅超级管理员）"""
     # 检查是否是超级管理员
+    if not message.from_user:
+        return
+
     if message.from_user.id not in settings.admin_ids:
         await message.answer("❌ 只有超级管理员可以使用此命令")
         return
@@ -1610,12 +1680,26 @@ async def cmd_activity(message: Message, bot: Bot) -> None:
 async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
     """处理活跃度设置回调"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 数据错误", show_alert=True)
+            return
+
+        # 类型缩小：确保 message 不是 InaccessibleMessage
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer("❌ 消息不可访问", show_alert=True)
+            return
+
+        message: Message = callback.message
+
         # 解析回调数据
         _, chat_id_str, action = callback.data.split(":")
         chat_id = int(chat_id_str)
 
         # 检查权限（回调来自同一用户）
-        if callback.message.chat.id != chat_id:
+        if message.chat.id != chat_id:
             await callback.answer("❌ 无效的操作", show_alert=True)
             return
 
@@ -1634,8 +1718,8 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
                 await callback.answer("ℹ️ 活跃度系统已经是启用状态", show_alert=True)
                 return
 
-            group.activity_enabled = True
-            await GroupRepository.update(group)
+            await GroupRepository.update_activity_settings(chat_id, True)
+            await GroupRepository.update_activity_settings(chat_id, True)
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 启用了活跃度系统")
             await callback.answer("✅ 活跃度系统已启用", show_alert=True)
 
@@ -1644,8 +1728,8 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
                 await callback.answer("ℹ️ 活跃度系统已经是禁用状态", show_alert=True)
                 return
 
-            group.activity_enabled = False
-            await GroupRepository.update(group)
+            await GroupRepository.update_activity_settings(chat_id, False)
+            await GroupRepository.update_activity_settings(chat_id, False)
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 禁用了活跃度系统")
             await callback.answer("✅ 活跃度系统已禁用", show_alert=True)
 
@@ -1679,7 +1763,7 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
             f"• 每日无消息自动衰减 -1"
         )
 
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await message.edit_text(text, reply_markup=keyboard)
 
     except ValueError:
         await callback.answer("❌ 无效的回调数据", show_alert=True)
@@ -1690,6 +1774,9 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.message(Command("activityskip"))
 async def cmd_activity_skip(message: Message, bot: Bot) -> None:
+    if not message.from_user:
+        return
+
     """查看/设置活跃度跳过垃圾检测阈值
 
     用法:
@@ -1714,6 +1801,9 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
         global_threshold = settings.activity_skip_spam_check_threshold
 
         # 解析参数
+        if not message.text:
+            return
+
         args = message.text.split()
         if len(args) == 1:
             # 仅查看配置
@@ -1742,8 +1832,8 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
                 return
 
             # 更新群组配置
-            group.activity_skip_threshold = new_threshold
-            await GroupRepository.update(group)
+            await GroupRepository.update_activity_skip_threshold(message.chat.id, new_threshold)
+            await GroupRepository.update_activity_skip_threshold(message.chat.id, new_threshold)
 
             logger.info(
                 f"管理员 {message.from_user.id} 在群组 {message.chat.id} "

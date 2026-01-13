@@ -4,7 +4,12 @@ import io
 import secrets
 from dataclasses import dataclass
 
-from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+)
 from captcha.image import ImageCaptcha
 
 from src.core.redis import RedisKeys, get_redis
@@ -20,7 +25,7 @@ class VerificationChallenge:
     challenge_type: str  # math, slider, qa, emoji, captcha, honeypot, random
     question: str
     answer: str
-    keyboard: InlineKeyboardMarkup
+    keyboard: InlineKeyboardMarkup | ReplyKeyboardMarkup
     photo: BufferedInputFile | None = None  # 用于 captcha 验证
 
 
@@ -510,7 +515,7 @@ class VerificationService:
         decoy_text = secrets.choice(decoy_texts)
 
         # 生成错误答案
-        wrong_answers = []
+        wrong_answers: list[int] = []
         while len(wrong_answers) < 2:
             wrong = secrets.randbelow(20) + 1
             if wrong != correct_answer and wrong not in wrong_answers:
