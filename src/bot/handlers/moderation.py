@@ -329,8 +329,9 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        # 如果是回复消息模式，删除被回复的消息
-        if message.reply_to_message:
+        # 如果是回复消息模式且未使用 -d 参数，删除被回复的消息
+        # （使用 -d 时所有消息已通过 revoke_messages 删除）
+        if message.reply_to_message and not delete_all:
             try:
                 await message.reply_to_message.delete()
                 logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
@@ -400,8 +401,9 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        # 如果是回复消息模式，删除被回复的消息
-        if message.reply_to_message:
+        # 如果是回复消息模式且未使用 -d 参数，删除被回复的消息
+        # （使用 -d 时所有消息已通过 revoke_messages 删除）
+        if message.reply_to_message and not delete_all:
             try:
                 await message.reply_to_message.delete()
                 logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
@@ -517,8 +519,9 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        # 如果是回复消息模式，删除被回复的消息
-        if message.reply_to_message:
+        # 如果是回复消息模式且未使用 -d 参数，删除被回复的消息
+        # （使用 -d 时所有消息已通过 revoke_messages 删除）
+        if message.reply_to_message and not delete_all:
             try:
                 await message.reply_to_message.delete()
                 logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
