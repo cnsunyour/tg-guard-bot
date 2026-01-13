@@ -204,32 +204,25 @@ def parse_moderation_args(
 
 def parse_mute_args(
     text: str, is_reply: bool
-) -> tuple[bool, int | None, str | None]:
-    """解析 /mute 命令参数（支持 -d、时长、原因）
+) -> tuple[int | None, str | None]:
+    """解析 /mute 命令参数（时长、原因）
 
     支持格式（回复消息模式）:
-        /mute                    -> (False, None, None)
-        /mute 30m                -> (False, 30, None)
-        /mute 30m 原因            -> (False, 30, "原因")
-        /mute -d                 -> (True, None, None)
-        /mute -d 30m             -> (True, 30, None)
-        /mute -d 30m 原因         -> (True, 30, "原因")
+        /mute                    -> (None, None)
+        /mute 30m                -> (30, None)
+        /mute 30m 原因            -> (30, "原因")
 
     支持格式（命令参数模式）:
-        /mute <用户ID>                -> (False, None, None)
-        /mute <用户ID> 30m            -> (False, 30, None)
-        /mute <用户ID> 30m 原因        -> (False, 30, "原因")
-        /mute <用户ID> -d             -> (True, None, None)
-        /mute <用户ID> -d 30m         -> (True, 30, None)
-        /mute <用户ID> -d 30m 原因     -> (True, 30, "原因")
+        /mute <用户ID>                -> (None, None)
+        /mute <用户ID> 30m            -> (30, None)
+        /mute <用户ID> 30m 原因        -> (30, "原因")
 
     Args:
         text: 完整的命令文本
         is_reply: 是否为回复消息模式
 
     Returns:
-        (delete_all: bool, duration: int | None, reason: str | None)
-        - delete_all: 是否删除用户的所有消息
+        (duration: int | None, reason: str | None)
         - duration: 禁言时长（分钟），None 表示永久
         - reason: 原因文本
     """
@@ -238,46 +231,28 @@ def parse_mute_args(
     # 回复消息模式: /mute [参数...]
     if is_reply:
         if len(parts) < 2:
-            return False, None, None
-
-        # 检查 -d 参数
-        delete_all = False
-        start_idx = 1
-        if parts[1] == "-d":
-            delete_all = True
-            start_idx = 2
+            return None, None
 
         # 解析时长
-        duration = None
+        duration = parse_duration(parts[1])
         reason = None
-        if len(parts) > start_idx:
-            duration = parse_duration(parts[start_idx])
-            if len(parts) > start_idx + 1:
-                reason = " ".join(parts[start_idx + 1 :])
+        if len(parts) > 2:
+            reason = " ".join(parts[2:])
 
-        return delete_all, duration, reason
+        return duration, reason
 
     # 命令参数模式: /mute <用户ID> [参数...]
     else:
         if len(parts) < 3:
-            return False, None, None
-
-        # 检查 -d 参数
-        delete_all = False
-        start_idx = 2
-        if parts[2] == "-d":
-            delete_all = True
-            start_idx = 3
+            return None, None
 
         # 解析时长
-        duration = None
+        duration = parse_duration(parts[2])
         reason = None
-        if len(parts) > start_idx:
-            duration = parse_duration(parts[start_idx])
-            if len(parts) > start_idx + 1:
-                reason = " ".join(parts[start_idx + 1 :])
+        if len(parts) > 3:
+            reason = " ".join(parts[3:])
 
-        return delete_all, duration, reason
+        return duration, reason
 
 
 @router.message(Command("kick"))
@@ -374,18 +349,15 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
             "方式1: 回复用户的消息\n"
             "方式2: /mute <用户ID> [时长] [原因]\n"
             "方式3: /mute @用户 [时长] [原因]\n\n"
-            "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久\n\n"
-            "<b>新功能</b>:\n"
-            "• /mute -d [时长] [原因] - 禁言用户，<b>删除该用户的所有消息</b>\n"
-            "• /mute <用户ID> -d [时长] [原因] - 同上"
+            "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久"
         )
         return
 
-    # 解析参数：-d 标志、时长和原因
+    # 解析参数：时长和原因
     if not message.text:
         return
 
-    delete_all, duration, reason = parse_mute_args(
+    duration, reason = parse_mute_args(
         text=message.text, is_reply=message.reply_to_message is not None
     )
 
@@ -397,13 +369,11 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         operator_id=message.from_user.id,
         duration=duration,
         reason=reason,
-        revoke_messages=delete_all,
     )
 
     if success:
-        # 如果是回复消息模式且未使用 -d 参数，删除被回复的消息
-        # （使用 -d 时所有消息已通过 revoke_messages 删除）
-        if message.reply_to_message and not delete_all:
+        # 如果是回复消息模式，删除被回复的消息
+        if message.reply_to_message:
             try:
                 await message.reply_to_message.delete()
                 logger.debug(f"已删除被回复的消息 [消息ID:{message.reply_to_message.message_id}]")
@@ -414,7 +384,6 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         reply = await message.answer(
             f"✅ 已禁言用户 {target_user_id}，时长: {duration_text}"
             + (f"\n原因: {escape_html(reason)}" if reason else "")
-            + (" (已删除所有消息)" if delete_all else "")
         )
         await auto_delete_message(reply)
     else:
