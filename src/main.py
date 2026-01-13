@@ -135,12 +135,13 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     def extract_commands_from_router(router) -> set[str]:
         """从 router 中提取所有已注册的命令"""
-        commands = set()
+        commands: set[str] = set()
         for handler in router.message.handlers:
             for filter_obj in handler.filters:
                 # filter_obj.callback 是实际的 Command 对象
                 if isinstance(filter_obj.callback, Command):
-                    commands.update(filter_obj.callback.commands)
+                    # 过滤掉正则表达式，只保留字符串命令
+                    commands.update(c for c in filter_obj.callback.commands if isinstance(c, str))
         return commands
 
     # 从 dispatcher 和所有 sub routers 中提取命令
@@ -302,7 +303,7 @@ async def main() -> None:
             integrations=[
                 LoguruIntegration(
                     level=None,  # 捕获所有 Loguru 日志级别
-                    event_level="ERROR",  # 仅 ERROR 及以上级别创建 Sentry 事件
+                    event_level=40,  # 仅 ERROR 及以上级别创建 Sentry 事件 (40=ERROR)
                 )
             ],
             # 发布版本（使用项目版本）
@@ -315,7 +316,7 @@ async def main() -> None:
             before_send=before_send,
             # 默认的敏感字段名称过滤
             # Sentry 会自动过滤包含这些关键词的字段
-            _experiments={
+            _experiments={  # type: ignore[typeddict-unknown-key]
                 "profiles_sample_rate": 0,  # 禁用 profiling
             },
         )
