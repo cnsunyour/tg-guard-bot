@@ -34,7 +34,7 @@ async def cmd_start(message: Message) -> None:
         "• /approve - 处理举报（管理员）\n\n"
         "🗑️ <b>消息删除</b>\n"
         "• /delbefore - 删除往前的消息\n"
-        "• /delafter - 删除往前的消息\n"
+        "• /delafter - 删除往后的消息\n"
         "• /delrange - 删除消息范围\n\n"
         "💡 <b>使用提示</b>\n"
         "1️⃣ 联系超级管理员将群组加入白名单\n"
