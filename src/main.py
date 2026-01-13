@@ -58,7 +58,10 @@ def before_send(event, _hint):
                 "Temporary failure in name resolution",
             ]
 
-            if any(keyword in exc_message for keyword in network_error_keywords):
+            # 然后检查 exc_type 或 exc_message 是否包含网络错误关键词（一次循环检查两个字段）
+            if any(
+                keyword in exc_type or keyword in exc_message for keyword in network_error_keywords
+            ):
                 return None
 
             # 检查是否是 aiogram 的可恢复错误
