@@ -1243,6 +1243,137 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
 
 
+# ========== 举报处理辅助函数 ==========
+
+
+async def _process_report_approval(
+    bot: Bot,
+    report_id: int,
+    chat_id: int,
+    operator_id: int,
+) -> tuple[bool, str]:
+    """处理举报接受的核心逻辑（供命令和回调共用）
+
+    Args:
+        bot: Bot 实例
+        report_id: 举报ID
+        chat_id: 群组ID
+        operator_id: 操作者ID
+
+    Returns:
+        (success: bool, message: str) - 成功状态和消息
+    """
+    try:
+        # 获取举报记录
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            return False, f"未找到举报记录 #{report_id}"
+
+        # 检查是否属于当前群组
+        if report.group_id != chat_id:
+            return False, "此举报不属于当前群组"
+
+        # 检查状态
+        if report.status != "pending":
+            return False, f"此举报已被处理（状态: {report.status}）"
+
+        # 执行封禁
+        success, error_msg = await ModerationService.ban_user(
+            bot=bot,
+            chat_id=chat_id,
+            user_id=report.reported_user_id,
+            operator_id=operator_id,
+            reason=f"举报#{report_id}: {report.reason}",
+        )
+
+        if not success:
+            return False, f"封禁失败: {error_msg}"
+
+        # 删除被举报的消息
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=report.message_id)
+            logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
+        except Exception as e:
+            logger.debug(f"删除被举报的消息失败: {e}")
+
+        # 添加到反垃圾训练库
+        if report.message_text:
+            try:
+                await SpamRepository.add_sample(
+                    text=report.message_text,
+                    is_spam=True,
+                    confidence=1.0,
+                    labeled_by=operator_id,
+                )
+                logger.info(
+                    f"举报#{report_id}的内容已添加到训练库 "
+                    f"[文本长度:{len(report.message_text)}]"
+                )
+            except Exception as e:
+                logger.error(f"添加训练样本失败: {e}")
+
+        # 更新举报状态
+        await ReportRepository.update_report_status(
+            report_id=report_id,
+            status="approved",
+            handled_by=operator_id,
+        )
+
+        return True, "举报已接受并处理"
+
+    except Exception as e:
+        logger.error(f"处理举报接受失败: {e}")
+        return False, f"处理失败: {e!s}"
+
+
+async def _process_report_rejection(
+    report_id: int,
+    chat_id: int,
+    operator_id: int,
+) -> tuple[bool, str]:
+    """处理举报拒绝的核心逻辑（供命令和回调共用）
+
+    Args:
+        report_id: 举报ID
+        chat_id: 群组ID
+        operator_id: 操作者ID
+
+    Returns:
+        (success: bool, message: str) - 成功状态和消息
+    """
+    try:
+        # 获取举报记录
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            return False, f"未找到举报记录 #{report_id}"
+
+        # 检查是否属于当前群组
+        if report.group_id != chat_id:
+            return False, "此举报不属于当前群组"
+
+        # 检查状态
+        if report.status != "pending":
+            return False, f"此举报已被处理（状态: {report.status}）"
+
+        # 更新举报状态
+        await ReportRepository.update_report_status(
+            report_id=report_id,
+            status="rejected",
+            handled_by=operator_id,
+        )
+
+        return True, "举报已拒绝"
+
+    except Exception as e:
+        logger.error(f"处理举报拒绝失败: {e}")
+        return False, f"处理失败: {e!s}"
+
+
+# ========== 举报查询命令 ==========
+
+
 @router.message(Command("reports"))
 async def cmd_reports(message: Message, bot: Bot) -> None:
     """查看待处理的举报列表（仅管理员）"""
@@ -1299,7 +1430,7 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
 
 @router.message(Command("approve"))
 async def cmd_approve(message: Message, bot: Bot) -> None:
-    """批准举报并执行封禁（仅管理员）
+    """接受举报并执行封禁（仅管理员）
 
     用法：/approve <report_id>
     """
@@ -1331,88 +1462,30 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
         return
 
-    try:
-        # 获取举报记录
+    # 调用辅助函数处理
+    success, msg = await _process_report_approval(
+        bot=bot,
+        report_id=report_id,
+        chat_id=message.chat.id,
+        operator_id=message.from_user.id,
+    )
+
+    if success:
+        # 获取举报信息用于显示
         report = await ReportRepository.get_report_by_id(report_id)
-
-        if not report:
-            reply = await message.answer(f"❌ 未找到举报记录 #{report_id}")
-            await auto_delete_message(reply)
-            return
-
-        # 检查是否属于当前群组
-        if report.group_id != message.chat.id:
-            reply = await message.answer("❌ 此举报不属于当前群组")
-            await auto_delete_message(reply)
-            return
-
-        # 检查状态
-        if report.status != "pending":
-            reply = await message.answer(f"❌ 此举报已被处理\n" f"状态: {report.status}")
-            await auto_delete_message(reply)
-            return
-
-        # 执行封禁
-        success, error_msg = await ModerationService.ban_user(
-            bot=bot,
-            chat_id=message.chat.id,
-            user_id=report.reported_user_id,
-            operator_id=message.from_user.id,
-            reason=f"举报#{report_id}: {report.reason}",
+        reply = await message.answer(
+            f"✅ 举报#{report_id}已处理\n"
+            f"• 用户已封禁: {report.reported_user_id}\n"
+            f"• 消息已删除\n"
+            f"• 已添加到训练库\n"
+            f"• 举报者: {report.reporter_id}\n"
+            f"• 原因: {escape_html(report.reason or '无')}"
         )
+        logger.info(f"管理员 {message.from_user.id} 通过命令接受了举报 #{report_id}")
+    else:
+        reply = await message.answer(f"❌ {msg}")
 
-        if success:
-            # 删除被举报的消息
-            try:
-                await bot.delete_message(
-                    chat_id=message.chat.id,
-                    message_id=report.message_id,
-                )
-                logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
-            except Exception as e:
-                logger.debug(f"删除被举报的消息失败: {e}")
-
-            # 添加到反垃圾训练库
-            if report.message_text:
-                try:
-                    await SpamRepository.add_sample(
-                        text=report.message_text,
-                        is_spam=True,
-                        confidence=1.0,
-                        labeled_by=message.from_user.id,
-                    )
-                    logger.info(
-                        f"举报#{report_id}的内容已添加到训练库 "
-                        f"[文本长度:{len(report.message_text)}]"
-                    )
-                except Exception as e:
-                    logger.error(f"添加训练样本失败: {e}")
-
-            # 更新举报状态
-            await ReportRepository.update_report_status(
-                report_id=report_id,
-                status="approved",
-                handled_by=message.from_user.id,
-            )
-
-            reply = await message.answer(
-                f"✅ 举报#{report_id}已处理\n"
-                f"• 用户已封禁: {report.reported_user_id}\n"
-                f"• 消息已删除\n"
-                f"• 已添加到训练库\n"
-                f"• 举报者: {report.reporter_id}\n"
-                f"• 原因: {escape_html(report.reason or '无')}"
-            )
-            await auto_delete_message(reply)
-
-        else:
-            reply = await message.answer(f"❌ 封禁失败: {error_msg}")
-            await auto_delete_message(reply)
-
-    except Exception as e:
-        logger.error(f"处理举报失败: {e}")
-        reply = await message.answer("❌ 处理举报失败，请稍后重试")
-        await auto_delete_message(reply)
+    await auto_delete_message(reply)
 
 
 @router.message(Command("reject"))
@@ -1447,34 +1520,16 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
         return
 
-    try:
-        # 获取举报记录
+    # 调用辅助函数处理
+    success, msg = await _process_report_rejection(
+        report_id=report_id,
+        chat_id=message.chat.id,
+        operator_id=message.from_user.id,
+    )
+
+    if success:
+        # 获取举报详情用于显示
         report = await ReportRepository.get_report_by_id(report_id)
-
-        if not report:
-            reply = await message.answer(f"❌ 未找到举报记录 #{report_id}")
-            await auto_delete_message(reply)
-            return
-
-        # 检查是否属于当前群组
-        if report.group_id != message.chat.id:
-            reply = await message.answer("❌ 此举报不属于当前群组")
-            await auto_delete_message(reply)
-            return
-
-        # 检查状态
-        if report.status != "pending":
-            reply = await message.answer(f"❌ 此举报已被处理\n" f"状态: {report.status}")
-            await auto_delete_message(reply)
-            return
-
-        # 更新举报状态
-        await ReportRepository.update_report_status(
-            report_id=report_id,
-            status="rejected",
-            handled_by=message.from_user.id,
-        )
-
         reply = await message.answer(
             f"✅ 举报#{report_id}已拒绝\n"
             f"• 被举报用户: {report.reported_user_id}\n"
@@ -1483,20 +1538,14 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
             f"💡 此举报已被标记为误报或不需要处理"
         )
         await auto_delete_message(reply)
-
-        logger.info(
-            f"管理员 {message.from_user.id} 拒绝了举报 #{report_id} " f"[群组:{message.chat.id}]"
-        )
-
-    except Exception as e:
-        logger.error(f"拒绝举报失败: {e}")
-        reply = await message.answer("❌ 拒绝举报失败，请稍后重试")
+    else:
+        reply = await message.answer(f"❌ {msg}")
         await auto_delete_message(reply)
 
 
 @router.callback_query(F.data.startswith("report_approve:"))
 async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
-    """处理举报批准回调（通过按钮）"""
+    """处理举报接受回调（通过按钮）"""
     try:
         # 解析举报ID
         _, report_id_str = callback.data.split(":")
@@ -1507,65 +1556,17 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 只有管理员可以接受举报", show_alert=True)
             return
 
-        # 获取举报记录
-        report = await ReportRepository.get_report_by_id(report_id)
-
-        if not report:
-            await callback.answer(f"❌ 未找到举报记录 #{report_id}", show_alert=True)
-            return
-
-        # 检查是否属于当前群组
-        if report.group_id != callback.message.chat.id:
-            await callback.answer("❌ 此举报不属于当前群组", show_alert=True)
-            return
-
-        # 检查状态
-        if report.status != "pending":
-            await callback.answer(f"❌ 此举报已被处理（状态: {report.status}）", show_alert=True)
-            return
-
-        # 执行封禁
-        success, error_msg = await ModerationService.ban_user(
+        # 调用辅助函数处理
+        success, msg = await _process_report_approval(
             bot=bot,
+            report_id=report_id,
             chat_id=callback.message.chat.id,
-            user_id=report.reported_user_id,
             operator_id=callback.from_user.id,
-            reason=f"举报#{report_id}: {report.reason}",
         )
 
         if success:
-            # 删除被举报的消息
-            try:
-                await bot.delete_message(
-                    chat_id=callback.message.chat.id,
-                    message_id=report.message_id,
-                )
-                logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
-            except Exception as e:
-                logger.debug(f"删除被举报的消息失败: {e}")
-
-            # 添加到反垃圾训练库
-            if report.message_text:
-                try:
-                    await SpamRepository.add_sample(
-                        text=report.message_text,
-                        is_spam=True,
-                        confidence=1.0,
-                        labeled_by=callback.from_user.id,
-                    )
-                    logger.info(
-                        f"举报#{report_id}的内容已添加到训练库 "
-                        f"[文本长度:{len(report.message_text)}]"
-                    )
-                except Exception as e:
-                    logger.error(f"添加训练样本失败: {e}")
-
-            # 更新举报状态
-            await ReportRepository.update_report_status(
-                report_id=report_id,
-                status="approved",
-                handled_by=callback.from_user.id,
-            )
+            # 获取举报详情用于显示
+            report = await ReportRepository.get_report_by_id(report_id)
 
             # 更新消息（移除按钮）
             await callback.message.edit_text(
@@ -1579,14 +1580,11 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
                 f"✓ 已添加到训练库"
             )
             await callback.answer("✅ 举报已接受并处理", show_alert=True)
-
-            logger.info(f"管理员 {callback.from_user.id} 通过按钮接受了举报 #{report_id}")
-
         else:
-            await callback.answer(f"❌ 封禁失败: {error_msg}", show_alert=True)
+            await callback.answer(f"❌ {msg}", show_alert=True)
 
     except Exception as e:
-        logger.error(f"处理举报批准回调失败: {e}")
+        logger.error(f"处理举报接受回调失败: {e}")
         await callback.answer("❌ 处理失败，请稍后重试", show_alert=True)
 
 
@@ -1603,42 +1601,29 @@ async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 只有管理员可以拒绝举报", show_alert=True)
             return
 
-        # 获取举报记录
-        report = await ReportRepository.get_report_by_id(report_id)
-
-        if not report:
-            await callback.answer(f"❌ 未找到举报记录 #{report_id}", show_alert=True)
-            return
-
-        # 检查是否属于当前群组
-        if report.group_id != callback.message.chat.id:
-            await callback.answer("❌ 此举报不属于当前群组", show_alert=True)
-            return
-
-        # 检查状态
-        if report.status != "pending":
-            await callback.answer(f"❌ 此举报已被处理（状态: {report.status}）", show_alert=True)
-            return
-
-        # 更新举报状态
-        await ReportRepository.update_report_status(
+        # 调用辅助函数处理
+        success, msg = await _process_report_rejection(
             report_id=report_id,
-            status="rejected",
-            handled_by=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            operator_id=callback.from_user.id,
         )
 
-        # 更新消息（移除按钮）
-        await callback.message.edit_text(
-            f"❌ 举报已拒绝\n"
-            f"• 举报ID: #{report_id}\n"
-            f"• 原因: {escape_html(report.reason or '无')}\n"
-            f"• 被举报用户: {report.reported_user_id}\n"
-            f"• 处理者: {callback.from_user.full_name}\n\n"
-            f"💡 此举报已被标记为误报或不需要处理"
-        )
-        await callback.answer("✅ 举报已拒绝", show_alert=True)
+        if success:
+            # 获取举报详情用于显示
+            report = await ReportRepository.get_report_by_id(report_id)
 
-        logger.info(f"管理员 {callback.from_user.id} 通过按钮拒绝了举报 #{report_id}")
+            # 更新消息（移除按钮）
+            await callback.message.edit_text(
+                f"❌ 举报已拒绝\n"
+                f"• 举报ID: #{report_id}\n"
+                f"• 原因: {escape_html(report.reason or '无')}\n"
+                f"• 被举报用户: {report.reported_user_id}\n"
+                f"• 处理者: {callback.from_user.full_name}\n\n"
+                f"💡 此举报已被标记为误报或不需要处理"
+            )
+            await callback.answer("✅ 举报已拒绝", show_alert=True)
+        else:
+            await callback.answer(f"❌ {msg}", show_alert=True)
 
     except Exception as e:
         logger.error(f"处理举报拒绝回调失败: {e}")
