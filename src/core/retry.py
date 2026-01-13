@@ -5,7 +5,8 @@
 
 import asyncio
 import functools
-from typing import Callable, TypeVar, ParamSpec
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
 
 from aiogram.exceptions import (
     TelegramNetworkError,
@@ -68,9 +69,7 @@ def retry_on_network_error(
                         last_exception = e
                         continue
                     else:
-                        logger.error(
-                            f"{func.__name__} 达到最大重试次数，速率限制未解除"
-                        )
+                        logger.error(f"{func.__name__} 达到最大重试次数，速率限制未解除")
                         raise
 
                 except (

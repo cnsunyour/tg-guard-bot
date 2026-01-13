@@ -400,7 +400,7 @@ def parse_message_link_with_chat(text: str) -> tuple[int | None, int | None, str
             message_id = int(match.group(2))
 
             # 排除特殊路径（如 /c/, /s/ 等）
-            if username not in ['c', 's', 'addstickers', 'joinchat', 'login']:
+            if username not in ["c", "s", "addstickers", "joinchat", "login"]:
                 if message_id > 0:
                     logger.debug(f"从公开链接解析: username={username}, message_id={message_id}")
                     return None, message_id, username

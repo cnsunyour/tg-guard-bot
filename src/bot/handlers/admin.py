@@ -186,7 +186,8 @@ COMMAND_HELP = {
         "将用户踢出群组（可重新加入）。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/kick [原因]\n"
-        "• 指定用户ID：/kick &lt;user_id&gt; [原因]\n\n"
+        "• 指定用户ID：/kick &lt;user_id&gt; [原因]\n"
+        "• 选择用户：/kick @用户 [原因]（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /kick 违反群规\n"
         "• /kick 123456789 发送广告\n\n"
@@ -201,7 +202,8 @@ COMMAND_HELP = {
         "禁止用户在群组发送消息。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/mute [时长] [原因]\n"
-        "• 指定用户ID：/mute &lt;user_id&gt; [时长] [原因]\n\n"
+        "• 指定用户ID：/mute &lt;user_id&gt; [时长] [原因]\n"
+        "• 选择用户：/mute @用户 [时长] [原因]（输入 @ 从列表选择）\n\n"
         "<b>时长格式：</b>\n"
         "• 分钟：5m, 10m, 30m\n"
         "• 小时：1h, 2h, 24h\n"
@@ -219,7 +221,8 @@ COMMAND_HELP = {
         "解除用户的禁言或封禁状态。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/unmute\n"
-        "• 指定用户ID：/unmute &lt;user_id&gt;\n\n"
+        "• 指定用户ID：/unmute &lt;user_id&gt;\n"
+        "• 选择用户：/unmute @用户（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /unmute\n"
         "• /unmute 123456789\n\n"
@@ -235,7 +238,8 @@ COMMAND_HELP = {
         "永久封禁用户，禁止加入群组。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/ban [原因]\n"
-        "• 指定用户ID：/ban &lt;user_id&gt; [原因]\n\n"
+        "• 指定用户ID：/ban &lt;user_id&gt; [原因]\n"
+        "• 选择用户：/ban @用户 [原因]（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /ban 多次违规\n"
         "• /ban 123456789 恶意广告\n\n"
@@ -252,7 +256,8 @@ COMMAND_HELP = {
         "解除用户的封禁状态。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/unban\n"
-        "• 指定用户ID：/unban &lt;user_id&gt;\n\n"
+        "• 指定用户ID：/unban &lt;user_id&gt;\n"
+        "• 选择用户：/unban @用户（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /unban\n"
         "• /unban 123456789\n\n"
@@ -267,7 +272,8 @@ COMMAND_HELP = {
         "对用户发出警告，累计达到上限自动封禁。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/warn [原因]\n"
-        "• 指定用户ID：/warn &lt;user_id&gt; [原因]\n\n"
+        "• 指定用户ID：/warn &lt;user_id&gt; [原因]\n"
+        "• 选择用户：/warn @用户 [原因]（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /warn 发送无关内容\n"
         "• /warn 123456789 违反群规\n\n"
@@ -285,7 +291,8 @@ COMMAND_HELP = {
         "<b>使用方法：</b>\n"
         "• 不指定用户：/warnings - 查看自己的警告\n"
         "• 回复用户消息：/warnings - 查看该用户的警告\n"
-        "• 指定用户ID：/warnings &lt;user_id&gt;\n\n"
+        "• 指定用户ID：/warnings &lt;user_id&gt;\n"
+        "• 选择用户：/warnings @用户（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /warnings - 查看自己的警告\n"
         "• /warnings 123456789 - 查看指定用户的警告\n\n"
@@ -304,7 +311,8 @@ COMMAND_HELP = {
         "清除用户的所有警告记录。\n\n"
         "<b>使用方法：</b>\n"
         "• 回复用户消息：/clearwarnings\n"
-        "• 指定用户ID：/clearwarnings &lt;user_id&gt;\n\n"
+        "• 指定用户ID：/clearwarnings &lt;user_id&gt;\n"
+        "• 选择用户：/clearwarnings @用户（输入 @ 从列表选择）\n\n"
         "<b>使用示例：</b>\n"
         "• /clearwarnings\n"
         "• /clearwarnings 123456789\n\n"
@@ -484,9 +492,8 @@ async def cmd_help(message: Message) -> None:
         await message.answer(COMMAND_HELP[command])
     else:
         await message.answer(
-            f"❌ 未找到命令 <code>/{command}</code> 的帮助信息\n\n"
-            f"使用 /help 查看所有可用命令",
-            parse_mode="HTML"
+            f"❌ 未找到命令 <code>/{command}</code> 的帮助信息\n\n" f"使用 /help 查看所有可用命令",
+            parse_mode="HTML",
         )
 
 
@@ -681,7 +688,9 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                         )
                     ],
                     [
-                        InlineKeyboardButton(text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}")
+                        InlineKeyboardButton(
+                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                        )
                     ],
                 ]
             )
@@ -693,7 +702,9 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}")
+                        InlineKeyboardButton(
+                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                        )
                     ]
                 ]
             )
@@ -723,7 +734,9 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                         )
                     ],
                     [
-                        InlineKeyboardButton(text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}")
+                        InlineKeyboardButton(
+                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                        )
                     ],
                 ]
             )
@@ -755,7 +768,9 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                         )
                     ],
                     [
-                        InlineKeyboardButton(text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}")
+                        InlineKeyboardButton(
+                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                        )
                     ],
                 ]
             )
@@ -787,7 +802,9 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
                         )
                     ],
                     [
-                        InlineKeyboardButton(text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}")
+                        InlineKeyboardButton(
+                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                        )
                     ],
                 ]
             )
@@ -820,7 +837,9 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}")
+                        InlineKeyboardButton(
+                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                        )
                     ]
                 ]
             )
@@ -1251,12 +1270,6 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
             await message.delete()
         except Exception as e:
             logger.debug(f"删除命令消息失败: {e}")
-
-
-@router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    """帮助命令"""
-    await cmd_start(message)
 
 
 @router.message(Command("health"))

@@ -1414,7 +1414,6 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
         else:
             # 正常入群模式：恢复群组权限
-            from aiogram.types import ReplyKeyboardRemove
 
             # ✅ 设置"已验证"标记（10分钟有效），防止恢复权限失败后用户重新加入被要求验证
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
@@ -1426,7 +1425,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     user_id=user_id,
                     only_if_banned=False,
                 )
-                logger.info(f"用户 {user_id} {provider.upper()} 验证成功，已恢复权限 (群组 {chat_id})")
+                logger.info(
+                    f"用户 {user_id} {provider.upper()} 验证成功，已恢复权限 (群组 {chat_id})"
+                )
             except Exception as e:
                 logger.error(f"恢复群组权限失败: {e}")
                 # ✅ 即使失败，用户已验证，approved_key 会在用户重新加入时生效
@@ -1467,7 +1468,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         # ✅ 异常时也要清除验证状态，避免超时任务踢人
         try:
             # 尝试从异常上下文中获取 chat_id 和 user_id
-            if 'data' in locals() and 'chat_id' in data and 'user_id' in data:
+            if "data" in locals() and "chat_id" in data and "user_id" in data:
                 chat_id = int(data["chat_id"])
                 user_id = int(data["user_id"])
                 verification_service = VerificationService()
@@ -1483,7 +1484,6 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     )
         except Exception as cleanup_error:
             logger.error(f"清除验证状态失败: {cleanup_error}")
-
 
 
 async def handle_verification_success(
