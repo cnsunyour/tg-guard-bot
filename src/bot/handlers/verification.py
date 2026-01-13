@@ -565,6 +565,11 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
 async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理数学验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str, answer = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -637,6 +642,11 @@ async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
 async def on_slider_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理滑块验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str, position = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -704,6 +714,11 @@ async def on_slider_verify(callback: CallbackQuery, bot: Bot) -> None:
 async def on_qa_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理问答验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str, answer = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -771,6 +786,11 @@ async def on_qa_verify(callback: CallbackQuery, bot: Bot) -> None:
 async def on_emoji_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理表情验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str, answer = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -838,6 +858,11 @@ async def on_emoji_verify(callback: CallbackQuery, bot: Bot) -> None:
 async def on_honeypot_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理蜜罐验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str, answer = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -911,6 +936,11 @@ async def on_honeypot_verify(callback: CallbackQuery, bot: Bot) -> None:
 async def on_puzzle_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理拼图验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str, position = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -978,6 +1008,11 @@ async def on_puzzle_verify(callback: CallbackQuery, bot: Bot) -> None:
 async def on_captcha_input_request(callback: CallbackQuery, _bot: Bot) -> None:
     """处理验证码输入请求 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -989,9 +1024,8 @@ async def on_captcha_input_request(callback: CallbackQuery, _bot: Bot) -> None:
 
         # 获取群组配置的超时时间
         group_repo = GroupRepository()
-        async with get_db_session() as session:
-            group_config = await group_repo.get(session, chat_id)
-            timeout = group_config.verification_timeout if group_config else 120
+        group_config = await group_repo.get(chat_id)
+        timeout = group_config.verification_timeout if group_config else 120
 
         # 设置等待输入状态（TTL 稍长一点留缓冲）
         redis = get_redis()
@@ -1013,6 +1047,11 @@ async def on_captcha_input_request(callback: CallbackQuery, _bot: Bot) -> None:
 async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
     """处理验证码刷新 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -1028,13 +1067,17 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
 
         # 获取群组配置获取超时时间
         group_repo = GroupRepository()
-        async with get_db_session() as session:
-            group_config = await group_repo.get(session, chat_id)
-            timeout = group_config.verification_timeout if group_config else 120
+        group_config = await group_repo.get(chat_id)
+        timeout = group_config.verification_timeout if group_config else 120
 
         challenge = await verification_service.generate_captcha_challenge(
             chat_id, user_id, username, timeout
         )
+
+        # 检查 photo 是否存在
+        if not challenge.photo:
+            await callback.answer("❌ 生成验证码失败", show_alert=True)
+            return
 
         # 编辑消息，更新图片和按钮
         await bot.edit_message_media(
@@ -1046,7 +1089,7 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
             chat_id=user_id,
             message_id=callback.message.message_id,
             caption=challenge.question,
-            reply_markup=challenge.keyboard,
+            reply_markup=challenge.keyboard if isinstance(challenge.keyboard, InlineKeyboardMarkup) else None,
         )
         await callback.answer("🔄 已刷新验证码", show_alert=False)
 
@@ -1061,6 +1104,10 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
 
     注意：明确排除 web_app_data 消息，避免拦截 CAPTCHA WebApp 回调
     """
+    # 类型检查
+    if not message.from_user or not message.text:
+        return
+
     # 调试日志
     logger.debug(
         f"[CAPTCHA] 收到私聊文本 [user:{message.from_user.id}] "
@@ -1142,6 +1189,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 )
 
                 # 发送欢迎消息到群组
+                assert message.from_user  # 类型缩小
                 welcome_msg = await bot.send_message(
                     chat_id=chat_id,
                     text=f"✅ 欢迎 {message.from_user.mention_html()} 加入群组！",
@@ -1197,6 +1245,11 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
 async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
     """处理取消验证 - 私聊模式"""
     try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer("❌ 验证数据错误", show_alert=True)
+            return
+
         _, chat_id_str, user_id_str = callback.data.split(":")
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
@@ -1245,14 +1298,16 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
     from src.core.config import settings
 
+    # 类型检查
+    if not message.from_user or not message.web_app_data:
+        return
+
     # 调试：记录收到 WebApp 数据
     logger.info(
         f"✅ 收到 WebApp 数据 [from_user:{message.from_user.id}] "
-        f"[data_length:{len(message.web_app_data.data) if message.web_app_data else 0}]"
+        f"[data_length:{len(message.web_app_data.data)}]"
     )
-    logger.debug(
-        f"WebApp 原始数据: {message.web_app_data.data if message.web_app_data else 'None'}"
-    )
+    logger.debug(f"WebApp 原始数据: {message.web_app_data.data}")
 
     try:
         data = json.loads(message.web_app_data.data)
@@ -1505,7 +1560,8 @@ async def handle_verification_success(
 
         # 删除私聊中的验证消息
         with contextlib.suppress(Exception):
-            await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            if callback.message:
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
 
         if is_join_request:
             # 加入请求模式：批准加入请求
