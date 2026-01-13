@@ -1415,6 +1415,85 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         await auto_delete_message(reply)
 
 
+@router.message(Command("reject"))
+async def cmd_reject(message: Message, bot: Bot) -> None:
+    """拒绝举报（仅管理员）
+
+    用法：/reject <report_id>
+    """
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer("❌ 此命令只能在群组中使用")
+        return
+
+    # 检查权限
+    if not await check_admin_permission_strict_message(message, bot):
+        await message.answer("❌ 只有管理员可以使用此命令")
+        return
+
+    # 解析参数
+    parts = message.text.split()
+    if len(parts) < 2:
+        reply = await message.answer(
+            "❌ 请指定举报ID\n\n" "<b>用法</b>: /reject &lt;举报ID&gt;\n" "<b>示例</b>: /reject 123"
+        )
+        await auto_delete_message(reply)
+        return
+
+    try:
+        report_id = int(parts[1])
+    except ValueError:
+        reply = await message.answer("❌ 举报ID必须是数字")
+        await auto_delete_message(reply)
+        return
+
+    try:
+        # 获取举报记录
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            reply = await message.answer(f"❌ 未找到举报记录 #{report_id}")
+            await auto_delete_message(reply)
+            return
+
+        # 检查是否属于当前群组
+        if report.group_id != message.chat.id:
+            reply = await message.answer("❌ 此举报不属于当前群组")
+            await auto_delete_message(reply)
+            return
+
+        # 检查状态
+        if report.status != "pending":
+            reply = await message.answer(f"❌ 此举报已被处理\n" f"状态: {report.status}")
+            await auto_delete_message(reply)
+            return
+
+        # 更新举报状态
+        await ReportRepository.update_report_status(
+            report_id=report_id,
+            status="rejected",
+            handled_by=message.from_user.id,
+        )
+
+        reply = await message.answer(
+            f"✅ 举报#{report_id}已拒绝\n"
+            f"• 被举报用户: {report.reported_user_id}\n"
+            f"• 举报者: {report.reporter_id}\n"
+            f"• 原因: {escape_html(report.reason or '无')}\n\n"
+            f"💡 此举报已被标记为误报或不需要处理"
+        )
+        await auto_delete_message(reply)
+
+        logger.info(
+            f"管理员 {message.from_user.id} 拒绝了举报 #{report_id} " f"[群组:{message.chat.id}]"
+        )
+
+    except Exception as e:
+        logger.error(f"拒绝举报失败: {e}")
+        reply = await message.answer("❌ 拒绝举报失败，请稍后重试")
+        await auto_delete_message(reply)
+
+
 @router.callback_query(F.data.startswith("report_approve:"))
 async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
     """处理举报批准回调（通过按钮）"""
