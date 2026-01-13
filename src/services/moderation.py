@@ -60,9 +60,17 @@ class ModerationService:
 
     @staticmethod
     async def kick_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: str | None = None
+        bot: Bot,
+        chat_id: int,
+        user_id: int,
+        operator_id: int,
+        reason: str | None = None,
+        revoke_messages: bool = False,
     ) -> tuple[bool, str | None]:
         """踢出用户
+
+        Args:
+            revoke_messages: 是否删除该用户的所有消息（默认 False）
 
         Returns:
             (是否成功, 错误消息)
@@ -79,7 +87,9 @@ class ModerationService:
                 return False, error_msg
 
             # 踢出用户（临时封禁后立即解封）
-            await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await bot.ban_chat_member(
+                chat_id=chat_id, user_id=user_id, revoke_messages=revoke_messages
+            )
             await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
 
             # 记录日志
@@ -106,11 +116,13 @@ class ModerationService:
         operator_id: int,
         duration: int | None = None,
         reason: str | None = None,
+        revoke_messages: bool = False,
     ) -> tuple[bool, str | None]:
         """禁言用户
 
         Args:
             duration: 禁言时长（分钟），None 表示永久禁言
+            revoke_messages: 是否删除该用户的所有消息（默认 False）
 
         Returns:
             (是否成功, 错误消息)
@@ -125,6 +137,14 @@ class ModerationService:
             not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
             if not not_admin:
                 return False, error_msg
+
+            # 如果需要删除消息，先临时封禁（会删除所有消息）
+            if revoke_messages:
+                await bot.ban_chat_member(
+                    chat_id=chat_id, user_id=user_id, revoke_messages=True
+                )
+                # 立即解封，准备应用禁言
+                await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
 
             # 计算禁言到期时间
             until_date = None
@@ -155,21 +175,26 @@ class ModerationService:
             )
 
             # 记录日志
+            details = {
+                "duration": duration,
+                "reason": reason,
+                "until": until_date.isoformat() if until_date else None,
+            }
+            if revoke_messages:
+                details["revoke_messages"] = True
+
             await AuditRepository.log_action(
                 group_id=chat_id,
                 operator_id=operator_id,
                 action="mute",
                 target_user_id=user_id,
-                details={
-                    "duration": duration,
-                    "reason": reason,
-                    "until": until_date.isoformat() if until_date else None,
-                },
+                details=details,
             )
 
             logger.info(
                 f"用户 {user_id} 被管理员 {operator_id} 禁言 "
                 f"{'永久' if duration is None else f'{duration}分钟'}"
+                + (" (已删除所有消息)" if revoke_messages else "")
             )
             return True, None
 

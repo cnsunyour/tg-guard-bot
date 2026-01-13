@@ -152,6 +152,134 @@ def parse_spam_args(text: str) -> tuple[bool, str]:
     return False, args
 
 
+def parse_moderation_args(
+    text: str, is_reply: bool, default_reason: str | None = None
+) -> tuple[bool, str | None]:
+    """解析群管理命令参数（kick/mute/ban 通用）
+
+    支持格式（回复消息模式）:
+        /command           -> (False, None)
+        /command 原因       -> (False, "原因")
+        /command -d        -> (True, None)
+        /command -d 原因    -> (True, "原因")
+
+    支持格式（命令参数模式）:
+        /command <用户ID>           -> (False, None)
+        /command <用户ID> 原因       -> (False, "原因")
+        /command <用户ID> -d        -> (True, None)
+        /command <用户ID> -d 原因    -> (True, "原因")
+
+    Args:
+        text: 完整的命令文本
+        is_reply: 是否为回复消息模式
+        default_reason: 默认原因（可选）
+
+    Returns:
+        (delete_all: bool, reason: str | None)
+        - delete_all: 是否删除用户的所有消息
+        - reason: 原因文本
+    """
+    parts = text.split(maxsplit=2 if is_reply else 3)
+
+    # 回复消息模式: /command [参数]
+    if is_reply:
+        if len(parts) < 2:
+            return False, default_reason
+
+        args = parts[1].strip()
+    # 命令参数模式: /command <用户ID> [参数]
+    else:
+        if len(parts) < 3:
+            return False, default_reason
+
+        args = parts[2].strip()
+
+    # 检查 -d 参数
+    if args.startswith("-d"):
+        remaining = args[2:].strip()
+        return True, remaining if remaining else default_reason
+
+    return False, args if args else default_reason
+
+
+def parse_mute_args(
+    text: str, is_reply: bool
+) -> tuple[bool, int | None, str | None]:
+    """解析 /mute 命令参数（支持 -d、时长、原因）
+
+    支持格式（回复消息模式）:
+        /mute                    -> (False, None, None)
+        /mute 30m                -> (False, 30, None)
+        /mute 30m 原因            -> (False, 30, "原因")
+        /mute -d                 -> (True, None, None)
+        /mute -d 30m             -> (True, 30, None)
+        /mute -d 30m 原因         -> (True, 30, "原因")
+
+    支持格式（命令参数模式）:
+        /mute <用户ID>                -> (False, None, None)
+        /mute <用户ID> 30m            -> (False, 30, None)
+        /mute <用户ID> 30m 原因        -> (False, 30, "原因")
+        /mute <用户ID> -d             -> (True, None, None)
+        /mute <用户ID> -d 30m         -> (True, 30, None)
+        /mute <用户ID> -d 30m 原因     -> (True, 30, "原因")
+
+    Args:
+        text: 完整的命令文本
+        is_reply: 是否为回复消息模式
+
+    Returns:
+        (delete_all: bool, duration: int | None, reason: str | None)
+        - delete_all: 是否删除用户的所有消息
+        - duration: 禁言时长（分钟），None 表示永久
+        - reason: 原因文本
+    """
+    parts = text.split(maxsplit=4)
+
+    # 回复消息模式: /mute [参数...]
+    if is_reply:
+        if len(parts) < 2:
+            return False, None, None
+
+        # 检查 -d 参数
+        delete_all = False
+        start_idx = 1
+        if parts[1] == "-d":
+            delete_all = True
+            start_idx = 2
+
+        # 解析时长
+        duration = None
+        reason = None
+        if len(parts) > start_idx:
+            duration = parse_duration(parts[start_idx])
+            if len(parts) > start_idx + 1:
+                reason = " ".join(parts[start_idx + 1 :])
+
+        return delete_all, duration, reason
+
+    # 命令参数模式: /mute <用户ID> [参数...]
+    else:
+        if len(parts) < 3:
+            return False, None, None
+
+        # 检查 -d 参数
+        delete_all = False
+        start_idx = 2
+        if parts[2] == "-d":
+            delete_all = True
+            start_idx = 3
+
+        # 解析时长
+        duration = None
+        reason = None
+        if len(parts) > start_idx:
+            duration = parse_duration(parts[start_idx])
+            if len(parts) > start_idx + 1:
+                reason = " ".join(parts[start_idx + 1 :])
+
+        return delete_all, duration, reason
+
+
 @router.message(Command("kick"))
 async def cmd_kick(message: Message, bot: Bot) -> None:
     """踢出用户"""
@@ -174,23 +302,21 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要踢出的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /kick <用户ID>\n"
-            "方式3: /kick @用户（在输入框中 @ 并从列表中选择）"
+            "方式2: /kick <用户ID> [原因]\n"
+            "方式3: /kick @用户 [原因]\n\n"
+            "<b>新功能</b>:\n"
+            "• /kick -d [原因] - 踢出用户，<b>删除该用户的所有消息</b>\n"
+            "• /kick <用户ID> -d [原因] - 同上"
         )
         return
 
-    # 获取原因
+    # 解析参数：-d 标志和原因
     if not message.text:
         return
 
-    parts = message.text.split(maxsplit=2)
-    # 判断是回复消息还是命令参数模式
-    if message.reply_to_message:
-        # 回复消息模式: /kick [原因]
-        reason = parts[1] if len(parts) > 1 else None
-    else:
-        # 命令参数模式: /kick <用户ID> [原因]
-        reason = parts[2] if len(parts) > 2 else None
+    delete_all, reason = parse_moderation_args(
+        text=message.text, is_reply=message.reply_to_message is not None
+    )
 
     # 执行踢出
     success, error_msg = await ModerationService.kick_user(
@@ -199,6 +325,7 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         user_id=target_user_id,
         operator_id=message.from_user.id,
         reason=reason,
+        revoke_messages=delete_all,
     )
 
     if success:
@@ -211,7 +338,9 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
                 logger.debug(f"删除被回复的消息失败: {e}")
 
         reply = await message.answer(
-            f"✅ 已踢出用户 {target_user_id}" + (f"\n原因: {escape_html(reason)}" if reason else "")
+            f"✅ 已踢出用户 {target_user_id}"
+            + (f"\n原因: {escape_html(reason)}" if reason else "")
+            + (" (已删除所有消息)" if delete_all else "")
         )
         await auto_delete_message(reply)
     else:
@@ -244,33 +373,20 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
             "方式1: 回复用户的消息\n"
             "方式2: /mute <用户ID> [时长] [原因]\n"
             "方式3: /mute @用户 [时长] [原因]\n\n"
-            "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久"
+            "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久\n\n"
+            "<b>新功能</b>:\n"
+            "• /mute -d [时长] [原因] - 禁言用户，<b>删除该用户的所有消息</b>\n"
+            "• /mute <用户ID> -d [时长] [原因] - 同上"
         )
         return
 
-    # 解析时长和原因
+    # 解析参数：-d 标志、时长和原因
     if not message.text:
         return
 
-    parts = message.text.split(maxsplit=3)
-    duration = None
-    reason = None
-
-    # 判断是回复消息还是命令参数模式
-    if message.reply_to_message:
-        # 回复消息模式: /mute [时长] [原因]
-        # parts[0] = "/mute", parts[1] = 时长, parts[2] = 原因
-        if len(parts) > 1:
-            duration = parse_duration(parts[1])
-        if len(parts) > 2:
-            reason = parts[2]
-    else:
-        # 命令参数模式: /mute <用户ID> [时长] [原因]
-        # parts[0] = "/mute", parts[1] = 用户ID, parts[2] = 时长, parts[3] = 原因
-        if len(parts) > 2:
-            duration = parse_duration(parts[2])
-        if len(parts) > 3:
-            reason = parts[3]
+    delete_all, duration, reason = parse_mute_args(
+        text=message.text, is_reply=message.reply_to_message is not None
+    )
 
     # 执行禁言
     success, error_msg = await ModerationService.mute_user(
@@ -280,6 +396,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         operator_id=message.from_user.id,
         duration=duration,
         reason=reason,
+        revoke_messages=delete_all,
     )
 
     if success:
@@ -295,6 +412,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         reply = await message.answer(
             f"✅ 已禁言用户 {target_user_id}，时长: {duration_text}"
             + (f"\n原因: {escape_html(reason)}" if reason else "")
+            + (" (已删除所有消息)" if delete_all else "")
         )
         await auto_delete_message(reply)
     else:
@@ -373,22 +491,20 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
             "❌ 请指定要封禁的用户：\n\n"
             "方式1: 回复用户的消息\n"
             "方式2: /ban <用户ID> [原因]\n"
-            "方式3: /ban @用户 [原因]"
+            "方式3: /ban @用户 [原因]\n\n"
+            "<b>新功能</b>:\n"
+            "• /ban -d [原因] - 封禁用户，<b>删除该用户的所有消息</b>\n"
+            "• /ban <用户ID> -d [原因] - 同上"
         )
         return
 
-    # 获取原因
+    # 获取原因和删除标志
     if not message.text:
         return
 
-    parts = message.text.split(maxsplit=2)
-    # 判断是回复消息还是命令参数模式
-    if message.reply_to_message:
-        # 回复消息模式: /ban [原因]
-        reason = parts[1] if len(parts) > 1 else None
-    else:
-        # 命令参数模式: /ban <用户ID> [原因]
-        reason = parts[2] if len(parts) > 2 else None
+    delete_all, reason = parse_moderation_args(
+        text=message.text, is_reply=message.reply_to_message is not None
+    )
 
     # 执行封禁
     success, error_msg = await ModerationService.ban_user(
@@ -397,6 +513,7 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         user_id=target_user_id,
         operator_id=message.from_user.id,
         reason=reason,
+        revoke_messages=delete_all,
     )
 
     if success:
@@ -409,7 +526,9 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
                 logger.debug(f"删除被回复的消息失败: {e}")
 
         reply = await message.answer(
-            f"✅ 已封禁用户 {target_user_id}" + (f"\n原因: {escape_html(reason)}" if reason else "")
+            f"✅ 已封禁用户 {target_user_id}"
+            + (f"\n原因: {escape_html(reason)}" if reason else "")
+            + (" (已删除所有消息)" if delete_all else "")
         )
         await auto_delete_message(reply)
     else:
