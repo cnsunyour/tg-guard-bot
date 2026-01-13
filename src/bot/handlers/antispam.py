@@ -469,10 +469,10 @@ async def on_antispam_retrain(callback: CallbackQuery) -> None:
         await callback.answer("❌ 训练失败", show_alert=True)
 
 
-@router.message(Command("channel"))
-async def cmd_channel(message: Message, bot: Bot) -> None:
+@router.message(Command("antichannel"))
+async def cmd_antichannel(message: Message, bot: Bot) -> None:
     """反频道马甲配置命令"""
-    logger.debug(f"收到 /channel 命令 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
+    logger.debug(f"收到 /antichannel 命令 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
 
     # 检查是否在群组中
     if message.chat.type == "private":
@@ -503,13 +503,13 @@ async def cmd_channel(message: Message, bot: Bot) -> None:
             [
                 InlineKeyboardButton(
                     text="✅ 启用反频道马甲",
-                    callback_data=f"channel_toggle:{message.chat.id}:on",
+                    callback_data=f"antichannel_toggle:{message.chat.id}:on",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="❌ 禁用反频道马甲",
-                    callback_data=f"channel_toggle:{message.chat.id}:off",
+                    callback_data=f"antichannel_toggle:{message.chat.id}:off",
                 )
             ],
         ]
@@ -530,8 +530,8 @@ async def cmd_channel(message: Message, bot: Bot) -> None:
     await auto_delete_message(reply)
 
 
-@router.callback_query(F.data.startswith("channel_toggle:"))
-async def on_channel_toggle(callback: CallbackQuery) -> None:
+@router.callback_query(F.data.startswith("antichannel_toggle:"))
+async def on_antichannel_toggle(callback: CallbackQuery) -> None:
     """处理反频道马甲开关"""
     try:
         _, chat_id_str, action = callback.data.split(":")
