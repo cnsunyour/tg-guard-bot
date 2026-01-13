@@ -21,7 +21,6 @@ from aiogram.types import (
 from loguru import logger
 
 from src.core.cache import PermissionCache
-from src.core.database import get_db_session
 from src.core.redis import RedisKeys, get_redis
 from src.core.utils import escape_html, format_user_mention
 from src.repositories.group_repo import GroupRepository
