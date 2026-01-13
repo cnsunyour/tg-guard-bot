@@ -20,6 +20,7 @@ class Base(DeclarativeBase):
 
     pass
 
+
 # 全局引擎和会话工厂
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
