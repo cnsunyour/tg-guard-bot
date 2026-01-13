@@ -103,7 +103,7 @@ class SpamEmbedder:
 
         try:
             # 生成嵌入向量
-            embedding = next(self.model.embed([text]))
+            embedding = next(self.model.embed([text]))  # type: ignore[call-overload]
             self.spam_prototypes.append(np.array(embedding))
 
             logger.info(f"已添加新的垃圾信息原型，当前数量: {len(self.spam_prototypes)}")
@@ -143,7 +143,7 @@ class SpamEmbedder:
 
         try:
             # 生成文本嵌入
-            text_embedding = np.array(next(self.model.embed([text])))
+            text_embedding = np.array(next(self.model.embed([text])))  # type: ignore[call-overload]
 
             # 计算与所有原型的相似度
             similarities = [
