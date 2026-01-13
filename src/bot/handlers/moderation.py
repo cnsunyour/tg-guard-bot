@@ -3,9 +3,9 @@
 import re
 from datetime import datetime
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 
 from src.core.config import settings
@@ -1067,12 +1067,27 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 f"[被举报:{target_user_id}] [原因:{reason}]"
             )
 
+            # 创建管理员操作按钮
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ 批准", callback_data=f"report_approve:{report.id}"
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ 拒绝", callback_data=f"report_reject:{report.id}"
+                        ),
+                    ]
+                ]
+            )
+
             reply = await message.answer(
                 f"✅ 举报已提交\n"
                 f"• 举报ID: #{report.id}\n"
                 f"• 原因: {escape_html(reason)}\n"
                 f"• 待处理举报: {pending_count} 条\n\n"
-                f"💡 管理员将尽快处理"
+                f"💡 管理员可点击按钮快速处理",
+                reply_markup=keyboard,
             )
             await auto_delete_message(reply)
 
@@ -1398,3 +1413,154 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
         logger.error(f"处理举报失败: {e}")
         reply = await message.answer("❌ 处理举报失败，请稍后重试")
         await auto_delete_message(reply)
+
+
+@router.callback_query(F.data.startswith("report_approve:"))
+async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
+    """处理举报批准回调（通过按钮）"""
+    try:
+        # 解析举报ID
+        _, report_id_str = callback.data.split(":")
+        report_id = int(report_id_str)
+
+        # 权限验证：只有管理员可以批准
+        if not await check_admin_permission_strict_message(callback.message, bot):
+            await callback.answer("❌ 只有管理员可以批准举报", show_alert=True)
+            return
+
+        # 获取举报记录
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            await callback.answer(f"❌ 未找到举报记录 #{report_id}", show_alert=True)
+            return
+
+        # 检查是否属于当前群组
+        if report.group_id != callback.message.chat.id:
+            await callback.answer("❌ 此举报不属于当前群组", show_alert=True)
+            return
+
+        # 检查状态
+        if report.status != "pending":
+            await callback.answer(f"❌ 此举报已被处理（状态: {report.status}）", show_alert=True)
+            return
+
+        # 执行封禁
+        success, error_msg = await ModerationService.ban_user(
+            bot=bot,
+            chat_id=callback.message.chat.id,
+            user_id=report.reported_user_id,
+            operator_id=callback.from_user.id,
+            reason=f"举报#{report_id}: {report.reason}",
+        )
+
+        if success:
+            # 删除被举报的消息
+            try:
+                await bot.delete_message(
+                    chat_id=callback.message.chat.id,
+                    message_id=report.message_id,
+                )
+                logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
+            except Exception as e:
+                logger.debug(f"删除被举报的消息失败: {e}")
+
+            # 添加到反垃圾训练库
+            if report.message_text:
+                try:
+                    await SpamRepository.add_sample(
+                        text=report.message_text,
+                        is_spam=True,
+                        confidence=1.0,
+                        labeled_by=callback.from_user.id,
+                    )
+                    logger.info(
+                        f"举报#{report_id}的内容已添加到训练库 "
+                        f"[文本长度:{len(report.message_text)}]"
+                    )
+                except Exception as e:
+                    logger.error(f"添加训练样本失败: {e}")
+
+            # 更新举报状态
+            await ReportRepository.update_report_status(
+                report_id=report_id,
+                status="approved",
+                handled_by=callback.from_user.id,
+            )
+
+            # 更新消息（移除按钮）
+            await callback.message.edit_text(
+                f"✅ 举报已批准处理\n"
+                f"• 举报ID: #{report_id}\n"
+                f"• 原因: {escape_html(report.reason or '无')}\n"
+                f"• 被举报用户: {report.reported_user_id}\n"
+                f"• 处理者: {callback.from_user.full_name}\n\n"
+                f"✓ 用户已封禁\n"
+                f"✓ 消息已删除\n"
+                f"✓ 已添加到训练库"
+            )
+            await callback.answer("✅ 举报已批准并处理", show_alert=True)
+
+            logger.info(f"管理员 {callback.from_user.id} 通过按钮批准了举报 #{report_id}")
+
+        else:
+            await callback.answer(f"❌ 封禁失败: {error_msg}", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"处理举报批准回调失败: {e}")
+        await callback.answer("❌ 处理失败，请稍后重试", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("report_reject:"))
+async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
+    """处理举报拒绝回调（通过按钮）"""
+    try:
+        # 解析举报ID
+        _, report_id_str = callback.data.split(":")
+        report_id = int(report_id_str)
+
+        # 权限验证：只有管理员可以拒绝
+        if not await check_admin_permission_strict_message(callback.message, bot):
+            await callback.answer("❌ 只有管理员可以拒绝举报", show_alert=True)
+            return
+
+        # 获取举报记录
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            await callback.answer(f"❌ 未找到举报记录 #{report_id}", show_alert=True)
+            return
+
+        # 检查是否属于当前群组
+        if report.group_id != callback.message.chat.id:
+            await callback.answer("❌ 此举报不属于当前群组", show_alert=True)
+            return
+
+        # 检查状态
+        if report.status != "pending":
+            await callback.answer(f"❌ 此举报已被处理（状态: {report.status}）", show_alert=True)
+            return
+
+        # 更新举报状态
+        await ReportRepository.update_report_status(
+            report_id=report_id,
+            status="rejected",
+            handled_by=callback.from_user.id,
+        )
+
+        # 更新消息（移除按钮）
+        await callback.message.edit_text(
+            f"❌ 举报已拒绝\n"
+            f"• 举报ID: #{report_id}\n"
+            f"• 原因: {escape_html(report.reason or '无')}\n"
+            f"• 被举报用户: {report.reported_user_id}\n"
+            f"• 处理者: {callback.from_user.full_name}\n\n"
+            f"💡 此举报已被标记为误报或不需要处理"
+        )
+        await callback.answer("✅ 举报已拒绝", show_alert=True)
+
+        logger.info(f"管理员 {callback.from_user.id} 通过按钮拒绝了举报 #{report_id}")
+
+    except Exception as e:
+        logger.error(f"处理举报拒绝回调失败: {e}")
+        await callback.answer("❌ 处理失败，请稍后重试", show_alert=True)
