@@ -34,10 +34,14 @@ class AutoDeleteMiddleware(BaseMiddleware):
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
         """中间件处理函数"""
+
+        # 只处理 Message 类型
+        if not isinstance(event, Message):
+            return await handler(event, data)
 
         # 只处理群组消息
         if event.chat.type == "private":
@@ -53,9 +57,10 @@ class AutoDeleteMiddleware(BaseMiddleware):
         # 处理完成后，删除原始命令消息
         try:
             await event.delete()
+            user_id = event.from_user.id if event.from_user else "unknown"
+            command = event.text.split()[0] if event.text else "unknown"
             logger.debug(
-                f"已删除命令消息 [群组:{event.chat.id}] "
-                f"[用户:{event.from_user.id}] [命令:{event.text.split()[0]}]"
+                f"已删除命令消息 [群组:{event.chat.id}] " f"[用户:{user_id}] [命令:{command}]"
             )
         except Exception as e:
             logger.debug(f"删除命令消息失败: {e}")
