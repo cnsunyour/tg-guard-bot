@@ -147,6 +147,15 @@ class Settings(BaseSettings):
     embedding_model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5", description="Embedding 模型名称"
     )
+
+    # Telethon 配置（用于获取群组成员列表）
+    telethon_api_id: int | None = Field(default=None, description="Telegram API ID")
+    telethon_api_hash: str | None = Field(default=None, description="Telegram API Hash")
+    telethon_session_path: str = Field(
+        default="./data/user_bot.session", description="Telethon Session 文件路径"
+    )
+    telethon_enabled: bool = Field(default=False, description="是否启用 Telethon 客户端")
+    cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
     # OCR 功能配置
     enable_ocr: bool = Field(
         default=False, description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
