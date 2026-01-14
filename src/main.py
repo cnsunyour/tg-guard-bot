@@ -20,22 +20,35 @@ def before_send(event, hint):
     """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
     import re
 
+    # 定义需要过滤的网络错误类型（类名）
+    network_error_types = (
+        "TelegramNetworkError",
+        "ClientConnectorError",
+        "ServerDisconnectedError",
+        "TimeoutError",
+        "ConnectionError",
+        "ConnectionResetError",
+        "BrokenPipeError",
+        "OSError",
+    )
+
+    # 定义网络错误关键词
+    network_error_keywords = (
+        "ServerDisconnectedError",
+        "Server disconnected",
+        "ClientConnectorError",
+        "Cannot connect to host",
+        "Connection refused",
+        "Connection reset",
+        "Failed to fetch updates",
+        "Network is unreachable",
+        "Temporary failure in name resolution",
+    )
+
     # 1. 过滤网络临时性错误（自动重试的错误不需要告警）
     # 优先使用 hint 中的原始异常信息（更准确）
     if "exc_info" in hint:
         exc_type, exc_value, _exc_tb = hint["exc_info"]
-
-        # 定义需要过滤的网络错误类型（类名）
-        network_error_types = (
-            "TelegramNetworkError",
-            "ClientConnectorError",
-            "ServerDisconnectedError",
-            "TimeoutError",
-            "ConnectionError",
-            "ConnectionResetError",
-            "BrokenPipeError",
-            "OSError",
-        )
 
         # 检查异常类型名称
         if exc_type and exc_type.__name__ in network_error_types:
@@ -44,18 +57,6 @@ def before_send(event, hint):
         # 检查异常消息中是否包含网络错误关键词
         if exc_value:
             exc_message = str(exc_value)
-            network_error_keywords = [
-                "ServerDisconnectedError",
-                "Server disconnected",
-                "ClientConnectorError",
-                "Cannot connect to host",
-                "Connection refused",
-                "Connection reset",
-                "Failed to fetch updates",
-                "Network is unreachable",
-                "Temporary failure in name resolution",
-            ]
-
             if any(keyword in exc_message for keyword in network_error_keywords):
                 return None
 
@@ -86,34 +87,11 @@ def before_send(event, hint):
             exc_type = exc_value.get("type", "")
             exc_message = exc_value.get("value", "")
 
-            # 网络相关的临时性错误
-            network_errors = [
-                "TelegramNetworkError",
-                "ClientConnectorError",
-                "ServerDisconnectedError",
-                "TimeoutError",
-                "ConnectionError",
-                "ConnectionResetError",
-                "BrokenPipeError",
-                "OSError",
-            ]
-
-            if exc_type in network_errors:
+            # 检查异常类型
+            if exc_type in network_error_types:
                 return None
 
             # 检查异常消息中是否包含网络错误关键词
-            network_error_keywords = [
-                "ServerDisconnectedError",
-                "Server disconnected",
-                "ClientConnectorError",
-                "Cannot connect to host",
-                "Connection refused",
-                "Connection reset",
-                "Failed to fetch updates",
-                "Network is unreachable",
-                "Temporary failure in name resolution",
-            ]
-
             if any(keyword in exc_type or keyword in exc_message for keyword in network_error_keywords):
                 return None
 
