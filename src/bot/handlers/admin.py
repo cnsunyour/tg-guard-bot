@@ -500,6 +500,24 @@ COMMAND_HELP = {
         "• 管理员：直接封禁用户并删除消息\n\n"
         "<b>权限要求：</b>所有成员"
     ),
+    "whitelist": (
+        "📋 <b>/whitelist - 白名单管理</b>\n\n"
+        "<b>功能说明：</b>\n"
+        "管理 Bot 的群组白名单，只有白名单内的群组才能使用 Bot。\n\n"
+        "<b>使用方法：</b>\n"
+        "• 列出白名单：/whitelist\n"
+        "• 添加群组：/whitelist add &lt;chat_id&gt; [群组名称]\n"
+        "• 移除群组：/whitelist remove &lt;chat_id&gt;\n\n"
+        "<b>使用示例：</b>\n"
+        "• /whitelist - 查看所有白名单群组\n"
+        "• /whitelist add -1001234567890 测试群组\n"
+        "• /whitelist remove -1001234567890\n\n"
+        "<b>注意事项：</b>\n"
+        "• chat_id 必须是数字格式\n"
+        "• 群组名称为可选参数\n"
+        "• 移除后 Bot 将自动退出该群组\n\n"
+        "<b>权限要求：</b>超级管理员"
+    ),
     "help": (
         "❓ <b>/help - 帮助命令</b>\n\n"
         "<b>功能说明：</b>\n"
@@ -1477,131 +1495,8 @@ async def cmd_stats(message: Message) -> None:
         await message.answer("❌ 获取统计信息失败，请联系管理员")
 
 
-@router.message(Command("whitelist_add"))
-async def cmd_whitelist_add(message: Message) -> None:
-    if not message.from_user:
-        return
-
-    """添加群组到白名单（仅超级管理员）
-
-    用法: /whitelist_add <chat_id> [群组名称]
-    示例: /whitelist_add -1001234567890 测试群组
-    """
-    # 检查是否是超级管理员
-    if message.from_user.id not in settings.admin_ids:
-        await message.answer("❌ 只有超级管理员可以使用此命令")
-        return
-
-    try:
-        # 解析参数
-        if not message.text:
-            return
-
-        args = message.text.split(maxsplit=2)
-        if len(args) < 2:
-            await message.answer(
-                "❌ 用法错误\n\n"
-                "<b>用法</b>: /whitelist_add &lt;chat_id&gt; [群组名称]\n"
-                "<b>示例</b>: /whitelist_add -1001234567890 测试群组"
-            )
-            return
-
-        chat_id = int(args[1])
-        title = args[2] if len(args) > 2 else None
-
-        # 获取或创建群组记录
-        group = await GroupRepository.get_or_create(chat_id, title)
-
-        if group.is_whitelisted:
-            await message.answer(
-                f"ℹ️ 群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 已在白名单中"
-            )
-            return
-
-        # 添加到白名单
-        await GroupRepository.update_whitelist(chat_id, True)
-
-        logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 添加到白名单")
-        await message.answer(
-            f"✅ 已将群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 添加到白名单"
-        )
-
-    except ValueError:
-        await message.answer("❌ chat_id 格式错误，必须是数字")
-    except Exception as e:
-        logger.error(f"添加白名单失败: {e}")
-        await message.answer("❌ 添加白名单失败，请重试")
-
-
-@router.message(Command("whitelist_remove"))
-async def cmd_whitelist_remove(message: Message) -> None:
-    if not message.from_user:
-        return
-
-    """从白名单移除群组（仅超级管理员）
-
-    用法: /whitelist_remove <chat_id>
-    示例: /whitelist_remove -1001234567890
-    """
-    # 检查是否是超级管理员
-    if message.from_user.id not in settings.admin_ids:
-        await message.answer("❌ 只有超级管理员可以使用此命令")
-        return
-
-    try:
-        # 解析参数
-        if not message.text:
-            return
-
-        args = message.text.split()
-        if len(args) != 2:
-            await message.answer(
-                "❌ 用法错误\n\n"
-                "<b>用法</b>: /whitelist_remove &lt;chat_id&gt;\n"
-                "<b>示例</b>: /whitelist_remove -1001234567890"
-            )
-            return
-
-        chat_id = int(args[1])
-
-        # 检查群组是否存在
-        group = await GroupRepository.get_by_id(chat_id)
-        if not group:
-            await message.answer(f"❌ 未找到群组 {chat_id}")
-            return
-
-        if not group.is_whitelisted:
-            # ✅ 安全修复：转义群组标题防止 HTML 注入
-            title_safe = escape_html(group.title) if group.title else chat_id
-            await message.answer(f"ℹ️ 群组 <b>{title_safe}</b> 不在白名单中")
-            return
-
-        # 从白名单移除
-        await GroupRepository.update_whitelist(chat_id, False)
-
-        logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
-        # ✅ 安全修复：转义群组标题防止 HTML 注入
-        title_safe = escape_html(group.title) if group.title else chat_id
-        await message.answer(f"✅ 已将群组 <b>{title_safe}</b> 从白名单移除")
-
-    except ValueError:
-        await message.answer("❌ chat_id 格式错误，必须是数字")
-    except Exception as e:
-        logger.error(f"移除白名单失败: {e}")
-        await message.answer("❌ 移除白名单失败，请重试")
-
-
-@router.message(Command("whitelist_list"))
-async def cmd_whitelist_list(message: Message) -> None:
-    """列出所有白名单群组（仅超级管理员）"""
-    # 检查是否是超级管理员
-    if not message.from_user:
-        return
-
-    if message.from_user.id not in settings.admin_ids:
-        await message.answer("❌ 只有超级管理员可以使用此命令")
-        return
-
+async def _list_whitelist(message: Message) -> None:
+    """列出所有白名单群组"""
     try:
         # 获取所有白名单群组
         groups = await GroupRepository.get_whitelisted_groups()
@@ -1624,6 +1519,139 @@ async def cmd_whitelist_list(message: Message) -> None:
     except Exception as e:
         logger.error(f"获取白名单列表失败: {e}")
         await message.answer("❌ 获取白名单列表失败，请重试")
+
+
+async def _add_whitelist(message: Message, args: list[str]) -> None:
+    """添加群组到白名单"""
+    try:
+        # 检查参数
+        if len(args) < 3:
+            await message.answer(
+                "❌ 用法错误\n\n"
+                "<b>用法</b>: /whitelist add &lt;chat_id&gt; [群组名称]\n"
+                "<b>示例</b>: /whitelist add -1001234567890 测试群组"
+            )
+            return
+
+        chat_id = int(args[2])
+        title = args[3] if len(args) > 3 else None
+
+        # 获取或创建群组记录
+        group = await GroupRepository.get_or_create(chat_id, title)
+
+        if group.is_whitelisted:
+            await message.answer(
+                f"ℹ️ 群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 已在白名单中"
+            )
+            return
+
+        # 添加到白名单
+        await GroupRepository.update_whitelist(chat_id, True)
+
+        if not message.from_user:
+            return
+
+        logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 添加到白名单")
+        await message.answer(
+            f"✅ 已将群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 添加到白名单"
+        )
+
+    except ValueError:
+        await message.answer("❌ chat_id 格式错误，必须是数字")
+    except Exception as e:
+        logger.error(f"添加白名单失败: {e}")
+        await message.answer("❌ 添加白名单失败，请重试")
+
+
+async def _remove_whitelist(message: Message, args: list[str]) -> None:
+    """从白名单移除群组"""
+    try:
+        # 检查参数
+        if len(args) != 3:
+            await message.answer(
+                "❌ 用法错误\n\n"
+                "<b>用法</b>: /whitelist remove &lt;chat_id&gt;\n"
+                "<b>示例</b>: /whitelist remove -1001234567890"
+            )
+            return
+
+        chat_id = int(args[2])
+
+        # 检查群组是否存在
+        group = await GroupRepository.get_by_id(chat_id)
+        if not group:
+            await message.answer(f"❌ 未找到群组 {chat_id}")
+            return
+
+        if not group.is_whitelisted:
+            title_safe = escape_html(group.title) if group.title else chat_id
+            await message.answer(f"ℹ️ 群组 <b>{title_safe}</b> 不在白名单中")
+            return
+
+        # 从白名单移除
+        await GroupRepository.update_whitelist(chat_id, False)
+
+        if not message.from_user:
+            return
+
+        logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
+        title_safe = escape_html(group.title) if group.title else chat_id
+        await message.answer(f"✅ 已将群组 <b>{title_safe}</b> 从白名单移除")
+
+    except ValueError:
+        await message.answer("❌ chat_id 格式错误，必须是数字")
+    except Exception as e:
+        logger.error(f"移除白名单失败: {e}")
+        await message.answer("❌ 移除白名单失败，请重试")
+
+
+@router.message(Command("whitelist"))
+async def cmd_whitelist(message: Message) -> None:
+    """白名单管理（仅超级管理员）
+
+    用法：
+    - /whitelist - 列出所有白名单群组
+    - /whitelist add <chat_id> [群组名称] - 添加群组到白名单
+    - /whitelist remove <chat_id> - 从白名单移除群组
+    """
+    if not message.from_user:
+        return
+
+    # 检查是否是超级管理员
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("❌ 只有超级管理员可以使用此命令")
+        return
+
+    if not message.text:
+        return
+
+    args = message.text.split(maxsplit=3)
+
+    # 无参数 - 列出白名单
+    if len(args) == 1:
+        await _list_whitelist(message)
+        return
+
+    subcommand = args[1].lower()
+
+    # add 子命令
+    if subcommand == "add":
+        await _add_whitelist(message, args)
+        return
+
+    # remove 子命令
+    if subcommand == "remove":
+        await _remove_whitelist(message, args)
+        return
+
+    # 未知子命令
+    await message.answer(
+        "❌ 未知子命令\n\n"
+        "<b>用法</b>:\n"
+        "• /whitelist - 列出所有白名单群组\n"
+        "• /whitelist add &lt;chat_id&gt; [群组名称] - 添加群组到白名单\n"
+        "• /whitelist remove &lt;chat_id&gt; - 从白名单移除群组"
+    )
 
 
 @router.message(Command("activity"))
