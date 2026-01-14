@@ -38,7 +38,6 @@ def before_send(event, _hint):
                 "ConnectionResetError",  # 连接重置
                 "BrokenPipeError",  # 管道破裂
                 "OSError",  # 操作系统错误（网络相关）
-                "Failed to fetch updates - TelegramNetworkError",  # 获取更新失败（网络错误）
             ]
 
             # 检查是否是网络错误（通过类型）
