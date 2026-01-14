@@ -222,6 +222,7 @@ async def setup_bot_commands(bot: Bot) -> None:
     group_member_commands = [
         BotCommand(command="help", description="查看帮助信息"),
         BotCommand(command="spam", description="举报垃圾消息"),
+        BotCommand(command="report", description="举报垃圾消息"),
     ]
 
     # 群组管理员命令列表（完整管理功能）
@@ -250,6 +251,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="delrange", description="删除消息范围"),
         # 举报系统
         BotCommand(command="spam", description="举报垃圾消息"),
+        BotCommand(command="report", description="举报垃圾消息"),
         BotCommand(command="notspam", description="标记非垃圾消息"),
         BotCommand(command="reports", description="查看举报列表"),
         BotCommand(command="approve", description="处理举报"),
