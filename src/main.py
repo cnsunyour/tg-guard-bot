@@ -190,9 +190,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         # 超级管理员命令
         BotCommand(command="health", description="健康检查（仅超管）"),
         BotCommand(command="stats", description="统计信息（仅超管）"),
-        BotCommand(command="whitelist_add", description="添加白名单（仅超管）"),
-        BotCommand(command="whitelist_remove", description="移除白名单（仅超管）"),
-        BotCommand(command="whitelist_list", description="查看白名单（仅超管）"),
+        BotCommand(command="whitelist", description="白名单管理（仅超管）"),
     ]
 
     # 群组普通成员命令列表（仅基础功能）
