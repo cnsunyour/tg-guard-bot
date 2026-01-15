@@ -202,9 +202,7 @@ def parse_moderation_args(
     return False, args if args else default_reason
 
 
-def parse_mute_args(
-    text: str, is_reply: bool
-) -> tuple[int | None, str | None]:
+def parse_mute_args(text: str, is_reply: bool) -> tuple[int | None, str | None]:
     """解析 /mute 命令参数（时长、原因）
 
     支持格式（回复消息模式）:
