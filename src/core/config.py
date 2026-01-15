@@ -96,7 +96,7 @@ class Settings(BaseSettings):
 
     # Friendly Captcha 验证配置（隐私友好，支持多 key 轮换）
     friendly_enabled: bool = Field(default=False, description="是否启用 Friendly Captcha 验证")
-    friendly_keys: list[dict] = Field(
+    friendly_keys: str | list[dict] = Field(
         default_factory=list,
         description='Friendly Captcha key pairs for rotation (JSON array: [{"sitekey":"FC...","apikey":"fc-sk-..."}])',
     )
@@ -171,6 +171,24 @@ class Settings(BaseSettings):
         default=False,
         description="是否允许加载未签名的旧版模型（不安全，仅用于兼容旧模型，强烈建议重新训练）",
     )
+
+    @field_validator("redis_password", "sentry_dsn", "telethon_api_hash", mode="before")
+    @classmethod
+    def parse_optional_str(cls, v: str | None) -> str | None:
+        """解析可选字符串字段，将空字符串转换为 None"""
+        if v == "":
+            return None
+        return v
+
+    @field_validator("telethon_api_id", mode="before")
+    @classmethod
+    def parse_telethon_api_id(cls, v: str | int | None) -> int | None:
+        """解析 Telethon API ID，允许空字符串"""
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            return int(v)
+        return v
 
     @field_validator("admin_ids", mode="before")
     @classmethod

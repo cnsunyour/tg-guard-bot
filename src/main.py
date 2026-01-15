@@ -14,6 +14,7 @@ from src.core.config import settings
 from src.core.database import close_db, init_db
 from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关闭函数
 from src.core.redis import close_redis
+from src.core.telethon_client import close_telethon_client, init_telethon_client
 
 
 def before_send(event, hint):
@@ -79,7 +80,9 @@ def before_send(event, hint):
                 if any(keyword in current_message for keyword in network_error_keywords):
                     return None
                 # 检查下一个异常（__cause__ 或 __context__）
-                current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+                current = getattr(current, "__cause__", None) or getattr(
+                    current, "__context__", None
+                )
 
     # 如果 hint 中没有 exc_info，回退到检查 event（兼容性）
     elif "exception" in event and "values" in event["exception"]:
@@ -92,7 +95,9 @@ def before_send(event, hint):
                 return None
 
             # 检查异常消息中是否包含网络错误关键词
-            if any(keyword in exc_type or keyword in exc_message for keyword in network_error_keywords):
+            if any(
+                keyword in exc_type or keyword in exc_message for keyword in network_error_keywords
+            ):
                 return None
 
     # 2. 定义敏感数据的正则模式
@@ -146,11 +151,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     # 注册路由器
-    from src.bot.handlers import admin, antispam, events, moderation, start, verification
+    from src.bot.handlers import admin, antispam, cleanup, events, moderation, start, verification
 
     dp.include_router(events.router)  # 系统事件（最高优先级）
     dp.include_router(start.router)  # 启动命令
     dp.include_router(admin.router)  # 管理命令
+    dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
@@ -245,6 +251,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="warn", description="警告成员"),
         BotCommand(command="warnings", description="查看警告记录"),
         BotCommand(command="clearwarnings", description="清除警告"),
+        BotCommand(command="cleanup", description="清理不活跃用户"),
         # 消息管理
         BotCommand(command="delbefore", description="删除往前的消息"),
         BotCommand(command="delafter", description="删除往后的消息"),
@@ -293,6 +300,10 @@ async def on_startup(bot: Bot) -> None:
     logger.info("初始化数据库...")
     await init_db()
 
+    # 初始化 Telethon 客户端
+    logger.info("初始化 Telethon 客户端...")
+    await init_telethon_client()
+
     # 设置命令自动完成
     logger.info("设置命令自动完成...")
     await setup_bot_commands(bot)
@@ -306,6 +317,9 @@ async def on_shutdown() -> None:
 
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)
+
+    # 关闭 Telethon 客户端
+    await close_telethon_client()
 
     # 关闭数据库连接
     await close_db()
