@@ -7,6 +7,8 @@ import sentry_sdk
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from aiohttp import ClientConnectionError, ServerDisconnectedError
 from loguru import logger
 from sentry_sdk.integrations.loguru import LoguruIntegration
 
@@ -21,84 +23,22 @@ def before_send(event, hint):
     """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
     import re
 
-    # 定义需要过滤的网络错误类型（类名）
+    # 定义需要过滤的网络错误类型（基于类型检查，精准高效）
     network_error_types = (
-        "TelegramNetworkError",
-        "ClientConnectorError",
-        "ServerDisconnectedError",
-        "TimeoutError",
-        "ConnectionError",
-        "ConnectionResetError",
-        "BrokenPipeError",
-        "OSError",
-    )
-
-    # 定义网络错误关键词
-    network_error_keywords = (
-        "ServerDisconnectedError",
-        "Server disconnected",
-        "ClientConnectorError",
-        "Cannot connect to host",
-        "Connection refused",
-        "Connection reset",
-        "Failed to fetch updates",
-        "Network is unreachable",
-        "Temporary failure in name resolution",
+        TelegramNetworkError,  # Telegram API 网络错误（包含所有子类）
+        TelegramRetryAfter,  # 速率限制（429 Too Many Requests）
+        ClientConnectionError,  # aiohttp 连接错误（包含 ClientConnectorError）
+        ServerDisconnectedError,  # 服务器断开连接
+        TimeoutError,  # 超时错误（内置异常）
+        ConnectionError,  # 通用连接错误（内置异常，包含 ConnectionResetError 等）
     )
 
     # 1. 过滤网络临时性错误（自动重试的错误不需要告警）
     # 优先使用 hint 中的原始异常信息（更准确）
     if "exc_info" in hint:
-        exc_type, exc_value, _exc_tb = hint["exc_info"]
-
-        # 检查异常类型名称
-        if exc_type and exc_type.__name__ in network_error_types:
+        exc = hint["exc_info"][1]
+        if isinstance(exc, network_error_types):
             return None
-
-        # 检查异常消息中是否包含网络错误关键词
-        if exc_value:
-            exc_message = str(exc_value)
-            if any(keyword in exc_message for keyword in network_error_keywords):
-                return None
-
-        # 检查是否是 aiogram 的可恢复错误
-        if exc_type:
-            exc_module = exc_type.__module__
-            if exc_module and "aiogram" in exc_module:
-                if exc_type.__name__ in ("RestartingTelegram", "RetryAfter"):
-                    return None
-
-        # 检查异常链中是否包含网络错误（处理嵌套异常）
-        if exc_value:
-            current = exc_value
-            while current:
-                current_type_name = type(current).__name__
-                if current_type_name in network_error_types:
-                    return None
-                # 检查异常消息
-                current_message = str(current)
-                if any(keyword in current_message for keyword in network_error_keywords):
-                    return None
-                # 检查下一个异常（__cause__ 或 __context__）
-                current = getattr(current, "__cause__", None) or getattr(
-                    current, "__context__", None
-                )
-
-    # 如果 hint 中没有 exc_info，回退到检查 event（兼容性）
-    elif "exception" in event and "values" in event["exception"]:
-        for exc_value in event["exception"]["values"]:
-            exc_type = exc_value.get("type", "")
-            exc_message = exc_value.get("value", "")
-
-            # 检查异常类型
-            if exc_type in network_error_types:
-                return None
-
-            # 检查异常消息中是否包含网络错误关键词
-            if any(
-                keyword in exc_type or keyword in exc_message for keyword in network_error_keywords
-            ):
-                return None
 
     # 2. 定义敏感数据的正则模式
     token_pattern = re.compile(r"\d+:[A-Za-z0-9_-]{35}")  # Telegram Bot Token 格式
