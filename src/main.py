@@ -141,6 +141,24 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
+    # ✅ 注册全局错误处理器（过滤网络临时性错误）
+    from aiogram.types import ErrorEvent
+
+    @dp.error()
+    async def global_error_handler(event: ErrorEvent):  # noqa: F841
+        """全局错误处理器：网络错误仅记录日志，其他错误上报 Sentry"""
+        exception = event.exception
+
+        # 网络临时性错误：仅记录日志，不上报 Sentry
+        if isinstance(exception, (TelegramNetworkError, ClientConnectionError, ServerDisconnectedError)):
+            logger.warning(f"Handler 网络错误: {type(exception).__name__}: {exception}")
+            return True  # 标记为已处理，不再传播
+
+        # 其他异常：上报 Sentry
+        logger.exception(f"Handler 异常: {type(exception).__name__}: {exception}")
+        sentry_sdk.capture_exception(exception)
+        return True  # 标记为已处理，避免 aiogram 默认处理
+
     return bot, dp
 
 
@@ -373,8 +391,18 @@ async def main() -> None:
             logger.info("收到停止信号，正在退出...")
             break
 
+        except TelegramNetworkError as e:
+            # 网络临时性错误，仅记录日志，不上报 Sentry
+            logger.warning(f"网络错误 (尝试 {attempt}): {e}")
+            logger.info(f"等待 {retry_delay:.1f} 秒后重试...")
+            await asyncio.sleep(retry_delay)
+            # 指数退避，最大 60 秒
+            retry_delay = min(retry_delay * 1.5, max_delay)
+
         except Exception as e:
+            # 其他异常上报 Sentry
             logger.error(f"启动轮询失败 (尝试 {attempt}): {type(e).__name__}: {e}")
+            sentry_sdk.capture_exception(e)
             logger.warning(f"等待 {retry_delay:.1f} 秒后重试...")
             await asyncio.sleep(retry_delay)
             # 指数退避，最大 60 秒
