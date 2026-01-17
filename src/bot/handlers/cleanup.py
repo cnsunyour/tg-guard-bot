@@ -128,9 +128,11 @@ async def _handle_refresh(message: Message, member_query: MemberQueryService) ->
     try:
         count = await member_query.refresh_cache(message.chat.id)
         await status_msg.edit_text(f"✅ 缓存已刷新\n\n成员数量: {count}")
+        return status_msg  # 返回消息对象以便中间件自动删除
     except Exception as e:
         logger.error(f"刷新缓存失败: {e}")
         await status_msg.edit_text(f"❌ 刷新失败: {escape_html(str(e))}")
+        return status_msg  # 返回消息对象以便中间件自动删除
 
 
 async def _handle_cache_info(message: Message, member_query: MemberQueryService) -> None:
@@ -176,7 +178,7 @@ async def _handle_preview(message: Message, member_query: MemberQueryService) ->
 
         if total == 0:
             await status_msg.edit_text("✅ 没有需要清理的用户")
-            return
+            return status_msg  # 返回消息对象以便中间件自动删除
 
         await status_msg.edit_text(
             f"📊 <b>清理预览</b>\n\n"
@@ -185,9 +187,11 @@ async def _handle_preview(message: Message, member_query: MemberQueryService) ->
             f"总计: {total} 人\n\n"
             f"执行清理请使用: /cleanup run"
         )
+        return status_msg  # 返回消息对象以便中间件自动删除
     except Exception as e:
         logger.error(f"预览清理失败: {e}")
         await status_msg.edit_text(f"❌ 预览失败: {escape_html(str(e))}")
+        return status_msg  # 返回消息对象以便中间件自动删除
 
 
 async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryService) -> None:
@@ -209,7 +213,7 @@ async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryServi
 
         if total == 0:
             await status_msg.edit_text("✅ 没有需要清理的用户")
-            return
+            return status_msg  # 返回消息对象以便中间件自动删除
 
         await status_msg.edit_text(
             f"🚀 开始清理 {total} 个用户...\n\n"
@@ -244,10 +248,12 @@ async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryServi
 
         # 显示结果
         await _show_cleanup_result(status_msg, cleanup_result)
+        return status_msg  # 返回消息对象以便中间件自动删除
 
     except Exception as e:
         logger.error(f"执行清理失败: {e}")
         await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
+        return status_msg  # 返回消息对象以便中间件自动删除
 
 
 async def _handle_deleted(message: Message, bot: Bot, member_query: MemberQueryService) -> None:
@@ -262,7 +268,7 @@ async def _handle_deleted(message: Message, bot: Bot, member_query: MemberQueryS
 
         if not deleted_users:
             await status_msg.edit_text("✅ 没有已删除用户")
-            return
+            return status_msg  # 返回消息对象以便中间件自动删除
 
         await status_msg.edit_text(f"🚀 开始清理 {len(deleted_users)} 个已删除用户...")
 
@@ -271,10 +277,12 @@ async def _handle_deleted(message: Message, bot: Bot, member_query: MemberQueryS
         )
 
         await _show_cleanup_result(status_msg, result)
+        return status_msg  # 返回消息对象以便中间件自动删除
 
     except Exception as e:
         logger.error(f"清理已删除用户失败: {e}")
         await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
+        return status_msg  # 返回消息对象以便中间件自动删除
 
 
 async def _handle_inactive(
@@ -300,7 +308,7 @@ async def _handle_inactive(
 
         if not inactive_users:
             await status_msg.edit_text(f"✅ 没有{status_name}的用户")
-            return
+            return status_msg  # 返回消息对象以便中间件自动删除
 
         await status_msg.edit_text(f"🚀 开始清理 {len(inactive_users)} 个{status_name}的用户...")
 
@@ -309,10 +317,12 @@ async def _handle_inactive(
         )
 
         await _show_cleanup_result(status_msg, result)
+        return status_msg  # 返回消息对象以便中间件自动删除
 
     except Exception as e:
         logger.error(f"清理不活跃用户失败: {e}")
         await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
+        return status_msg  # 返回消息对象以便中间件自动删除
 
 
 async def _show_cleanup_result(message: Message, result) -> None:
