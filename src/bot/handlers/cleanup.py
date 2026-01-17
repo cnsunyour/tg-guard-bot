@@ -30,7 +30,6 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
       /cleanup run                - 执行清理（已删除 + 很久不上线）
       /cleanup deleted            - 仅清理已删除用户
       /cleanup inactive           - 仅清理很久不上线的用户
-      /cleanup inactive last_month - 清理一个月以上不上线的用户
       /cleanup refresh            - 强制刷新成员缓存
       /cleanup cache              - 查看缓存状态
     """
@@ -85,15 +84,9 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
         if subcommand == "deleted":
             return await _handle_deleted(message, bot, member_query)
 
-        # 清理不活跃用户
+        # 清理不活跃用户（只清理很久不上线的用户）
         if subcommand == "inactive":
-            inactive_status = args[2] if len(args) > 2 else "long_time_ago"
-            if inactive_status not in ["long_time_ago", "last_month", "last_week"]:
-                await message.answer(
-                    "❌ 无效的不活跃状态\n\n可用选项: long_time_ago, last_month, last_week"
-                )
-                return
-            return await _handle_inactive(message, bot, member_query, inactive_status)
+            return await _handle_inactive(message, bot, member_query, "long_time_ago")
 
         # 未知子命令
         await message.answer(
