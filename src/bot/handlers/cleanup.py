@@ -22,7 +22,7 @@ router = Router(name="cleanup")
 
 
 @router.message(Command("cleanup"))
-async def cmd_cleanup(message: Message, bot: Bot) -> None:
+async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
     """群组用户清理命令
 
     用法：
@@ -67,28 +67,23 @@ async def cmd_cleanup(message: Message, bot: Bot) -> None:
     try:
         # 刷新缓存
         if subcommand == "refresh":
-            await _handle_refresh(message, member_query)
-            return
+            return await _handle_refresh(message, member_query)
 
         # 查看缓存
         if subcommand == "cache":
-            await _handle_cache_info(message, member_query)
-            return
+            return await _handle_cache_info(message, member_query)
 
         # 预览清理
         if subcommand == "preview" or len(args) == 1:
-            await _handle_preview(message, member_query)
-            return
+            return await _handle_preview(message, member_query)
 
         # 执行清理
         if subcommand == "run":
-            await _handle_run(message, bot, member_query)
-            return
+            return await _handle_run(message, bot, member_query)
 
         # 仅清理已删除用户
         if subcommand == "deleted":
-            await _handle_deleted(message, bot, member_query)
-            return
+            return await _handle_deleted(message, bot, member_query)
 
         # 清理不活跃用户
         if subcommand == "inactive":
@@ -98,8 +93,7 @@ async def cmd_cleanup(message: Message, bot: Bot) -> None:
                     "❌ 无效的不活跃状态\n\n可用选项: long_time_ago, last_month, last_week"
                 )
                 return
-            await _handle_inactive(message, bot, member_query, inactive_status)
-            return
+            return await _handle_inactive(message, bot, member_query, inactive_status)
 
         # 未知子命令
         await message.answer(
@@ -118,7 +112,7 @@ async def cmd_cleanup(message: Message, bot: Bot) -> None:
         await message.answer(f"❌ 执行失败: {escape_html(str(e))}")
 
 
-async def _handle_refresh(message: Message, member_query: MemberQueryService) -> None:
+async def _handle_refresh(message: Message, member_query: MemberQueryService) -> Message | None:
     """处理刷新缓存"""
     if not message.chat:
         return
@@ -135,21 +129,20 @@ async def _handle_refresh(message: Message, member_query: MemberQueryService) ->
         return status_msg  # 返回消息对象以便中间件自动删除
 
 
-async def _handle_cache_info(message: Message, member_query: MemberQueryService) -> None:
+async def _handle_cache_info(message: Message, member_query: MemberQueryService) -> Message | None:
     """处理查看缓存信息"""
     if not message.chat:
-        return
+        return None
 
     try:
         cache_info = await member_query.get_cache_info(message.chat.id)
         if not cache_info:
-            await message.answer("ℹ️ 缓存不存在，请先执行 /cleanup 或 /cleanup refresh")
-            return
+            return await message.answer("ℹ️ 缓存不存在，请先执行 /cleanup 或 /cleanup refresh")
 
         cached_at = datetime.fromisoformat(cache_info["cached_at"])
         ttl_minutes = cache_info["ttl_seconds"] // 60
 
-        await message.answer(
+        return await message.answer(
             f"📋 <b>缓存信息</b>\n\n"
             f"成员数量: {cache_info['member_count']}\n"
             f"缓存时间: {cached_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -157,10 +150,10 @@ async def _handle_cache_info(message: Message, member_query: MemberQueryService)
         )
     except Exception as e:
         logger.error(f"获取缓存信息失败: {e}")
-        await message.answer(f"❌ 获取失败: {escape_html(str(e))}")
+        return await message.answer(f"❌ 获取失败: {escape_html(str(e))}")
 
 
-async def _handle_preview(message: Message, member_query: MemberQueryService) -> None:
+async def _handle_preview(message: Message, member_query: MemberQueryService) -> Message | None:
     """处理预览清理"""
     if not message.chat:
         return
@@ -194,7 +187,7 @@ async def _handle_preview(message: Message, member_query: MemberQueryService) ->
         return status_msg  # 返回消息对象以便中间件自动删除
 
 
-async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryService) -> None:
+async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryService) -> Message | None:
     """处理执行完整清理"""
     if not message.chat or not message.from_user:
         return
@@ -256,7 +249,7 @@ async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryServi
         return status_msg  # 返回消息对象以便中间件自动删除
 
 
-async def _handle_deleted(message: Message, bot: Bot, member_query: MemberQueryService) -> None:
+async def _handle_deleted(message: Message, bot: Bot, member_query: MemberQueryService) -> Message | None:
     """处理仅清理已删除用户"""
     if not message.chat or not message.from_user:
         return
@@ -290,7 +283,7 @@ async def _handle_inactive(
     bot: Bot,
     member_query: MemberQueryService,
     inactive_status: str,
-) -> None:
+) -> Message | None:
     """处理清理不活跃用户"""
     if not message.chat or not message.from_user:
         return
