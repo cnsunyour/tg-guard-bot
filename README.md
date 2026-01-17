@@ -2,6 +2,7 @@
 
 一个功能强大的 Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾功能。
 
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.0.0)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-brightgreen.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
