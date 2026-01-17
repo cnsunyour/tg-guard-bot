@@ -39,6 +39,14 @@ async def init_telethon_client() -> TelegramClient | None:
         )
         return None
 
+    # 检查是否是文件而不是目录（Docker 挂载不存在的文件会创建目录）
+    if not session_path.is_file():
+        logger.warning(
+            f"Telethon session 路径不是文件: {session_path}\n"
+            "可能是 Docker 挂载导致的目录，请确保在宿主机生成 session 文件后再启动容器"
+        )
+        return None
+
     try:
         # 创建客户端
         # session_path 去掉 .session 后缀
