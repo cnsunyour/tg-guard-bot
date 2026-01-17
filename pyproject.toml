@@ -34,6 +34,7 @@ dependencies = [
     # Telegram Bot 框架
     "aiogram>=3.6.0,<4.0.0",
     "telethon>=1.42.0",  # User Bot API（用于获取群组成员列表）
+    "python-socks[asyncio]>=2.4.3",  # Telethon 代理支持（socks5/socks4/http）
 
     # 数据库
     "sqlalchemy>=2.0.0,<3.0.0",

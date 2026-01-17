@@ -1,4 +1,11 @@
-"""代理配置工具模块"""
+"""代理配置工具模块
+
+用于检测和解析环境变量中的代理配置，支持 socks5, socks4, http 三种代理类型。
+
+依赖:
+    - python-socks[asyncio]: Telethon 使用代理时需要此依赖
+      安装: pip install python-socks[asyncio]
+"""
 
 import os
 from typing import Tuple
