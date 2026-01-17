@@ -8,7 +8,12 @@ import asyncio
 import sys
 from pathlib import Path
 
+# 添加项目根目录到 Python 路径
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from telethon import TelegramClient
+
+from src.core.proxy import get_telethon_proxy
 
 
 async def main():
@@ -44,8 +49,15 @@ async def main():
     print(f"Session 文件将保存到: {session_path}")
     print()
 
+    # 检测代理配置
+    proxy = get_telethon_proxy()
+    if proxy:
+        proxy_type, host, port = proxy
+        print(f"✓ 检测到代理配置: {proxy_type}://{host}:{port}")
+        print()
+
     # 创建客户端
-    client = TelegramClient(session_name, api_id, api_hash)
+    client = TelegramClient(session_name, api_id, api_hash, proxy=proxy)
 
     try:
         # 启动客户端（会交互式要求输入手机号和验证码）

@@ -6,6 +6,7 @@ from loguru import logger
 from telethon import TelegramClient
 
 from src.core.config import settings
+from src.core.proxy import get_telethon_proxy
 
 # 全局 Telethon 客户端
 _telethon_client: TelegramClient | None = None
@@ -43,10 +44,14 @@ async def init_telethon_client() -> TelegramClient | None:
         # session_path 去掉 .session 后缀
         session_name = str(session_path.with_suffix(""))
 
+        # 检测代理配置
+        proxy = get_telethon_proxy()
+
         _telethon_client = TelegramClient(
             session_name,
             settings.telethon_api_id,
             settings.telethon_api_hash,
+            proxy=proxy,
         )
 
         # 启动客户端
