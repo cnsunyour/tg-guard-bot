@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Guard Bot - 验证服务</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #ffffff;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 600px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .subtitle {
+            font-size: 18px;
+            opacity: 0.9;
+            margin-bottom: 32px;
+        }
+
+        .info {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            text-align: left;
+        }
+
+        .info h2 {
+            font-size: 20px;
+            margin-bottom: 12px;
+        }
+
+        .info ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .info li {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .info li:last-child {
+            border-bottom: none;
+        }
+
+        .footer {
+            font-size: 14px;
+            opacity: 0.7;
+            margin-top: 24px;
+        }
+
+        a {
+            color: #ffffff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Telegram Guard Bot</h1>
+        <p class="subtitle">多验证码集成服务</p>
+
+        <div class="info">
+            <h2>支持的验证方式</h2>
+            <ul>
+                <li>✅ Cloudflare Turnstile</li>
+                <li>✅ Friendly Captcha v2</li>
+                <li>✅ hCaptcha</li>
+                <li>✅ MTCaptcha</li>
+                <li>✅ ALTCHA (Proof-of-Work)</li>
+            </ul>
+        </div>
+
+        <div class="info">
+            <h2>技术架构</h2>
+            <ul>
+                <li>🚀 Cloudflare Pages (前端托管)</li>
+                <li>⚡ Cloudflare Functions (验证 API)</li>
+                <li>🔒 HMAC-SHA256 签名验证</li>
+                <li>🌐 独立页面设计（避免 SDK 冲突）</li>
+            </ul>
+        </div>
+
+        <p class="footer">
+            此页面仅供系统使用，请通过 Telegram Bot 访问验证服务
+        </p>
+    </div>
+</body>
+</html>

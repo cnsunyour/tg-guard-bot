@@ -12,7 +12,7 @@ services:
       - ./src:/app/src:ro           # 只读挂载源代码
       - ./scripts:/app/scripts:ro   # 只读挂载脚本
       - ./migrations:/app/migrations:ro  # 只读挂载迁移脚本
-      - ./data/models:/app/data/models
+      - ./data:/app/data            # 挂载整个 data 目录（包含 models 和 session 文件）
       - ./logs:/app/logs
 
     # 开发环境：使用 watchfiles 监控文件变化并自动重启

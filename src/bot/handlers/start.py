@@ -13,6 +13,10 @@ router = Router(name="start")
 @router.message(Command("start"))
 async def cmd_start(message: Message, bot: Bot) -> None:
     """处理 /start 命令"""
+    # 命令处理器中这些值应该总是存在
+    if not message.from_user or not message.text:
+        return
+
     user_id = message.from_user.id
     args = message.text.split(maxsplit=1)
 

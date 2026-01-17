@@ -7,6 +7,8 @@ import sentry_sdk
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from aiohttp import ClientConnectionError, ServerDisconnectedError
 from loguru import logger
 from sentry_sdk.integrations.loguru import LoguruIntegration
 
@@ -14,40 +16,29 @@ from src.core.config import settings
 from src.core.database import close_db, init_db
 from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关闭函数
 from src.core.redis import close_redis
+from src.core.telethon_client import close_telethon_client, init_telethon_client
 
 
-def before_send(event, _hint):
+def before_send(event, hint):
     """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
     import re
 
+    # 定义需要过滤的网络错误类型（基于类型检查，精准高效）
+    network_error_types = (
+        TelegramNetworkError,  # Telegram API 网络错误（包含所有子类）
+        TelegramRetryAfter,  # 速率限制（429 Too Many Requests）
+        ClientConnectionError,  # aiohttp 连接错误（包含 ClientConnectorError）
+        ServerDisconnectedError,  # 服务器断开连接
+        TimeoutError,  # 超时错误（内置异常）
+        ConnectionError,  # 通用连接错误（内置异常，包含 ConnectionResetError 等）
+    )
+
     # 1. 过滤网络临时性错误（自动重试的错误不需要告警）
-    if "exception" in event and "values" in event["exception"]:
-        for exc_value in event["exception"]["values"]:
-            exc_type = exc_value.get("type", "")
-            exc_module = exc_value.get("module", "")
-
-            # 网络相关的临时性错误
-            network_errors = [
-                "TelegramNetworkError",  # Telegram 网络错误
-                "ClientConnectorError",  # aiohttp 连接错误
-                "ServerDisconnectedError",  # 服务器断开连接
-                "TimeoutError",  # 超时错误
-                "asyncio.TimeoutError",  # asyncio 超时
-                "ConnectionError",  # 连接错误
-                "ConnectionResetError",  # 连接重置
-                "BrokenPipeError",  # 管道破裂
-                "OSError",  # 操作系统错误（网络相关）
-            ]
-
-            # 检查是否是网络错误
-            if exc_type in network_errors:
-                # 返回 None 表示丢弃该事件，不发送到 Sentry
-                return None
-
-            # 检查是否是 aiogram 的可恢复错误
-            if exc_module and "aiogram" in exc_module:
-                if "RestartingTelegram" in exc_type or "RetryAfter" in exc_type:
-                    return None
+    # 优先使用 hint 中的原始异常信息（更准确）
+    if "exc_info" in hint:
+        exc = hint["exc_info"][1]
+        if isinstance(exc, network_error_types):
+            return None
 
     # 2. 定义敏感数据的正则模式
     token_pattern = re.compile(r"\d+:[A-Za-z0-9_-]{35}")  # Telegram Bot Token 格式
@@ -100,11 +91,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     # 注册路由器
-    from src.bot.handlers import admin, antispam, events, moderation, start, verification
+    from src.bot.handlers import admin, antispam, cleanup, events, moderation, start, verification
 
     dp.include_router(events.router)  # 系统事件（最高优先级）
     dp.include_router(start.router)  # 启动命令
     dp.include_router(admin.router)  # 管理命令
+    dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
@@ -114,12 +106,13 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     def extract_commands_from_router(router) -> set[str]:
         """从 router 中提取所有已注册的命令"""
-        commands = set()
+        commands: set[str] = set()
         for handler in router.message.handlers:
             for filter_obj in handler.filters:
                 # filter_obj.callback 是实际的 Command 对象
                 if isinstance(filter_obj.callback, Command):
-                    commands.update(filter_obj.callback.commands)
+                    # 过滤掉正则表达式，只保留字符串命令
+                    commands.update(c for c in filter_obj.callback.commands if isinstance(c, str))
         return commands
 
     # 从 dispatcher 和所有 sub routers 中提取命令
@@ -148,16 +141,130 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
+    # ✅ 注册全局错误处理器（过滤网络临时性错误）
+    from aiogram.types import ErrorEvent
+
+    @dp.error()
+    async def global_error_handler(event: ErrorEvent):  # noqa: F841
+        """全局错误处理器：网络错误仅记录日志，其他错误上报 Sentry"""
+        exception = event.exception
+
+        # 网络临时性错误：仅记录日志，不上报 Sentry
+        if isinstance(exception, (TelegramNetworkError, ClientConnectionError, ServerDisconnectedError)):
+            logger.warning(f"Handler 网络错误: {type(exception).__name__}: {exception}")
+            return True  # 标记为已处理，不再传播
+
+        # 其他异常：上报 Sentry
+        logger.exception(f"Handler 异常: {type(exception).__name__}: {exception}")
+        sentry_sdk.capture_exception(exception)
+        return True  # 标记为已处理，避免 aiogram 默认处理
+
     return bot, dp
 
 
-async def on_startup() -> None:
+async def setup_bot_commands(bot: Bot) -> None:
+    """设置 Bot 命令自动完成提示"""
+    from aiogram.types import (
+        BotCommand,
+        BotCommandScopeAllChatAdministrators,
+        BotCommandScopeAllGroupChats,
+        BotCommandScopeAllPrivateChats,
+    )
+
+    # 私聊命令列表（普通用户 + 超级管理员命令）
+    private_commands = [
+        # 普通命令
+        BotCommand(command="start", description="启动 Bot / 查看帮助"),
+        BotCommand(command="help", description="查看帮助信息"),
+        # 超级管理员命令
+        BotCommand(command="health", description="健康检查（仅超管）"),
+        BotCommand(command="stats", description="统计信息（仅超管）"),
+        BotCommand(command="whitelist", description="白名单管理（仅超管）"),
+    ]
+
+    # 群组普通成员命令列表（仅基础功能）
+    group_member_commands = [
+        BotCommand(command="help", description="查看帮助信息"),
+        BotCommand(command="spam", description="举报垃圾消息"),
+        BotCommand(command="report", description="举报垃圾消息"),
+    ]
+
+    # 群组管理员命令列表（完整管理功能）
+    group_admin_commands = [
+        # 群组配置
+        BotCommand(command="groupset", description="⚙️ 群组设置（统一入口）"),
+        BotCommand(command="setverify", description="设置验证方式"),
+        BotCommand(command="settimeout", description="设置验证超时时间"),
+        BotCommand(command="verifyconfig", description="查看验证配置"),
+        BotCommand(command="antispam", description="反垃圾配置"),
+        BotCommand(command="antichannel", description="反频道马甲配置"),
+        BotCommand(command="activity", description="活跃度系统开关"),
+        BotCommand(command="activityskip", description="活跃度跳过阈值"),
+        # 群成员管理
+        BotCommand(command="kick", description="踢出成员"),
+        BotCommand(command="mute", description="禁言成员"),
+        BotCommand(command="unmute", description="解除禁言"),
+        BotCommand(command="ban", description="封禁成员"),
+        BotCommand(command="unban", description="解除封禁"),
+        BotCommand(command="warn", description="警告成员"),
+        BotCommand(command="warnings", description="查看警告记录"),
+        BotCommand(command="clearwarnings", description="清除警告"),
+        BotCommand(command="cleanup", description="清理不活跃用户"),
+        # 消息管理
+        BotCommand(command="delbefore", description="删除往前的消息"),
+        BotCommand(command="delafter", description="删除往后的消息"),
+        BotCommand(command="delrange", description="删除消息范围"),
+        # 举报系统
+        BotCommand(command="spam", description="举报垃圾消息"),
+        BotCommand(command="report", description="举报垃圾消息"),
+        BotCommand(command="notspam", description="标记非垃圾消息"),
+        BotCommand(command="reports", description="查看举报列表"),
+        BotCommand(command="approve", description="处理举报"),
+        # 帮助
+        BotCommand(command="help", description="查看帮助信息"),
+    ]
+
+    try:
+        # 设置私聊命令
+        await bot.set_my_commands(
+            commands=private_commands,
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+        logger.info(f"✅ 已设置私聊命令列表 ({len(private_commands)} 个命令)")
+
+        # 设置群组普通成员命令（优先级较低）
+        await bot.set_my_commands(
+            commands=group_member_commands,
+            scope=BotCommandScopeAllGroupChats(),
+        )
+        logger.info(f"✅ 已设置群组普通成员命令列表 ({len(group_member_commands)} 个命令)")
+
+        # 设置群组管理员命令（优先级较高，会覆盖普通成员的命令）
+        await bot.set_my_commands(
+            commands=group_admin_commands,
+            scope=BotCommandScopeAllChatAdministrators(),
+        )
+        logger.info(f"✅ 已设置群组管理员命令列表 ({len(group_admin_commands)} 个命令)")
+
+    except Exception as e:
+        logger.error(f"设置命令列表失败: {e}")
+
+
+async def on_startup(bot: Bot) -> None:
     """启动时执行"""
     logger.info("Bot 正在启动...")
 
     # 初始化数据库
     logger.info("初始化数据库...")
     await init_db()
+
+    # 初始化 Telethon 客户端
+    logger.info("初始化 Telethon 客户端...")
+    await init_telethon_client()
+
+    # 设置命令自动完成
+    logger.info("设置命令自动完成...")
+    await setup_bot_commands(bot)
 
     logger.info("Bot 启动完成")
 
@@ -168,6 +275,9 @@ async def on_shutdown() -> None:
 
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)
+
+    # 关闭 Telethon 客户端
+    await close_telethon_client()
 
     # 关闭数据库连接
     await close_db()
@@ -190,7 +300,7 @@ async def main() -> None:
             integrations=[
                 LoguruIntegration(
                     level=None,  # 捕获所有 Loguru 日志级别
-                    event_level="ERROR",  # 仅 ERROR 及以上级别创建 Sentry 事件
+                    event_level=40,  # 仅 ERROR 及以上级别创建 Sentry 事件 (40=ERROR)
                 )
             ],
             # 发布版本（使用项目版本）
@@ -203,7 +313,7 @@ async def main() -> None:
             before_send=before_send,
             # 默认的敏感字段名称过滤
             # Sentry 会自动过滤包含这些关键词的字段
-            _experiments={
+            _experiments={  # type: ignore[typeddict-unknown-key]
                 "profiles_sample_rate": 0,  # 禁用 profiling
             },
         )
@@ -262,18 +372,45 @@ async def main() -> None:
     bot, dp = await setup_bot()
 
     # 启动回调
-    await on_startup()
+    await on_startup(bot)
 
-    try:
-        # 启动轮询
-        logger.info("开始轮询...")
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("收到停止信号")
-    finally:
-        # 关闭回调
-        await on_shutdown()
-        await bot.session.close()
+    # 启动轮询（无限重试，直到成功或手动停止）
+    retry_delay = 5.0
+    max_delay = 60.0
+    attempt = 0
+
+    while True:
+        attempt += 1
+        try:
+            # 启动轮询
+            logger.info(f"开始轮询... (尝试 {attempt})")
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+            break  # 正常退出（通常不会到达这里，因为 polling 会一直运行）
+
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("收到停止信号，正在退出...")
+            break
+
+        except TelegramNetworkError as e:
+            # 网络临时性错误，仅记录日志，不上报 Sentry
+            logger.warning(f"网络错误 (尝试 {attempt}): {e}")
+            logger.info(f"等待 {retry_delay:.1f} 秒后重试...")
+            await asyncio.sleep(retry_delay)
+            # 指数退避，最大 60 秒
+            retry_delay = min(retry_delay * 1.5, max_delay)
+
+        except Exception as e:
+            # 其他异常上报 Sentry
+            logger.error(f"启动轮询失败 (尝试 {attempt}): {type(e).__name__}: {e}")
+            sentry_sdk.capture_exception(e)
+            logger.warning(f"等待 {retry_delay:.1f} 秒后重试...")
+            await asyncio.sleep(retry_delay)
+            # 指数退避，最大 60 秒
+            retry_delay = min(retry_delay * 1.5, max_delay)
+
+    # 关闭回调
+    await on_shutdown()
+    await bot.session.close()
 
 
 if __name__ == "__main__":

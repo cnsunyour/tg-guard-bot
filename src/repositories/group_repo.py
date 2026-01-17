@@ -92,6 +92,39 @@ class GroupRepository:
                 await session.commit()
 
     @staticmethod
+    async def update_activity_settings(chat_id: int, enabled: bool) -> None:
+        """更新活跃度系统设置"""
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.activity_enabled = enabled
+                await session.commit()
+
+    @staticmethod
+    async def update_activity_skip_threshold(chat_id: int, threshold: int | None) -> None:
+        """更新活跃度跳过垃圾检测阈值"""
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.activity_skip_threshold = threshold  # type: ignore[assignment]
+                await session.commit()
+
+    @staticmethod
+    async def update_antichannel_settings(chat_id: int, enabled: bool) -> None:
+        """更新反频道马甲设置"""
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.anti_channel_enabled = enabled
+                await session.commit()
+
+    @staticmethod
     async def get_whitelisted_groups() -> list[Group]:
         """获取所有白名单群组"""
         async with get_db_session() as session:

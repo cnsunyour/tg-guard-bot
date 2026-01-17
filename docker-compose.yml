@@ -18,7 +18,7 @@ services:
       redis:
         condition: service_started
     volumes:
-      - ./data/models:/app/data/models
+      - ./data:/app/data  # 挂载整个 data 目录（包含 models 和 session 文件）
       - ./logs:/app/logs
     networks:
       - tg-guard-network

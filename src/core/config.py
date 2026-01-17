@@ -74,13 +74,52 @@ class Settings(BaseSettings):
 
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
+    # ⚠️ 已废弃：请使用 captcha_webapp_url 和 captcha_signature_key
     turnstile_webapp_url: str = Field(
         default="",
-        description="Turnstile WebApp URL（如 https://verify.your-domain.pages.dev）",
+        description="[已废弃] Turnstile WebApp URL，请改用 captcha_webapp_url",
     )
     turnstile_signature_key: str = Field(
         default="",
-        description="与 WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
+        description="[已废弃] Turnstile 签名密钥，请改用 captcha_signature_key",
+    )
+
+    # ========== 统一 CAPTCHA 验证配置 ==========
+    captcha_webapp_url: str = Field(
+        default="",
+        description="统一 CAPTCHA WebApp URL（支持 Turnstile, Friendly, hCaptcha, MTCaptcha）",
+    )
+    captcha_signature_key: str = Field(
+        default="",
+        description="与 CAPTCHA WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
+    )
+
+    # Friendly Captcha 验证配置（隐私友好，支持多 key 轮换）
+    friendly_enabled: bool = Field(default=False, description="是否启用 Friendly Captcha 验证")
+    friendly_keys: str | list[dict] = Field(
+        default_factory=list,
+        description='Friendly Captcha key pairs for rotation (JSON array: [{"sitekey":"FC...","apikey":"fc-sk-..."}])',
+    )
+
+    # hCaptcha 验证配置（图片验证）
+    hcaptcha_enabled: bool = Field(default=False, description="是否启用 hCaptcha 验证")
+    hcaptcha_site_key: str = Field(default="", description="hCaptcha Site Key")
+    hcaptcha_secret_key: str = Field(default="", description="hCaptcha Secret Key")
+
+    # MTCaptcha 验证配置（自适应无感验证）
+    mtcaptcha_enabled: bool = Field(default=False, description="是否启用 MTCaptcha 验证")
+    mtcaptcha_site_key: str = Field(default="", description="MTCaptcha Site Key")
+    mtcaptcha_private_key: str = Field(default="", description="MTCaptcha Private Key")
+
+    # ALTCHA 验证配置（开源自托管，proof-of-work）
+    altcha_enabled: bool = Field(default=False, description="是否启用 ALTCHA 验证")
+    altcha_api_url: str = Field(
+        default="",
+        description="ALTCHA PHP 后端 URL（如 https://xxx.serv00.net/altcha）",
+    )
+    altcha_hmac_key: str = Field(
+        default="",
+        description="ALTCHA HMAC key（与 PHP 后端共享，用于挑战生成和验证）",
     )
 
     # 验证配置
@@ -108,6 +147,15 @@ class Settings(BaseSettings):
     embedding_model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5", description="Embedding 模型名称"
     )
+
+    # Telethon 配置（用于获取群组成员列表）
+    telethon_api_id: int | None = Field(default=None, description="Telegram API ID")
+    telethon_api_hash: str | None = Field(default=None, description="Telegram API Hash")
+    telethon_session_path: str = Field(
+        default="./data/user_bot.session", description="Telethon Session 文件路径"
+    )
+    telethon_enabled: bool = Field(default=False, description="是否启用 Telethon 客户端")
+    cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
     # OCR 功能配置
     enable_ocr: bool = Field(
         default=False, description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
@@ -124,12 +172,48 @@ class Settings(BaseSettings):
         description="是否允许加载未签名的旧版模型（不安全，仅用于兼容旧模型，强烈建议重新训练）",
     )
 
+    @field_validator("redis_password", "sentry_dsn", "telethon_api_hash", mode="before")
+    @classmethod
+    def parse_optional_str(cls, v: str | None) -> str | None:
+        """解析可选字符串字段，将空字符串转换为 None"""
+        if v == "":
+            return None
+        return v
+
+    @field_validator("telethon_api_id", mode="before")
+    @classmethod
+    def parse_telethon_api_id(cls, v: str | int | None) -> int | None:
+        """解析 Telethon API ID，允许空字符串"""
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            return int(v)
+        return v
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def parse_admin_ids(cls, v: str | list[int]) -> list[int]:
         """解析管理员 ID 列表"""
         if isinstance(v, str):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v
+
+    @field_validator("friendly_keys", mode="before")
+    @classmethod
+    def parse_friendly_keys(cls, v: str | list[dict]) -> list[dict]:
+        """解析 Friendly Captcha keys JSON 数组"""
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            import json
+
+            try:
+                parsed = json.loads(v)
+                if not isinstance(parsed, list):
+                    raise ValueError("FRIENDLY_KEYS must be a JSON array")
+                return parsed
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in FRIENDLY_KEYS: {e}") from e
         return v
 
     def model_post_init(self, __context) -> None:
@@ -170,4 +254,5 @@ class Settings(BaseSettings):
 
 
 # 全局配置实例
-settings = Settings()
+# mypy 不理解 pydantic-settings 会从环境变量读取必需字段
+settings = Settings()  # type: ignore[call-arg]

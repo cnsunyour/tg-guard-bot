@@ -7,6 +7,7 @@ from aiogram import Bot
 from loguru import logger
 
 from src.core.redis import get_redis
+from src.core.retry import retry_on_network_error
 
 
 class PermissionCache:
@@ -16,6 +17,7 @@ class PermissionCache:
     CACHE_TTL = 300
 
     @staticmethod
+    @retry_on_network_error(max_retries=3, initial_delay=1.0)
     async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
         """检查用户是否是管理员（带缓存）
 

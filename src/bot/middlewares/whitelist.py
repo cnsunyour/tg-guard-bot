@@ -5,7 +5,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.enums import ChatType
-from aiogram.types import CallbackQuery, ChatMemberUpdated, Message
+from aiogram.types import CallbackQuery, ChatMemberUpdated, Message, TelegramObject
 from loguru import logger
 
 from src.repositories.group_repo import GroupRepository
@@ -20,16 +20,16 @@ class WhitelistMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[
-            [Message | CallbackQuery | ChatMemberUpdated, dict[str, Any]], Awaitable[Any]
-        ],
-        event: Message | CallbackQuery | ChatMemberUpdated,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
         """检查群组白名单"""
 
         # 获取 bot 实例
-        bot: Bot = data.get("bot")
+        bot = data.get("bot")
+        if not isinstance(bot, Bot):
+            return await handler(event, data)
 
         # 获取群组 ID
         chat_id = None

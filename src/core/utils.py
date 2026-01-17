@@ -6,6 +6,8 @@ import re
 
 from loguru import logger
 
+from src.core.retry import retry_on_network_error
+
 
 def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
     """脱敏处理敏感文本，用于日志记录
@@ -72,6 +74,7 @@ async def check_admin_permission(message, bot) -> bool:
     return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
 
 
+@retry_on_network_error(max_retries=3, initial_delay=1.0)
 async def check_admin_permission_strict(bot, chat_id: int, user_id: int) -> bool:
     """严格的管理员权限检查（不信任缓存，直接查询 API）
 
@@ -332,3 +335,79 @@ def parse_message_link(text: str) -> int | None:
     masked_text = mask_sensitive_text(text, keep_chars=15)
     logger.debug(f"无法从文本中解析消息ID: {masked_text}")
     return None
+
+
+def parse_message_link_with_chat(text: str) -> tuple[int | None, int | None, str | None]:
+    """从消息链接中提取群组标识和消息ID
+
+    支持的格式：
+    1. 纯数字：123456 -> (None, 123456, None)
+    2. 私有群组链接：https://t.me/c/1234567890/123456 -> (-1001234567890, 123456, None)
+    3. 公开频道/群组链接：https://t.me/channel_name/123456 -> (None, 123456, "channel_name")
+
+    Args:
+        text: 消息链接或消息ID字符串
+
+    Returns:
+        (chat_id, message_id, username) 元组
+        - 私有群组：返回完整的 chat_id (带 -100 前缀)，username 为 None
+        - 公开群组：返回 username，chat_id 为 None
+        - 纯数字：chat_id 和 username 都为 None
+        - 解析失败：(None, None, None)
+    """
+    if not text or not isinstance(text, str):
+        return None, None, None
+
+    text = text.strip()
+
+    # 1. 尝试直接解析为数字
+    if text.isdigit():
+        message_id = int(text)
+        if message_id > 0:
+            return None, message_id, None
+        return None, None, None
+
+    # 2. 解析私有群组链接：https://t.me/c/1234567890/123456
+    # 提取群组ID和消息ID
+    private_pattern = r"t\.me/c/(\d+)/(\d+)"
+    match = re.search(private_pattern, text)
+    if match:
+        # 提取链接中的群组ID（不带前缀）
+        chat_id_str = match.group(1)
+        message_id_str = match.group(2)
+
+        try:
+            # 转换为完整的 chat_id（加上 -100 前缀）
+            # Telegram 私有群组的 chat_id 格式：-100 + 链接中的数字
+            # 例如：链接中是 1234567890，实际 chat_id 是 -1001234567890
+            chat_id = int(f"-100{chat_id_str}")
+            message_id = int(message_id_str)
+
+            if message_id > 0:
+                logger.debug(f"从私有群组链接解析: chat_id={chat_id}, message_id={message_id}")
+                return chat_id, message_id, None
+        except (ValueError, OverflowError) as e:
+            logger.debug(f"解析私有群组链接失败: {e}")
+            return None, None, None
+
+    # 3. 解析公开频道/群组链接：https://t.me/channel_name/123456
+    # 提取 username 和消息ID
+    public_pattern = r"t\.me/([^/]+)/(\d+)"
+    match = re.search(public_pattern, text)
+    if match:
+        try:
+            username = match.group(1)
+            message_id = int(match.group(2))
+
+            # 排除特殊路径（如 /c/, /s/ 等）
+            if username not in ["c", "s", "addstickers", "joinchat", "login"]:
+                if message_id > 0:
+                    logger.debug(f"从公开链接解析: username={username}, message_id={message_id}")
+                    return None, message_id, username
+        except ValueError:
+            pass
+
+    # 解析失败
+    masked_text = mask_sensitive_text(text, keep_chars=15)
+    logger.debug(f"无法从文本中解析消息链接: {masked_text}")
+    return None, None, None

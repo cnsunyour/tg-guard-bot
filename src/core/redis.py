@@ -138,3 +138,32 @@ class RedisKeys:
         存储格式: "{token_string}"
         """
         return f"turnstile_token:{chat_id}:{user_id}"
+
+    @staticmethod
+    def captcha_token(chat_id: int, user_id: int) -> str:
+        """通用 CAPTCHA 验证 token 键名
+
+        用于存储所有 CAPTCHA 服务（Friendly, hCaptcha, MTCaptcha, ALTCHA）的一次性验证 token
+        存储格式: "{provider}:{token_string}:{key_index}"
+        示例: "friendly:abc123:0" 或 "hcaptcha:xyz789"
+        """
+        return f"captcha_token:{chat_id}:{user_id}"
+
+    @staticmethod
+    def friendly_key_index() -> str:
+        """Friendly Captcha key 轮换索引键名
+
+        使用 Redis INCR 原子操作实现 round-robin key 轮换
+        存储格式: 整数索引（自动递增）
+        """
+        return "friendly_captcha:key_index"
+
+    @staticmethod
+    def cleanup_members_cache(chat_id: int) -> str:
+        """群组成员缓存键名
+
+        用于缓存 Telethon 获取的群组成员列表，减少 API 调用
+        存储格式: JSON 字符串 {"chat_id": int, "cached_at": str, "members": []}
+        TTL: 1 小时（可配置）
+        """
+        return f"cleanup:members:{chat_id}"

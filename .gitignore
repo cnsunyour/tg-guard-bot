@@ -64,6 +64,12 @@ data/models/*.pkl
 data/models/*.bin
 data/models/*.onnx
 
+# Telethon Session 文件（包含认证信息，不应提交）
+*.session
+*.session-journal
+data/user_bot.session
+data/user_bot.session-journal
+
 # ⚠️ 安全扫描报告（包含敏感信息）
 *-report.json
 *.sarif

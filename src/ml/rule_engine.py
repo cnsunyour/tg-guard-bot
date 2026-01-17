@@ -1,10 +1,19 @@
 """规则引擎模块 - Stage 1 快速过滤"""
 
 import re
-from typing import ClassVar
+from typing import Any, ClassVar, TypedDict
 from urllib.parse import urlparse
 
 from loguru import logger
+
+
+class AnalysisResult(TypedDict):
+    """规则引擎分析结果类型"""
+
+    is_spam: bool
+    confidence: float
+    reasons: list[str]
+    details: dict[str, Any]
 
 
 class RuleEngine:
@@ -223,13 +232,13 @@ class RuleEngine:
 
         return False
 
-    def analyze(self, text: str) -> dict:
+    def analyze(self, text: str) -> AnalysisResult:
         """综合分析文本
 
         Returns:
             分析结果字典，包含所有检测项
         """
-        result = {
+        result: AnalysisResult = {
             "is_spam": False,
             "confidence": 0.0,
             "reasons": [],

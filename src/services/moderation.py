@@ -60,9 +60,17 @@ class ModerationService:
 
     @staticmethod
     async def kick_user(
-        bot: Bot, chat_id: int, user_id: int, operator_id: int, reason: str | None = None
+        bot: Bot,
+        chat_id: int,
+        user_id: int,
+        operator_id: int,
+        reason: str | None = None,
+        revoke_messages: bool = False,
     ) -> tuple[bool, str | None]:
         """踢出用户
+
+        Args:
+            revoke_messages: 是否删除该用户的所有消息（默认 False）
 
         Returns:
             (是否成功, 错误消息)
@@ -79,7 +87,9 @@ class ModerationService:
                 return False, error_msg
 
             # 踢出用户（临时封禁后立即解封）
-            await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await bot.ban_chat_member(
+                chat_id=chat_id, user_id=user_id, revoke_messages=revoke_messages
+            )
             await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
 
             # 记录日志
@@ -155,16 +165,18 @@ class ModerationService:
             )
 
             # 记录日志
+            details = {
+                "duration": duration,
+                "reason": reason,
+                "until": until_date.isoformat() if until_date else None,
+            }
+
             await AuditRepository.log_action(
                 group_id=chat_id,
                 operator_id=operator_id,
                 action="mute",
                 target_user_id=user_id,
-                details={
-                    "duration": duration,
-                    "reason": reason,
-                    "until": until_date.isoformat() if until_date else None,
-                },
+                details=details,
             )
 
             logger.info(
@@ -268,7 +280,7 @@ class ModerationService:
             )
 
             # 记录日志
-            details = {"reason": reason} if reason else {}
+            details: dict[str, str | bool] = {"reason": reason} if reason else {}
             if revoke_messages:
                 details["revoke_messages"] = True
 
@@ -359,6 +371,8 @@ class ModerationService:
         """
         try:
             # 验证目标用户不是管理员
+            not_admin: bool
+            error_msg: str | None
             not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
             if not not_admin:
                 logger.warning(f"尝试警告管理员 {user_id}，操作已阻止")

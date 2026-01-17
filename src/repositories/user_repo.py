@@ -83,7 +83,7 @@ class UserRepository:
             )
             await session.commit()
             # 返回删除的行数
-            return result.rowcount or 0
+            return result.rowcount or 0  # type: ignore[attr-defined]
 
     @staticmethod
     async def get_latest_warning(group_id: int, user_id: int) -> Warning | None:

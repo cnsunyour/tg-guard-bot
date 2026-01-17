@@ -1,0 +1,13 @@
+{
+    "name": "tg-guard/altcha-backend",
+    "description": "ALTCHA PHP 后端 for Telegram Guard Bot",
+    "type": "project",
+    "require": {
+        "php": ">=7.4",
+        "altcha-org/altcha": "^1.0"
+    },
+    "config": {
+        "optimize-autoloader": true
+    },
+    "minimum-stability": "stable"
+}
