@@ -1723,6 +1723,288 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
         return
 
 
+@router.edited_message(F.text)
+async def on_edited_text_message(message: Message, bot: Bot) -> None:
+    """处理编辑后的文本消息，检测垃圾
+
+    场景：垃圾发送者先发普通消息，然后编辑成垃圾信息
+    """
+    # 跳过私聊消息
+    if message.chat.type == "private":
+        return
+
+    # 跳过已注册的命令消息
+    if message.text and message.text.startswith("/"):
+        command_match = re.match(r"^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)", message.text or "")
+        if command_match:
+            command_name = command_match.group(1)
+            if command_name in _registered_commands:
+                return
+
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        return
+
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    if not message.from_user:
+        return
+
+    # 跳过超级管理员消息
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    # 跳过群组管理员消息
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组是否启用反垃圾
+    try:
+        group = await GroupRepository.get(message.chat.id)
+        if group and not group.antispam_enabled:
+            return
+    except Exception as e:
+        logger.debug(f"检查管理员权限失败（非关键）: {e}")
+        group = None
+
+    # 注意：编辑消息不记录活跃度，因为原始消息已经记录过了
+    # 直接进行垃圾检测
+
+    # 检查是否是外部转发或带链接的消息
+    is_special_message = is_external_forward(message) or has_url_entities(message)
+
+    # 获取活跃度（用于降低检测阈值）
+    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
+    activity = None
+    if activity_system_enabled:
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled and activity is not None:
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        if global_threshold > 0:
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过编辑消息垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            return
+
+    # 获取检测器
+    detector = get_detector()
+
+    # 检测垃圾（传入活跃度）
+    result = await detector.detect_with_ai(
+        text=message.text or "",
+        user_id=message.from_user.id,
+        chat_id=message.chat.id,
+        activity=activity,
+    )
+
+    # 如果检测到垃圾
+    if result["is_spam"]:
+        logger.warning(
+            f"检测到编辑消息为垃圾信息 [群组:{message.chat.id}] "
+            f"[用户:{message.from_user.id}] "
+            f"阶段: {result['stage']}, "
+            f"置信度: {result['confidence']:.2f}, "
+            f"原因: {', '.join(result['reasons'])}"
+        )
+
+        try:
+            # 删除垃圾消息
+            await message.delete()
+
+            # 根据置信度决定处罚措施
+            if result["confidence"] >= settings.spam_high_confidence_threshold:
+                # 高置信度：踢出并封禁 1 小时
+                success, error_msg = await ModerationService.ban_user_temporarily(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,
+                    duration=60,  # 60 分钟 = 1 小时
+                    reason=f"编辑消息为垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                )
+                punishment_text = "踢出并封禁 1 小时"
+            else:
+                # 低置信度：禁言 10 分钟
+                success, error_msg = await ModerationService.mute_user(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=message.from_user.id,
+                    operator_id=bot.id,
+                    duration=10,
+                    reason=f"编辑消息为垃圾信息: {', '.join(result['reasons'])}",
+                )
+                punishment_text = "禁言 10 分钟"
+
+            if success:
+                # 缓存原始消息文本，用于管理员反馈
+                redis = get_redis()
+                text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
+                await redis.setex(text_cache_key, 3600, message.text or "")
+
+                # 发送提示消息（包含管理员反馈按钮）
+                message_id_str = str(message.message_id)
+
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ 误判",
+                                callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ 确认垃圾",
+                                callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
+                            ),
+                        ]
+                    ]
+                )
+
+                alert_msg = await message.answer(
+                    f"🚫 检测到编辑消息为垃圾信息并已处理\n\n"
+                    f"用户: {format_user_mention(message.from_user)}\n"
+                    f"原因: {', '.join(result['reasons'])}\n"
+                    f"置信度: {result['confidence']:.2%}\n"
+                    f"处罚: {punishment_text}",
+                    reply_markup=keyboard,
+                )
+                await auto_delete_message(alert_msg)
+
+                # 记录反馈
+                await detector.add_feedback(
+                    text=message.text or "",
+                    is_spam=True,
+                    labeled_by=bot.id,
+                    confidence=result["confidence"],
+                )
+
+            else:
+                logger.error(f"处罚用户失败: {error_msg}")
+
+        except Exception as e:
+            logger.error(f"处理编辑的垃圾消息失败: {e}")
+
+
+@router.edited_message(F.photo)
+async def on_edited_photo_message(message: Message, bot: Bot) -> None:
+    """处理编辑后的图片消息（检测 caption 中的垃圾文字）
+
+    注意：Telegram 不允许更换图片，只能编辑 caption
+    """
+    # 跳过私聊消息
+    if message.chat.type == "private":
+        return
+
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        return
+
+    # ✅ 检测并处理频道马甲消息
+    if await check_and_handle_channel_as_sender(message, bot):
+        return
+
+    if not message.from_user:
+        return
+
+    # 跳过超级管理员消息
+    if message.from_user.id in settings.admin_ids:
+        return
+
+    # 跳过群组管理员消息
+    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        return
+
+    # 检查群组是否启用反垃圾
+    try:
+        group = await GroupRepository.get(message.chat.id)
+        if group and not group.antispam_enabled:
+            return
+    except Exception as e:
+        logger.debug(f"获取群组配置失败（非关键）: {e}")
+        group = None
+
+    # 如果有 caption，检测 caption 文字
+    if message.caption:
+        # 获取活跃度（用于降低检测阈值）
+        activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
+        activity = None
+        if activity_system_enabled:
+            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+
+        # 检测器
+        detector = get_detector()
+
+        # 检测 caption 中的垃圾文字
+        result = await detector.detect_with_ai(
+            text=message.caption,
+            user_id=message.from_user.id,
+            chat_id=message.chat.id,
+            activity=activity,
+        )
+
+        if result["is_spam"]:
+            logger.warning(
+                f"检测到编辑图片 caption 为垃圾信息 [群组:{message.chat.id}] "
+                f"[用户:{message.from_user.id}] "
+                f"置信度: {result['confidence']:.2f}"
+            )
+
+            try:
+                # 删除消息
+                await message.delete()
+
+                # 根据置信度决定处罚
+                if result["confidence"] >= settings.spam_high_confidence_threshold:
+                    success, error_msg = await ModerationService.ban_user_temporarily(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=60,
+                        reason=f"编辑图片标题为垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "踢出并封禁 1 小时"
+                else:
+                    success, error_msg = await ModerationService.mute_user(
+                        bot=bot,
+                        chat_id=message.chat.id,
+                        user_id=message.from_user.id,
+                        operator_id=bot.id,
+                        duration=10,
+                        reason=f"编辑图片标题为垃圾信息: {', '.join(result['reasons'])}",
+                    )
+                    punishment_text = "禁言 10 分钟"
+
+                if success:
+                    # 发送提示
+                    alert_msg = await message.answer(
+                        f"🚫 检测到编辑图片标题为垃圾信息并已处理\n\n"
+                        f"用户: {format_user_mention(message.from_user)}\n"
+                        f"原因: {', '.join(result['reasons'])}\n"
+                        f"置信度: {result['confidence']:.2%}\n"
+                        f"处罚: {punishment_text}"
+                    )
+                    await auto_delete_message(alert_msg)
+
+            except Exception as e:
+                logger.error(f"处理编辑图片标题垃圾失败: {e}")
+
+
 @router.callback_query(F.data.startswith("spam_feedback:"))
 async def on_spam_feedback(callback: CallbackQuery) -> None:
     """处理管理员反馈
