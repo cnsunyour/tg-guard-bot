@@ -145,7 +145,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     from aiogram.types import ErrorEvent
 
     @dp.error()
-    async def global_error_handler(event: ErrorEvent):  # noqa: F841
+    async def global_error_handler(event: ErrorEvent):
         """全局错误处理器：网络错误仅记录日志，其他错误上报 Sentry"""
         exception = event.exception
 

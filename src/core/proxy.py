@@ -8,13 +8,12 @@
 """
 
 import os
-from typing import Tuple
 from urllib.parse import urlparse
 
 from loguru import logger
 
 
-def get_proxy_config() -> Tuple[str, str, int] | None:
+def get_proxy_config() -> tuple[str, str, int] | None:
     """从环境变量中获取代理配置
 
     优先级：
@@ -65,7 +64,7 @@ def get_proxy_config() -> Tuple[str, str, int] | None:
     return None
 
 
-def _parse_proxy_url(proxy_url: str) -> Tuple[str, str, int] | None:
+def _parse_proxy_url(proxy_url: str) -> tuple[str, str, int] | None:
     """解析代理 URL
 
     Args:
@@ -121,7 +120,7 @@ def _parse_proxy_url(proxy_url: str) -> Tuple[str, str, int] | None:
         return None
 
 
-def get_telethon_proxy() -> Tuple[str, str, int] | None:
+def get_telethon_proxy() -> tuple[str, str, int] | None:
     """获取 Telethon 客户端的代理配置
 
     Returns:
