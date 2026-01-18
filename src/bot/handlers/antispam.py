@@ -1938,7 +1938,9 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
     # 如果有 caption，检测 caption 文字
     if message.caption:
         # 获取活跃度（用于降低检测阈值）
-        activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
+        activity_system_enabled = settings.activity_enabled and (
+            not group or group.activity_enabled
+        )
         activity = None
         if activity_system_enabled:
             activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)

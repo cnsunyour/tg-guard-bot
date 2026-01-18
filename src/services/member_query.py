@@ -117,12 +117,8 @@ class MemberQueryService:
                 )
             else:
                 # 等待时间太长或重试次数过多，抛出异常
-                logger.error(
-                    f"FloodWait 时间过长 ({wait_seconds}s) 或重试次数过多，请稍后再试"
-                )
-                raise Exception(
-                    f"获取成员列表受限，请等待 {wait_seconds} 秒后重试"
-                ) from e
+                logger.error(f"FloodWait 时间过长 ({wait_seconds}s) 或重试次数过多，请稍后再试")
+                raise Exception(f"获取成员列表受限，请等待 {wait_seconds} 秒后重试") from e
 
         except Exception as e:
             logger.error(f"获取群组成员失败: {e}")

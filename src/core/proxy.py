@@ -113,6 +113,11 @@ def _parse_proxy_url(proxy_url: str) -> tuple[str, str, int] | None:
                 port = 8080
             logger.debug(f"使用默认端口: {port}")
 
+        # 类型保护：确保 port 不为 None
+        if port is None:
+            logger.warning(f"无法确定代理端口: {proxy_url}")
+            return None
+
         return (proxy_type, host, port)
 
     except Exception as e:

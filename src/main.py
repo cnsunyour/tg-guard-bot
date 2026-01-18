@@ -150,7 +150,9 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         exception = event.exception
 
         # 网络临时性错误：仅记录日志，不上报 Sentry
-        if isinstance(exception, (TelegramNetworkError, ClientConnectionError, ServerDisconnectedError)):
+        if isinstance(
+            exception, (TelegramNetworkError, ClientConnectionError, ServerDisconnectedError)
+        ):
             logger.warning(f"Handler 网络错误: {type(exception).__name__}: {exception}")
             return True  # 标记为已处理，不再传播
 
