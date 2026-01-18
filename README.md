@@ -51,10 +51,12 @@
   - 使用 Telethon 流式处理，支持 10 万+成员的超大群组
 
 ### 🚨 举报系统
-- **用户举报** `/spam` - 普通用户举报垃圾消息（管理员审核）
+- **用户举报** `/spam` 或 `/report` - 普通用户举报垃圾消息（管理员审核）
 - **管理员处理** `/spam` - 管理员直接封禁并加入训练库
 - **查看举报** `/reports` - 管理员查看待处理举报列表
 - **审核举报** `/approve <id>` - 管理员批准举报并执行封禁
+- **拒绝举报** `/reject <id>` - 管理员拒绝举报
+- **误判反馈** `/notspam` - 标记非垃圾，帮助优化模型
 - **防滥用限流** - 用户每天最多举报 10 次
 - **消息删除** - 回复消息执行处罚时自动删除违规消息
 
@@ -73,6 +75,8 @@
 
 ### ⚡ 其他功能
 - **群组白名单** - 只在授权群组中提供服务，自动退出未授权群组
+- **反频道马甲** - 禁止用户以频道身份发言，避免广告滥用
+- **消息删除工具** - 批量删除消息（delbefore/delafter/delrange）
 - **健康监控** `/health` - 系统状态和性能指标
 - **统计信息** `/stats` - 反垃圾统计和运行信息
 - **自动备份** - 数据库定时备份
@@ -210,17 +214,29 @@ make help            # 显示所有命令
 - `/help` - 查看帮助信息
 
 ### 管理员命令
+
+**群组设置**
+- `/groupset` - 群组设置统一入口（验证、反垃圾、活跃度等）
 - `/setverify` - 设置验证方式
 - `/settimeout` - 设置验证超时时间
 - `/verifyconfig` - 查看验证配置
+
+**成员管理**
 - `/kick @user` - 踢出成员
-- `/mute @user [时长]` - 禁言成员
+- `/mute @user [时长]` - 禁言成员（支持：30m/2h/1d/永久）
 - `/unmute @user` - 解除禁言
 - `/ban @user` - 封禁成员
 - `/unban @user` - 解除封禁
-- `/warn @user [原因]` - 警告成员
+- `/warn @user [原因]` - 警告成员（3次自动禁言24小时）
 - `/warnings @user` - 查看警告记录
 - `/clearwarnings @user` - 清除警告
+
+**消息管理**
+- `/delbefore` - 回复某消息，删除该消息之前的所有消息
+- `/delafter` - 回复某消息，删除该消息之后的所有消息
+- `/delrange` - 回复两条消息，删除这两条消息之间的所有消息
+
+**用户清理**
 - `/cleanup` - 清理不活跃用户（安全模式）
   - `/cleanup` - 预览清理
   - `/cleanup run` - 执行清理（已删除 + 很久不上线）
@@ -228,17 +244,29 @@ make help            # 显示所有命令
   - `/cleanup inactive` - 仅清理很久不上线的用户
   - `/cleanup refresh` - 强制刷新缓存
   - `/cleanup cache` - 查看缓存状态
-- `/spam` - 举报/标记垃圾消息（普通用户创建举报，管理员直接封禁）
+
+**举报与反垃圾**
+- `/spam` 或 `/report` - 举报/标记垃圾消息
+  - 普通用户：创建举报，等待管理员审核
+  - 管理员：直接封禁并加入训练库
+- `/notspam` - 标记非垃圾（误判反馈，帮助优化模型）
 - `/reports` - 查看待处理举报列表
-- `/approve <id>` - 处理举报并执行封禁
-- `/antispam` - 配置反垃圾
+- `/approve <id>` - 批准举报并执行封禁
+- `/reject <id>` - 拒绝举报
+- `/antispam` - 配置反垃圾（阈值、惩罚力度等）
+- `/antichannel` - 配置反频道马甲（禁止频道身份发言）
+
+**活跃度系统**
+- `/activity` - 活跃度系统开关（启用/禁用）
+- `/activityskip [阈值]` - 查看或设置活跃度跳过垃圾检测的阈值
 
 ### 超级管理员命令
 - `/health` - 查看系统健康状态
 - `/stats` - 查看统计信息
-- `/whitelist_add <chat_id> [群组名称]` - 添加群组到白名单
-- `/whitelist_remove <chat_id>` - 从白名单移除群组
-- `/whitelist_list` - 查看所有白名单群组
+- `/whitelist` - 白名单管理
+  - `/whitelist` - 列出所有白名单群组
+  - `/whitelist add <chat_id> [群组名称]` - 添加群组到白名单
+  - `/whitelist remove <chat_id>` - 从白名单移除群组
 
 ## 🔒 群组白名单
 
@@ -263,17 +291,17 @@ make dev-logs  # 查看日志中的 chat_id
 
 #### 添加群组到白名单
 ```bash
-/whitelist_add -1001234567890 测试群组
+/whitelist add -1001234567890 测试群组
 ```
 
 #### 移除群组
 ```bash
-/whitelist_remove -1001234567890
+/whitelist remove -1001234567890
 ```
 
 #### 查看白名单
 ```bash
-/whitelist_list
+/whitelist
 ```
 
 ### 注意事项
@@ -364,6 +392,23 @@ tg-guard-bot/
 | `DB_PASSWORD` | 数据库密码 | postgres | ❌ |
 | `REDIS_PASSWORD` | Redis 密码 | 空 | ❌ |
 | `LOG_LEVEL` | 日志级别 | INFO | ❌ |
+
+#### Telethon 配置（用于大群管理）
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `TELETHON_API_ID` | Telegram API ID（从 my.telegram.org 获取） | - | ✅ (使用 /cleanup 时) |
+| `TELETHON_API_HASH` | Telegram API Hash | - | ✅ (使用 /cleanup 时) |
+| `TELETHON_SESSION_NAME` | Session 文件名 | bot_session | ❌ |
+
+**注意**：首次启动时会提示登录手机号并输入验证码，生成 session 文件后后续无需再次登录。
+
+#### 活跃度系统配置
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `ACTIVITY_ENABLED` | 全局启用活跃度系统 | true | ❌ |
+| `ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD` | 活跃度跳过垃圾检测阈值（0=禁用） | 0 | ❌ |
 
 #### 反垃圾配置
 
