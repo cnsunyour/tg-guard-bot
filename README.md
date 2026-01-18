@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="assets/logo/banner-horizontal.svg" alt="Telegram Guard Bot" width="800"/>
+</p>
+
 # Telegram Guard Bot
 
 一个功能强大的 Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾功能。
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.0.1)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-brightgreen.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -26,9 +30,10 @@
     - 🔒 MTCaptcha - 自适应无感验证
     - ⚡ ALTCHA - 开源 Proof-of-Work 验证（自托管）
   - 🎲 随机验证（自动选择上述已启用的类型）
+- **私聊验证系统**：避免群内验证消息轰炸，验证在私聊中完成
+- **共享引导消息机制**：30秒内多用户未启动 Bot，只发送一条群内引导消息（减少 90% 群内消息）
 - **可配置超时**：自定义验证时长（默认 120 秒，范围 30-300 秒）
 - **自动处理**：超时或失败自动踢出并封禁 1 小时
-- **私聊验证**：避免群内验证消息轰炸
 - **统一 WebApp**：所有外部 CAPTCHA 使用统一 Telegram WebApp 界面
 
 ### 👮 群管理
@@ -40,6 +45,10 @@
 - **警告** `/warn` - 累计警告（3次自动禁言24小时）
 - **查看警告** `/warnings`
 - **清除警告** `/clearwarnings`
+- **清理不活跃用户** `/cleanup` - 清理已删除账号和很久不上线的用户（安全模式）
+  - 支持预览、执行、分类清理
+  - Redis 缓存成员列表（1小时 TTL）
+  - 使用 Telethon 流式处理，支持 10 万+成员的超大群组
 
 ### 🚨 举报系统
 - **用户举报** `/spam` - 普通用户举报垃圾消息（管理员审核）
@@ -53,7 +62,13 @@
 - **Stage 1: 规则引擎** - 快速过滤关键词、链接、联系方式（~70% 垃圾）
 - **Stage 2: ML 分类器** - TF-IDF + SVM 捕获变体（~90% 垃圾）
 - **Stage 3: 语义分析** - bge-small-zh-v1.5 Embedding（~98% 垃圾）
+- **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段（支持文本和图片标题）
 - **图片 OCR** - PaddleOCR 检测图片广告（可选，需 4GB RAM）
+- **活跃度系统** - 动态信任机制：
+  - 文本消息 +1 活跃度
+  - 非文本消息（图片/贴纸/转发/链接）-2 活跃度
+  - 高活跃度用户可跳过垃圾检测
+  - 低活跃度用户无法发送非文本消息
 - **管理员反馈** - 误判纠正，持续优化
 
 ### ⚡ 其他功能
@@ -69,6 +84,7 @@
 |------|------|------|
 | Python | 3.12+ | 异步编程 |
 | aiogram | 3.x | Telegram Bot 框架 |
+| Telethon | 1.36+ | Telegram Client API（用于大群成员管理） |
 | PostgreSQL | 16 | 主数据库 |
 | Redis | 7 | 缓存和队列 |
 | SQLAlchemy | 2.0 | ORM |
@@ -205,6 +221,13 @@ make help            # 显示所有命令
 - `/warn @user [原因]` - 警告成员
 - `/warnings @user` - 查看警告记录
 - `/clearwarnings @user` - 清除警告
+- `/cleanup` - 清理不活跃用户（安全模式）
+  - `/cleanup` - 预览清理
+  - `/cleanup run` - 执行清理（已删除 + 很久不上线）
+  - `/cleanup deleted` - 仅清理已删除用户
+  - `/cleanup inactive` - 仅清理很久不上线的用户
+  - `/cleanup refresh` - 强制刷新缓存
+  - `/cleanup cache` - 查看缓存状态
 - `/spam` - 举报/标记垃圾消息（普通用户创建举报，管理员直接封禁）
 - `/reports` - 查看待处理举报列表
 - `/approve <id>` - 处理举报并执行封禁
@@ -269,13 +292,16 @@ tg-guard-bot/
 │   │   │   ├── verification.py # 入群验证
 │   │   │   ├── moderation.py   # 群管理命令
 │   │   │   ├── antispam.py     # 反垃圾处理
+│   │   │   ├── cleanup.py      # 用户清理命令
 │   │   │   └── admin.py        # 管理员命令
 │   │   ├── middlewares/        # 中间件
 │   │   └── filters/            # 自定义过滤器
 │   ├── services/               # 业务逻辑层
 │   │   ├── verification.py     # 验证服务
 │   │   ├── moderation.py       # 群管理服务
-│   │   └── spam_detector.py    # 反垃圾服务
+│   │   ├── spam_detector.py    # 反垃圾服务
+│   │   ├── cleanup.py          # 清理服务
+│   │   └── member_query.py     # 成员查询服务（Telethon）
 │   ├── ml/                     # AI/ML 模块
 │   │   ├── rule_engine.py      # 规则引擎
 │   │   ├── classifier.py       # ML 分类器
@@ -296,6 +322,7 @@ tg-guard-bot/
 │       ├── config.py           # 配置管理
 │       ├── database.py         # DB 连接
 │       ├── redis.py            # Redis 连接
+│       ├── telethon_client.py  # Telethon 客户端（大群管理）
 │       └── health.py           # 健康检查
 ├── captcha-webapp/             # 统一 CAPTCHA WebApp
 │   ├── index.html              # 前端页面
