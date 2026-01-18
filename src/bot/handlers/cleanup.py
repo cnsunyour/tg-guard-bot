@@ -29,22 +29,26 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
       /cleanup                    - 预览清理（显示待清理用户数量）
       /cleanup run                - 执行清理（已删除 + 很久不上线）
       /cleanup deleted            - 仅清理已删除用户
-      /cleanup inactive           - 仅清理很久不上线的用户
+      /cleanup inactive           - 仅清理很久不上线的用户（安全模式）
       /cleanup refresh            - 强制刷新成员缓存
       /cleanup cache              - 查看缓存状态
+
+    注意：
+      - inactive 子命令已简化为安全模式，只清理确实应该被清理的用户
+      - 避免误删暂时不活跃但仍正常的群组成员
     """
     if not message.from_user or not message.chat:
-        return
+        return None
 
     # 检查是否在群组中
     if message.chat.type not in ["group", "supergroup"]:
         await message.answer("❌ 此命令只能在群组中使用")
-        return
+        return None
 
     # 检查权限
     if not await check_admin_permission(message, bot):
         await message.answer("❌ 只有群组管理员可以使用此命令")
-        return
+        return None
 
     # 检查 Telethon 客户端
     telethon_client = get_telethon_client()
@@ -52,11 +56,11 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
         await message.answer(
             "❌ Telethon 客户端未启用或未初始化\n\n请联系管理员配置 Telethon 并生成 session 文件"
         )
-        return
+        return None
 
     # 解析参数
     if not message.text:
-        return
+        return None
 
     args = message.text.split()
     subcommand = args[1].lower() if len(args) > 1 else "preview"
@@ -93,22 +97,24 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
             "❌ 未知子命令\n\n"
             "<b>用法</b>:\n"
             "• /cleanup - 预览清理\n"
-            "• /cleanup run - 执行清理\n"
+            "• /cleanup run - 执行清理（已删除 + 很久不上线）\n"
             "• /cleanup deleted - 仅清理已删除用户\n"
-            "• /cleanup inactive - 仅清理不活跃用户\n"
+            "• /cleanup inactive - 仅清理很久不上线的用户（安全模式）\n"
             "• /cleanup refresh - 刷新缓存\n"
             "• /cleanup cache - 查看缓存状态"
         )
+        return None
 
     except Exception as e:
         logger.error(f"清理命令执行失败: {e}")
         await message.answer(f"❌ 执行失败: {escape_html(str(e))}")
+        return None
 
 
 async def _handle_refresh(message: Message, member_query: MemberQueryService) -> Message | None:
     """处理刷新缓存"""
     if not message.chat:
-        return
+        return None
 
     status_msg = await message.answer("🔄 正在刷新成员缓存...")
 
@@ -149,7 +155,7 @@ async def _handle_cache_info(message: Message, member_query: MemberQueryService)
 async def _handle_preview(message: Message, member_query: MemberQueryService) -> Message | None:
     """处理预览清理"""
     if not message.chat:
-        return
+        return None
 
     status_msg = await message.answer("🔍 正在扫描群组成员...")
 
@@ -180,10 +186,12 @@ async def _handle_preview(message: Message, member_query: MemberQueryService) ->
         return status_msg  # 返回消息对象以便中间件自动删除
 
 
-async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryService) -> Message | None:
+async def _handle_run(
+    message: Message, bot: Bot, member_query: MemberQueryService
+) -> Message | None:
     """处理执行完整清理"""
     if not message.chat or not message.from_user:
-        return
+        return None
 
     status_msg = await message.answer("🔍 正在扫描群组成员...")
 
@@ -242,10 +250,12 @@ async def _handle_run(message: Message, bot: Bot, member_query: MemberQueryServi
         return status_msg  # 返回消息对象以便中间件自动删除
 
 
-async def _handle_deleted(message: Message, bot: Bot, member_query: MemberQueryService) -> Message | None:
+async def _handle_deleted(
+    message: Message, bot: Bot, member_query: MemberQueryService
+) -> Message | None:
     """处理仅清理已删除用户"""
     if not message.chat or not message.from_user:
-        return
+        return None
 
     status_msg = await message.answer("🔍 正在扫描已删除用户...")
 
@@ -279,7 +289,7 @@ async def _handle_inactive(
 ) -> Message | None:
     """处理清理不活跃用户"""
     if not message.chat or not message.from_user:
-        return
+        return None
 
     status_name = {
         "long_time_ago": "很久不上线",

@@ -1772,9 +1772,6 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
     # 注意：编辑消息不记录活跃度，因为原始消息已经记录过了
     # 直接进行垃圾检测
 
-    # 检查是否是外部转发或带链接的消息
-    is_special_message = is_external_forward(message) or has_url_entities(message)
-
     # 获取活跃度（用于降低检测阈值）
     activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
     activity = None
@@ -1941,7 +1938,9 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
     # 如果有 caption，检测 caption 文字
     if message.caption:
         # 获取活跃度（用于降低检测阈值）
-        activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
+        activity_system_enabled = settings.activity_enabled and (
+            not group or group.activity_enabled
+        )
         activity = None
         if activity_system_enabled:
             activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
@@ -1970,7 +1969,7 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
 
                 # 根据置信度决定处罚
                 if result["confidence"] >= settings.spam_high_confidence_threshold:
-                    success, error_msg = await ModerationService.ban_user_temporarily(
+                    success, _ = await ModerationService.ban_user_temporarily(
                         bot=bot,
                         chat_id=message.chat.id,
                         user_id=message.from_user.id,
@@ -1980,7 +1979,7 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
                     )
                     punishment_text = "踢出并封禁 1 小时"
                 else:
-                    success, error_msg = await ModerationService.mute_user(
+                    success, _ = await ModerationService.mute_user(
                         bot=bot,
                         chat_id=message.chat.id,
                         user_id=message.from_user.id,
