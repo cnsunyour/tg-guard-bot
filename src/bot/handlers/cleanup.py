@@ -29,9 +29,13 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
       /cleanup                    - 预览清理（显示待清理用户数量）
       /cleanup run                - 执行清理（已删除 + 很久不上线）
       /cleanup deleted            - 仅清理已删除用户
-      /cleanup inactive           - 仅清理很久不上线的用户
+      /cleanup inactive           - 仅清理很久不上线的用户（安全模式）
       /cleanup refresh            - 强制刷新成员缓存
       /cleanup cache              - 查看缓存状态
+
+    注意：
+      - inactive 子命令已简化为安全模式，只清理确实应该被清理的用户
+      - 避免误删暂时不活跃但仍正常的群组成员
     """
     if not message.from_user or not message.chat:
         return
@@ -93,9 +97,9 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
             "❌ 未知子命令\n\n"
             "<b>用法</b>:\n"
             "• /cleanup - 预览清理\n"
-            "• /cleanup run - 执行清理\n"
+            "• /cleanup run - 执行清理（已删除 + 很久不上线）\n"
             "• /cleanup deleted - 仅清理已删除用户\n"
-            "• /cleanup inactive - 仅清理不活跃用户\n"
+            "• /cleanup inactive - 仅清理很久不上线的用户（安全模式）\n"
             "• /cleanup refresh - 刷新缓存\n"
             "• /cleanup cache - 查看缓存状态"
         )
