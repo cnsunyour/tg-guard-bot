@@ -69,6 +69,8 @@ dependencies = [
     "httpx>=0.26.0",
     "urllib3>=2.6.3",  # ⚠️ 重要：修复 CVE-2026-21441（解压缩炸弹漏洞）
     "psutil>=5.9.0",  # 系统监控
+    "filelock>=3.20.3",  # ⚠️ 重要：修复 CVE-2026-22701（TOCTOU 竞态条件漏洞）
+    "pyasn1>=0.6.2",  # ⚠️ 重要：修复 CVE-2026-23490（DoS 内存耗尽漏洞）
 ]
 
 [project.urls]
