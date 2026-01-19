@@ -29,6 +29,7 @@ services:
 
     # 开发环境：启用调试日志
     environment:
+      - SENTRY_ENVIRONMENT=development
       - LOG_LEVEL=DEBUG
       - DEBUG=true
       - PYTHONUNBUFFERED=1  # 实时显示输出
