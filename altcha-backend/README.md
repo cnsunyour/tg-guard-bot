@@ -197,7 +197,7 @@ CAPTCHA_SIGNATURE_KEY=<64字符hex密钥>
   "payload": "altcha_solution",
   "chat_id": 123456,
   "user_id": 789012,
-  "verify_token": "abc123def456"
+  "verify_token": "abc123def456"  # gitleaks:allow - 示例数据
 }
 ```
 
