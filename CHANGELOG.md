@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.2] - 2026-01-19
+
+### 安全修复
+- **依赖包安全漏洞修复**：
+  - 升级 `filelock` 3.20.1 → 3.20.3（修复 CVE-2026-22701 TOCTOU 竞态条件漏洞）
+  - 升级 `pyasn1` 0.6.1 → 0.6.2（修复 CVE-2026-23490 DoS 内存耗尽漏洞）
+
+### 配置优化
+- **Gitleaks 双层防护**：
+  - 添加 `.gitleaksignore` 忽略历史 commit 中的示例数据
+  - 在 README 中添加 `# gitleaks:allow` 内联注释防止未来误报
+  - 精确标记每一行示例数据，避免整个文件白名单化
+
+### 验证通过
+- ✅ pip-audit: No known vulnerabilities found
+- ✅ gitleaks: No leaks found
+- ✅ make lint: All checks passed
+
 ## [1.0.1] - 2026-01-19
 
 ### 文档更新
