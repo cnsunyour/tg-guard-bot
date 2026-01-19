@@ -1,0 +1,15 @@
+# gitleaks 忽略规则
+# 用于忽略历史 commit 中的示例数据（非真实敏感信息）
+#
+# 注意：
+# 1. 这些 fingerprint 只对旧的 commit 有效
+# 2. 未来修改这些文件时，依靠代码中的 "# gitleaks:allow" 注释来白名单化
+# 3. 这样既能忽略历史记录，又能确保未来修改后依然不会误报
+
+# altcha-backend README 中的示例 verify_token (commit: bac5d4bf)
+bac5d4bf573a1abf0896296d68aff6b970b85c41:altcha-backend/README.md:generic-api-key:200
+
+# captcha-webapp README 中的示例 sitekey (commit: e373041a)
+e373041a630fe3ee3031510136a1a4db31bedef7:captcha-webapp/README.md:generic-api-key:71
+e373041a630fe3ee3031510136a1a4db31bedef7:captcha-webapp/README.md:generic-api-key:72
+e373041a630fe3ee3031510136a1a4db31bedef7:captcha-webapp/README.md:generic-api-key:147

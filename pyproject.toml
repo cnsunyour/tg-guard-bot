@@ -3,7 +3,7 @@
 # ============================================================================
 [project]
 name = "tg-guard-bot"
-version = "1.0.1"
+version = "1.0.2"
 description = "Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾"
 authors = [{name = "tg-guard-bot"}]
 readme = "README.md"
@@ -69,6 +69,8 @@ dependencies = [
     "httpx>=0.26.0",
     "urllib3>=2.6.3",  # ⚠️ 重要：修复 CVE-2026-21441（解压缩炸弹漏洞）
     "psutil>=5.9.0",  # 系统监控
+    "filelock>=3.20.3",  # ⚠️ 重要：修复 CVE-2026-22701（TOCTOU 竞态条件漏洞）
+    "pyasn1>=0.6.2",  # ⚠️ 重要：修复 CVE-2026-23490（DoS 内存耗尽漏洞）
 ]
 
 [project.urls]

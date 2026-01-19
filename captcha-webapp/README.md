@@ -68,8 +68,8 @@ wrangler pages deploy . --project-name=tg-guard-captcha
 **示例**：
 ```json
 [
-  {"sitekey":"FCMAV1234567890","apikey":"fc-sk-abc123"},
-  {"sitekey":"FCMAV0987654321","apikey":"fc-sk-xyz789"}
+  {"sitekey":"FCMAV1234567890","apikey":"fc-sk-abc123"},  # gitleaks:allow - 示例数据
+  {"sitekey":"FCMAV0987654321","apikey":"fc-sk-xyz789"}  # gitleaks:allow - 示例数据
 ]
 ```
 
@@ -144,7 +144,7 @@ GET /api/config?provider=friendly&key_index=0
 ```json
 {
   "success": true,
-  "site_key": "FCMAV1234567890"
+  "site_key": "FCMAV1234567890"  # gitleaks:allow - 示例数据
 }
 ```
 
