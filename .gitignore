@@ -35,6 +35,10 @@ ENV/
 *~
 .DS_Store
 
+# 工具配置
+.serena/
+.tool-versions
+
 # 环境变量
 .env
 .env.local
