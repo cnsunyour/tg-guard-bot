@@ -118,22 +118,11 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
                 else:
                     # 最后一次重试也失败
                     logger.error(f"AI 检测失败，已达最大重试次数 [error={e!s}]")
-                    return {
-                        "is_spam": False,
-                        "confidence": 0.0,
-                        "stage": "ai_api",
-                        "reasons": ["AI 检测失败"],
-                        "details": {"error": str(e), "attempts": attempt + 1},
-                    }
+                    # ❌ 不要返回 is_spam: False，而是抛出异常让上层处理
+                    raise RuntimeError(f"AI 检测失败: {e!s}") from e
 
-        # 不应该到这里
-        return {
-            "is_spam": False,
-            "confidence": 0.0,
-            "stage": "ai_api",
-            "reasons": ["未知错误"],
-            "details": {},
-        }
+        # 不应该到这里（所有重试都失败）
+        raise RuntimeError("AI 检测失败：所有重试已耗尽")
 
     async def _call_api(self, text: str) -> dict[str, Any]:
         """调用 OpenAI 兼容 API
