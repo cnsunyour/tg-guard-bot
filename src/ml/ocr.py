@@ -101,7 +101,7 @@ class OCRExtractor:
             texts = []
             for detection in result:
                 # detection 格式: (bbox, text, confidence)
-                bbox, text, confidence = detection
+                _bbox, text, confidence = detection
 
                 # 过滤低置信度结果
                 if confidence > 0.6:
@@ -165,7 +165,7 @@ class OCRExtractor:
             texts_with_conf = []
             for detection in result:
                 # detection 格式: (bbox, text, confidence)
-                bbox, text, confidence = detection
+                _bbox, text, confidence = detection
 
                 if confidence > 0.6:
                     texts_with_conf.append((text, confidence))
