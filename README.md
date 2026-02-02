@@ -65,7 +65,7 @@
 - **Stage 2: ML 分类器** - TF-IDF + SVM 捕获变体（~90% 垃圾）
 - **Stage 3: 语义分析** - bge-small-zh-v1.5 Embedding（~98% 垃圾）
 - **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段（支持文本和图片标题）
-- **图片 OCR** - PaddleOCR 检测图片广告（可选，需 4GB RAM）
+- **图片 OCR** - EasyOCR 检测图片广告（可选，需 4GB RAM）
 - **活跃度系统** - 动态信任机制：
   - 文本消息 +1 活跃度
   - 非文本消息（图片/贴纸/转发/链接）-2 活跃度
@@ -94,7 +94,7 @@
 | SQLAlchemy | 2.0 | ORM |
 | scikit-learn | 1.4+ | ML 分类器 |
 | fastembed | 0.3+ | 语义嵌入 |
-| PaddleOCR | 2.7+ | 图片 OCR（可选） |
+| EasyOCR | 1.7+ | 图片 OCR（可选） |
 
 ## 🚀 快速开始
 
@@ -496,7 +496,7 @@ TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
 - [x] **Phase 2**: 入群验证（7 种验证方式 + 私聊验证）
 - [x] **Phase 3**: 群管理（Kick/Mute/Ban/Warn）
 - [x] **Phase 4**: 反垃圾系统（三阶段检测管道）
-- [x] **Phase 5**: 图片 OCR（PaddleOCR）
+- [x] **Phase 5**: 图片 OCR（EasyOCR）
 - [x] **Phase 6**: 部署优化（监控/备份/文档）
 - [x] **Phase 7**: 验证系统增强（7 种验证 + 动态超时配置）
 - [x] **Phase 8**: 多 CAPTCHA 集成（Friendly/hCaptcha/MTCaptcha/ALTCHA + 统一 WebApp）
@@ -518,7 +518,7 @@ TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
 ## 🙏 致谢
 
 - [aiogram](https://github.com/aiogram/aiogram) - 优秀的 Telegram Bot 框架
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 强大的 OCR 工具
+- [EasyOCR](https://github.com/JaidedAI/EasyOCR) - 强大的 OCR 工具
 - [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) - 中文语义嵌入模型
 
 ## 📞 联系方式

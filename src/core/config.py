@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
     # OCR 功能配置
     enable_ocr: bool = Field(
-        default=False, description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
+        default=False, description="是否启用 OCR 功能（需要 4GB+ RAM）"
     )
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(

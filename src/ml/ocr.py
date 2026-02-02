@@ -1,4 +1,4 @@
-"""图片 OCR 模块 - 使用 PaddleOCR 提取图片中的文字"""
+"""图片 OCR 模块 - 使用 EasyOCR 提取图片中的文字"""
 
 from pathlib import Path
 
@@ -8,15 +8,15 @@ from src.core.utils import mask_text
 
 
 class OCRExtractor:
-    """图片文字提取器（使用 PaddleOCR）"""
+    """图片文字提取器（使用 EasyOCR）"""
 
     def __init__(self):
         """初始化 OCR 提取器"""
-        self._ocr = None
+        self._reader = None
         self._initialized = False
 
     def _init_ocr(self):
-        """延迟初始化 PaddleOCR（首次使用时才加载）"""
+        """延迟初始化 EasyOCR（首次使用时才加载）"""
         if self._initialized:
             return
 
@@ -29,27 +29,29 @@ class OCRExtractor:
             return
 
         try:
-            from paddleocr import PaddleOCR
+            import easyocr
 
-            # 初始化 PaddleOCR
-            # 参考文档: https://www.paddleocr.ai/
-            # ARM 架构 CPU 推理模式（自动下载轻量级模型）
-            logger.info("正在初始化 PaddleOCR（ARM 架构 CPU 模式，首次使用会下载轻量级模型）...")
-            self._ocr = PaddleOCR(
-                use_angle_cls=True,  # 启用文字方向分类器
-                lang="ch",  # 中文+英文模型（自动使用轻量级版本）
+            logger.info("正在初始化 EasyOCR（首次使用会下载模型，约 500MB）...")
+
+            # ✅ EasyOCR：基于 PyTorch，兼容所有 CPU，无 AVX2 要求
+            self._reader = easyocr.Reader(
+                ['ch_sim', 'en'],  # 简体中文 + 英文
+                gpu=False,  # 使用 CPU
+                model_storage_directory=str(Path.home() / '.EasyOCR' / 'model'),
+                download_enabled=True,
+                verbose=False,  # 禁用详细日志
             )
 
             self._initialized = True
-            logger.info("PaddleOCR 初始化成功")
+            logger.info("✅ EasyOCR 初始化成功")
 
         except ImportError:
             logger.warning(
-                "PaddleOCR 未安装，OCR 功能不可用。" "安装命令: pip install paddleocr paddlepaddle"
+                "EasyOCR 未安装，OCR 功能不可用。安装命令: pip install easyocr torch torchvision"
             )
             self._initialized = False
         except Exception as e:
-            logger.error(f"PaddleOCR 初始化失败: {e}")
+            logger.error(f"EasyOCR 初始化失败: {e}")
             logger.warning("OCR 功能不可用")
             self._initialized = False
 
@@ -88,24 +90,22 @@ class OCRExtractor:
                 logger.warning(f"不支持的图片格式: {image_path_obj.suffix}")
                 return None
 
-            # 执行 OCR（PaddleOCR 3.x 版本）
-            result = self._ocr.ocr(str(image_path_obj))
+            # 执行 OCR（EasyOCR）
+            result = self._reader.readtext(str(image_path_obj))
 
-            if not result or not result[0]:
+            if not result:
                 logger.debug(f"图片中未检测到文字: {image_path}")
                 return None
 
             # 提取所有文本块
             texts = []
-            for line in result[0]:
-                # line 格式: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], (text, confidence)]
-                if len(line) >= 2:
-                    text = line[1][0]  # 获取识别的文字
-                    confidence = line[1][1]  # 获取置信度
+            for detection in result:
+                # detection 格式: (bbox, text, confidence)
+                bbox, text, confidence = detection
 
-                    # 过滤低置信度结果
-                    if confidence > 0.6:
-                        texts.append(text)
+                # 过滤低置信度结果
+                if confidence > 0.6:
+                    texts.append(text)
 
             if not texts:
                 logger.debug(f"图片中未提取到有效文字: {image_path}")
@@ -137,24 +137,38 @@ class OCRExtractor:
             return None
 
         try:
-            if not Path(image_path).exists():
+            # ✅ M9: 验证路径安全性
+            image_path_obj = Path(image_path).resolve()
+
+            if not image_path_obj.exists():
                 logger.error(f"图片文件不存在: {image_path}")
                 return None
 
-            result = self._ocr.ocr(image_path)
+            # 检查是否是文件（不是目录）
+            if not image_path_obj.is_file():
+                logger.error(f"路径不是文件: {image_path}")
+                return None
 
-            if not result or not result[0]:
+            # 检查文件扩展名
+            allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+            if image_path_obj.suffix.lower() not in allowed_extensions:
+                logger.warning(f"不支持的图片格式: {image_path_obj.suffix}")
+                return None
+
+            # 执行 OCR（EasyOCR）
+            result = self._reader.readtext(str(image_path_obj))
+
+            if not result:
                 return None
 
             # 提取文本和置信度
             texts_with_conf = []
-            for line in result[0]:
-                if len(line) >= 2:
-                    text = line[1][0]
-                    confidence = line[1][1]
+            for detection in result:
+                # detection 格式: (bbox, text, confidence)
+                bbox, text, confidence = detection
 
-                    if confidence > 0.6:
-                        texts_with_conf.append((text, confidence))
+                if confidence > 0.6:
+                    texts_with_conf.append((text, confidence))
 
             return texts_with_conf if texts_with_conf else None
 
