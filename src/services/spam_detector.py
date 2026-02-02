@@ -574,6 +574,14 @@ class SpamDetector:
 
             update_last_train_count(len(texts))
 
+            # 更新上次训练时间（用于冷却时间检查）
+            import time
+
+            from src.core.redis import RedisKeys, get_redis
+
+            redis = get_redis()
+            await redis.set(RedisKeys.last_train_time(), str(time.time()))
+
             message = (
                 f"模型训练成功！\n"
                 f"准确率: {accuracy:.2%}\n"
@@ -635,11 +643,31 @@ class SpamDetector:
             (是否触发了训练, 消息)
         """
         try:
+            import time
+
+            from src.core.redis import RedisKeys, get_redis
             from src.repositories.spam_repo import get_last_train_count
 
             # 使用配置的阈值（如果未指定）
             if threshold is None:
                 threshold = settings.auto_train_threshold
+
+            # 检查冷却时间
+            redis = get_redis()
+            last_train_time_str = await redis.get(RedisKeys.last_train_time())
+
+            if last_train_time_str:
+                last_train_time = float(last_train_time_str)
+                current_time = time.time()
+                elapsed_hours = (current_time - last_train_time) / 3600
+
+                if elapsed_hours < settings.auto_train_cooldown_hours:
+                    remaining_hours = settings.auto_train_cooldown_hours - elapsed_hours
+                    logger.debug(
+                        f"训练冷却中: 已过 {elapsed_hours:.1f} 小时，"
+                        f"还需 {remaining_hours:.1f} 小时（冷却时间 {settings.auto_train_cooldown_hours} 小时）"
+                    )
+                    return False, None
 
             # 获取当前样本总数
             current_count = await SpamRepository.count_samples()
@@ -662,6 +690,8 @@ class SpamDetector:
                 success, message = await self.retrain_model(admin_ids)
 
                 if success:
+                    # 更新上次训练时间
+                    await redis.set(RedisKeys.last_train_time(), str(time.time()))
                     return True, f"自动训练成功: {message}"
                 else:
                     return False, f"自动训练失败: {message}"

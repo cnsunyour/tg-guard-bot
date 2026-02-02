@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     auto_train_threshold: int = Field(
         default=500, description="触发自动训练的新样本数阈值（默认 500）"
     )
+    auto_train_cooldown_hours: int = Field(
+        default=168, description="自动训练冷却时间（小时），默认 168 小时（7 天）"
+    )
 
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")

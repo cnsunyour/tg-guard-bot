@@ -167,3 +167,12 @@ class RedisKeys:
         TTL: 1 小时（可配置）
         """
         return f"cleanup:members:{chat_id}"
+
+    @staticmethod
+    def last_train_time() -> str:
+        """上次模型训练时间键名
+
+        用于实现自动训练冷却时间
+        存储格式: Unix 时间戳（秒）
+        """
+        return "ml:last_train_time"
