@@ -54,13 +54,16 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY migrations/ ./migrations/
 
-# 创建日志和数据目录
-RUN mkdir -p /app/logs /app/data/models
+# 创建日志、数据和缓存目录
+RUN mkdir -p /app/logs /app/data/models /app/data/.cache/fastembed
 
 # ✅ L1: 创建非 root 用户运行应用（安全最佳实践）
 RUN groupadd -r appuser && \
     useradd -r -g appuser -u 1000 appuser && \
     chown -R appuser:appuser /app
+
+# 设置 fastembed 缓存路径环境变量
+ENV FASTEMBED_CACHE_PATH=/app/data/.cache/fastembed
 
 # 切换到非特权用户
 USER appuser
