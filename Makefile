@@ -1,4 +1,14 @@
-.PHONY: help build up down restart logs clean backup restore migrate test lint format check security security-strict security-report install
+.PHONY: help install install-dev install-all deps-update \
+	test test-cov test-unit test-integration test-watch \
+	lint format format-check check \
+	security security-strict security-report ci \
+	dev-up dev-down dev-restart dev-logs \
+	prod-build prod-build-ocr prod-up prod-down prod-restart prod-logs \
+	db-migrate db-shell \
+	backup backup-postgres backup-redis backup-list backup-cleanup \
+	backup-restore-postgres backup-restore-redis backup-setup-cron \
+	train-samples train-model \
+	clean clean-all status
 
 # 默认目标
 help:
