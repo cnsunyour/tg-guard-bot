@@ -312,9 +312,7 @@ class SpamDetector:
                 )
 
                 # 检查是否触发自动训练
-                triggered, message = await self.check_and_auto_train(
-                    admin_ids=settings.admin_ids, threshold=50
-                )
+                triggered, message = await self.check_and_auto_train(admin_ids=settings.admin_ids)
 
                 if triggered:
                     logger.info(f"AI 样本触发自动训练: {message}")
@@ -372,9 +370,7 @@ class SpamDetector:
                 )
 
                 # 检查是否触发自动训练
-                triggered, message = await self.check_and_auto_train(
-                    admin_ids=settings.admin_ids, threshold=50
-                )
+                triggered, message = await self.check_and_auto_train(admin_ids=settings.admin_ids)
 
                 if triggered:
                     logger.info(f"AI 负样本触发自动训练: {message}")
@@ -627,19 +623,23 @@ class SpamDetector:
             logger.error(f"发送训练完成通知失败: {e}")
 
     async def check_and_auto_train(
-        self, admin_ids: list[int] | None = None, threshold: int = 50
+        self, admin_ids: list[int] | None = None, threshold: int | None = None
     ) -> tuple[bool, str | None]:
         """检查是否需要自动训练，如果需要则触发训练
 
         Args:
             admin_ids: 管理员 ID 列表，用于发送通知
-            threshold: 触发自动训练的新样本阈值（默认 50）
+            threshold: 触发自动训练的新样本阈值（None 则使用配置 AUTO_TRAIN_THRESHOLD）
 
         Returns:
             (是否触发了训练, 消息)
         """
         try:
             from src.repositories.spam_repo import get_last_train_count
+
+            # 使用配置的阈值（如果未指定）
+            if threshold is None:
+                threshold = settings.auto_train_threshold
 
             # 获取当前样本总数
             current_count = await SpamRepository.count_samples()

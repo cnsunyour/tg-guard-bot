@@ -2059,7 +2059,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             # 检查是否需要自动训练
             try:
                 triggered, train_message = await detector.check_and_auto_train(
-                    admin_ids=settings.admin_ids, threshold=50
+                    admin_ids=settings.admin_ids
                 )
                 if triggered:
                     logger.info(f"反馈添加后触发自动训练: {train_message}")

@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     ai_spam_max_length: int = Field(default=500, description="文本最大长度")
     ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
 
+    # 模型自动训练配置
+    auto_train_threshold: int = Field(
+        default=500, description="触发自动训练的新样本数阈值（默认 500）"
+    )
+
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
     # ⚠️ 已废弃：请使用 captcha_webapp_url 和 captcha_signature_key
