@@ -18,26 +18,26 @@ from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关
 from src.core.redis import close_redis
 from src.core.telethon_client import close_telethon_client, init_telethon_client
 
+# 定义需要过滤的网络临时性错误类型（用于 Sentry 过滤和异常处理）
+NETWORK_ERROR_TYPES = (
+    TelegramNetworkError,  # Telegram API 网络错误（包含所有子类）
+    TelegramRetryAfter,  # 速率限制（429 Too Many Requests）
+    ClientConnectionError,  # aiohttp 连接错误（包含 ClientConnectorError）
+    ServerDisconnectedError,  # 服务器断开连接
+    TimeoutError,  # 超时错误（内置异常）
+    ConnectionError,  # 通用连接错误（内置异常，包含 ConnectionResetError 等）
+)
+
 
 def before_send(event, hint):
     """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
     import re
 
-    # 定义需要过滤的网络错误类型（基于类型检查，精准高效）
-    network_error_types = (
-        TelegramNetworkError,  # Telegram API 网络错误（包含所有子类）
-        TelegramRetryAfter,  # 速率限制（429 Too Many Requests）
-        ClientConnectionError,  # aiohttp 连接错误（包含 ClientConnectorError）
-        ServerDisconnectedError,  # 服务器断开连接
-        TimeoutError,  # 超时错误（内置异常）
-        ConnectionError,  # 通用连接错误（内置异常，包含 ConnectionResetError 等）
-    )
-
     # 1. 过滤网络临时性错误（自动重试的错误不需要告警）
     # 优先使用 hint 中的原始异常信息（更准确）
     if "exc_info" in hint:
         exc = hint["exc_info"][1]
-        if isinstance(exc, network_error_types):
+        if isinstance(exc, NETWORK_ERROR_TYPES):
             return None
 
     # 2. 定义敏感数据的正则模式
@@ -393,9 +393,9 @@ async def main() -> None:
             logger.info("收到停止信号，正在退出...")
             break
 
-        except TelegramNetworkError as e:
+        except NETWORK_ERROR_TYPES as e:
             # 网络临时性错误，仅记录日志，不上报 Sentry
-            logger.warning(f"网络错误 (尝试 {attempt}): {e}")
+            logger.warning(f"网络错误 (尝试 {attempt}): {type(e).__name__}: {e}")
             logger.info(f"等待 {retry_delay:.1f} 秒后重试...")
             await asyncio.sleep(retry_delay)
             # 指数退避，最大 60 秒
