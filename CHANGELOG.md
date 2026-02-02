@@ -5,6 +5,41 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.3] - 2026-02-02
+
+### 新增功能
+- **Sentry 环境配置增强**：
+  - 添加 `SENTRY_ENVIRONMENT` 环境变量支持开发/生产环境区分
+  - 添加 `SENTRY_TRACES_SAMPLE_RATE` 环境变量支持性能监控采样率配置
+
+### Bug 修复
+- **修复 AI 检测失败被误判为正常消息的严重 BUG**：
+  - AI 服务故障时不再将失败误判为"正常消息"
+  - 防止失败样本污染训练数据集
+  - 失败时自动降级到传统三阶段检测
+
+- **修复 Docker 容器权限错误**：
+  - 修复 Embedding 模型加载权限错误（Permission denied）
+  - 为 appuser 创建 home 目录并配置缓存路径
+  - 设置多个缓存环境变量（HF_HOME、TRANSFORMERS_CACHE、XDG_CACHE_HOME）
+  - 所有缓存文件统一写入 `/app/data/.cache/`（持久化）
+
+### 代码改进
+- **统一网络错误类型定义**：
+  - 将 `NETWORK_ERROR_TYPES` 提取为模块级常量
+  - 在 Sentry 过滤和异常处理中复用
+  - 捕获所有临时性网络错误（TelegramNetworkError、TelegramRetryAfter、ClientConnectionError 等）
+  - 改进日志输出，显示具体异常类型
+
+### 配置优化
+- 添加 `.serena/` 和 `.tool-versions` 到 `.gitignore`
+- 从版本控制中移除本地工具配置文件
+
+### 验证通过
+- ✅ make lint: All checks passed (Ruff + Mypy)
+- ✅ Docker 容器正常启动
+- ✅ 模型加载成功
+
 ## [1.0.2] - 2026-01-19
 
 ### 安全修复
