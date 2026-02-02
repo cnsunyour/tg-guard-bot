@@ -46,7 +46,7 @@ RUN pip install --upgrade pip setuptools wheel && \
     if [ "$ENABLE_OCR" = "true" ]; then \
         # ✅ 使用 EasyOCR（兼容所有 CPU，无 AVX2 要求）\
         echo "安装 EasyOCR（兼容所有 CPU 和虚拟化环境）..." && \
-        pip install easyocr>=1.7.0 torch>=2.0.0 torchvision>=0.15.0 && \
+        pip install "easyocr>=1.7.0" "torch>=2.0.0" "torchvision>=0.15.0" && \
         pip install -e ".[ocr]"; \
     else \
         pip install -e .; \
