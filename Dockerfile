@@ -55,15 +55,19 @@ COPY scripts/ ./scripts/
 COPY migrations/ ./migrations/
 
 # 创建日志、数据和缓存目录
-RUN mkdir -p /app/logs /app/data/models /app/data/.cache/fastembed
+RUN mkdir -p /app/logs /app/data/models /app/data/.cache/fastembed /app/data/.cache/huggingface
 
 # ✅ L1: 创建非 root 用户运行应用（安全最佳实践）
 RUN groupadd -r appuser && \
-    useradd -r -g appuser -u 1000 appuser && \
-    chown -R appuser:appuser /app
+    useradd -r -g appuser -u 1000 -m -d /home/appuser appuser && \
+    mkdir -p /home/appuser/.cache && \
+    chown -R appuser:appuser /app /home/appuser
 
-# 设置 fastembed 缓存路径环境变量
-ENV FASTEMBED_CACHE_PATH=/app/data/.cache/fastembed
+# 设置缓存路径环境变量
+ENV FASTEMBED_CACHE_PATH=/app/data/.cache/fastembed \
+    HF_HOME=/app/data/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/data/.cache/huggingface \
+    XDG_CACHE_HOME=/app/data/.cache
 
 # 切换到非特权用户
 USER appuser
