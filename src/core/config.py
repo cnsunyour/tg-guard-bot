@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     ai_spam_max_length: int = Field(default=500, description="文本最大长度")
     ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
 
+    # 上下文检测配置
+    context_enabled: bool = Field(default=False, description="是否启用上下文检测（需要 AI 检测）")
+    context_message_count: int = Field(default=10, ge=1, description="群组上下文消息数量")
+    context_ttl_minutes: int = Field(default=10, ge=1, description="上下文缓存时间（分钟）")
+    context_reply_depth: int = Field(default=3, ge=0, description="回复链最大追溯深度")
+    context_max_text_length: int = Field(default=200, ge=1, description="单条消息最大文本长度")
+
     # 模型自动训练配置
     auto_train_threshold: int = Field(
         default=500, description="触发自动训练的新样本数阈值（默认 500）"
@@ -165,9 +172,7 @@ class Settings(BaseSettings):
     telethon_enabled: bool = Field(default=False, description="是否启用 Telethon 客户端")
     cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
     # OCR 功能配置
-    enable_ocr: bool = Field(
-        default=False, description="是否启用 OCR 功能（需要 4GB+ RAM）"
-    )
+    enable_ocr: bool = Field(default=False, description="是否启用 OCR 功能（需要 4GB+ RAM）")
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
         ...,

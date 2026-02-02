@@ -21,6 +21,7 @@ from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和�
 from src.core.utils import auto_delete_message, check_admin_permission, format_user_mention
 from src.repositories.group_repo import GroupRepository
 from src.services.activity import ActivityService  # 活跃度服务
+from src.services.context_service import ContextService  # 上下文服务
 from src.services.moderation import ModerationService
 from src.services.spam_detector import get_detector
 
@@ -698,6 +699,8 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
         logger.debug(f"跳过超级管理员文本消息 [用户:{message.from_user.id}]")
+        # ✅ 记录管理员消息到上下文（有助于 AI 理解群组讨论主题）
+        await ContextService.record_message(message)
         return
 
     # ✅ P1-10: 使用 Redis 缓存减少 API 调用
@@ -706,6 +709,8 @@ async def on_message(message: Message, bot: Bot) -> None:
         logger.debug(
             f"跳过群组管理员文本消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
         )
+        # ✅ 记录管理员消息到上下文
+        await ContextService.record_message(message)
         return
 
     # 检查群组是否启用反垃圾
@@ -767,17 +772,36 @@ async def on_message(message: Message, bot: Bot) -> None:
                 f"跳过垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
                 f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
             )
+            # ✅ 记录高活跃度用户消息到上下文
+            await ContextService.record_message(message)
             return  # 直接返回，不进行垃圾检测
 
     # 获取检测器
     detector = get_detector()
 
-    # 检测垃圾（传入活跃度，使用并行 AI 检测）
-    result = await detector.detect_with_ai(
+    # ✅ 获取上下文（如果启用）
+    context_text = None
+    if settings.context_enabled and settings.ai_spam_enabled:
+        try:
+            context = await ContextService.get_conversation_context(message)
+            context_text = ContextService.format_context_for_ai(
+                context, message.text or "", message.message_id
+            )
+            logger.debug(
+                f"已构建上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[回复链:{len(context['reply_chain'])}] [最近消息:{len(context['recent_messages'])}]"
+            )
+        except Exception as e:
+            logger.warning(f"获取上下文失败，使用普通检测: {e}")
+            context_text = None
+
+    # 检测垃圾（传入活跃度和上下文，使用并行 AI 检测）
+    result = await detector.detect_with_ai_context(
         text=message.text or "",
         user_id=message.from_user.id,
         chat_id=message.chat.id,
         activity=activity,
+        context_text=context_text,
     )
 
     # 如果检测到垃圾
@@ -787,7 +811,7 @@ async def on_message(message: Message, bot: Bot) -> None:
             f"[用户:{message.from_user.id}] "
             f"阶段: {result['stage']}, "
             f"置信度: {result['confidence']:.2f}, "
-            f"原因: {', '.join(result['reasons'])}"
+            f"原因: {', '.join(map(str, result['reasons']))}"
         )
 
         try:
@@ -869,6 +893,9 @@ async def on_message(message: Message, bot: Bot) -> None:
 
         except Exception as e:
             logger.error(f"处理垃圾消息失败: {e}")
+    else:
+        # ✅ 消息通过检测，记录到上下文缓存（防止污染上下文）
+        await ContextService.record_message(message)
 
 
 @router.message(F.photo)
@@ -1802,12 +1829,29 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
     # 获取检测器
     detector = get_detector()
 
-    # 检测垃圾（传入活跃度）
-    result = await detector.detect_with_ai(
+    # ✅ 获取上下文（如果启用）
+    context_text = None
+    if settings.context_enabled and settings.ai_spam_enabled:
+        try:
+            context = await ContextService.get_conversation_context(message)
+            context_text = ContextService.format_context_for_ai(
+                context, message.text or "", message.message_id
+            )
+            logger.debug(
+                f"已构建编辑消息上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[回复链:{len(context['reply_chain'])}] [最近消息:{len(context['recent_messages'])}]"
+            )
+        except Exception as e:
+            logger.warning(f"获取编辑消息上下文失败，使用普通检测: {e}")
+            context_text = None
+
+    # 检测垃圾（传入活跃度和上下文）
+    result = await detector.detect_with_ai_context(
         text=message.text or "",
         user_id=message.from_user.id,
         chat_id=message.chat.id,
         activity=activity,
+        context_text=context_text,
     )
 
     # 如果检测到垃圾
@@ -1817,7 +1861,7 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
             f"[用户:{message.from_user.id}] "
             f"阶段: {result['stage']}, "
             f"置信度: {result['confidence']:.2f}, "
-            f"原因: {', '.join(result['reasons'])}"
+            f"原因: {', '.join(map(str, result['reasons']))}"
         )
 
         try:
@@ -1948,12 +1992,28 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
         # 检测器
         detector = get_detector()
 
+        # ✅ 获取上下文（如果启用）
+        context_text = None
+        if settings.context_enabled and settings.ai_spam_enabled:
+            try:
+                context = await ContextService.get_conversation_context(message)
+                context_text = ContextService.format_context_for_ai(
+                    context, message.caption, message.message_id
+                )
+                logger.debug(
+                    f"已构建编辑图片 caption 上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
+                )
+            except Exception as e:
+                logger.warning(f"获取编辑图片 caption 上下文失败: {e}")
+                context_text = None
+
         # 检测 caption 中的垃圾文字
-        result = await detector.detect_with_ai(
+        result = await detector.detect_with_ai_context(
             text=message.caption,
             user_id=message.from_user.id,
             chat_id=message.chat.id,
             activity=activity,
+            context_text=context_text,
         )
 
         if result["is_spam"]:

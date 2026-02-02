@@ -176,3 +176,13 @@ class RedisKeys:
         存储格式: Unix 时间戳（秒）
         """
         return "ml:last_train_time"
+
+    @staticmethod
+    def group_context(chat_id: int) -> str:
+        """群组上下文消息缓存键名
+
+        存储群组最近 N 条消息，用于上下文检测
+        存储格式: Redis List，每个元素是 JSON 字符串 {"user_id": int, "user_name": str, "text": str, "timestamp": int, "message_id": int}
+        TTL: 可配置（默认 10 分钟）
+        """
+        return f"context:group:{chat_id}"

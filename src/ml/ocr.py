@@ -35,9 +35,9 @@ class OCRExtractor:
 
             # ✅ EasyOCR：基于 PyTorch，兼容所有 CPU，无 AVX2 要求
             self._reader = easyocr.Reader(
-                ['ch_sim', 'en'],  # 简体中文 + 英文
+                ["ch_sim", "en"],  # 简体中文 + 英文
                 gpu=False,  # 使用 CPU
-                model_storage_directory=str(Path.home() / '.EasyOCR' / 'model'),
+                model_storage_directory=str(Path.home() / ".EasyOCR" / "model"),
                 download_enabled=True,
                 verbose=False,  # 禁用详细日志
             )

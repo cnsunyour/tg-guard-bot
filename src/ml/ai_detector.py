@@ -44,6 +44,36 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
 
 重要：只返回 JSON，不要返回其他任何内容。"""
 
+    # System Prompt - 带上下文的垃圾检测
+    SYSTEM_PROMPT_WITH_CONTEXT = """你是垃圾信息检测助手。判断用户消息是否为垃圾信息（广告、赌博、色情、诈骗、推广、引流等）。
+
+严格按照以下 JSON 格式返回结果：
+{
+  "is_spam": true 或 false,
+  "confidence": 0.0-1.0 之间的数字（保留两位小数，如 0.85）,
+  "reason": "简短说明判断理由（一句话）"
+}
+
+**重要：请结合对话上下文进行判断**
+- 如果提供了【对话回复链】，优先参考回复链判断消息是否为正常对话的一部分
+- 如果提供了【群组最近对话】，参考群组讨论主题判断消息是否相关
+- 示例：群里讨论"哪里买手机壳" → 发淘宝链接 → 判断为正常回答而非垃圾
+
+**重要：confidence 的语义定义**
+confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
+- 如果判定为垃圾（is_spam=true），confidence 应该较高（如 0.90 = 90% 确信是垃圾）
+- 如果判定为正常（is_spam=false），confidence 应该较低（如 0.10 = 10% 可能是垃圾）
+
+判断标准：
+- 广告推广：加微信、领红包、点击链接、扫码关注等
+- 赌博相关：博彩、下注、赔率、稳赚等
+- 色情内容：约炮、上门、裸聊、成人服务等
+- 诈骗欺诈：刷单、兼职、贷款、投资理财等
+- 引流推广：加群、关注公众号、下载 APP 等
+- 正常消息：日常聊天、技术讨论、咨询问题、回答他人问题等
+
+重要：只返回 JSON，不要返回其他任何内容。"""
+
     def __init__(self):
         """初始化 AI 检测器"""
         self.enabled = settings.ai_spam_enabled
@@ -104,7 +134,7 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
         # 带重试的 API 调用
         for attempt in range(self.max_retries + 1):
             try:
-                result = await self._call_api(text)
+                result = await self._call_api(text, use_context_prompt=False)
                 return self._process_result(result)
             except Exception as e:
                 if attempt < self.max_retries:
@@ -124,11 +154,72 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
         # 不应该到这里（所有重试都失败）
         raise RuntimeError("AI 检测失败：所有重试已耗尽")
 
-    async def _call_api(self, text: str) -> dict[str, Any]:
+    async def detect_with_context(
+        self, text: str, context_text: str | None = None
+    ) -> dict[str, Any]:
+        """带上下文的垃圾检测
+
+        Args:
+            text: 待检测文本
+            context_text: 上下文文本（格式化后的对话上下文）
+
+        Returns:
+            检测结果字典（格式同 detect）
+        """
+        # 如果未启用，直接返回不是垃圾
+        if not self.enabled:
+            return {
+                "is_spam": False,
+                "confidence": 0.0,
+                "stage": "ai_api",
+                "reasons": ["AI 检测未启用"],
+                "details": {"enabled": False},
+            }
+
+        # 如果没有上下文，使用普通检测
+        if not context_text:
+            return await self.detect(text)
+
+        # 文本长度限制（上下文 + 待检测文本）
+        total_length = len(context_text)
+        if total_length > self.max_length:
+            # 截断上下文，保留待检测文本
+            max_context_length = self.max_length - len(text) - 100  # 预留 100 字符缓冲
+            if max_context_length > 0:
+                context_text = context_text[:max_context_length] + "\n...\n【待检测消息】\n" + text
+            else:
+                # 上下文过长，放弃使用上下文
+                logger.warning(f"上下文过长，使用普通检测 [total_length={total_length}]")
+                return await self.detect(text)
+
+        # 带重试的 API 调用
+        for attempt in range(self.max_retries + 1):
+            try:
+                result = await self._call_api(context_text, use_context_prompt=True)
+                return self._process_result(result)
+            except Exception as e:
+                if attempt < self.max_retries:
+                    # 指数退避重试
+                    wait_time = 0.5 * (2**attempt)
+                    logger.warning(
+                        f"AI 上下文检测失败，重试中... [attempt={attempt+1}/{self.max_retries+1}] "
+                        f"[wait={wait_time}s] [error={e!s}]"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    # 最后一次重试也失败
+                    logger.error(f"AI 上下文检测失败，已达最大重试次数 [error={e!s}]")
+                    raise RuntimeError(f"AI 上下文检测失败: {e!s}") from e
+
+        # 不应该到这里（所有重试都失败）
+        raise RuntimeError("AI 上下文检测失败：所有重试已耗尽")
+
+    async def _call_api(self, text: str, use_context_prompt: bool = False) -> dict[str, Any]:
         """调用 OpenAI 兼容 API
 
         Args:
             text: 待检测文本
+            use_context_prompt: 是否使用上下文 Prompt
 
         Returns:
             API 响应 JSON
@@ -137,6 +228,11 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
             httpx.HTTPError: HTTP 请求错误
             ValueError: 响应解析错误
         """
+        # 选择 Prompt
+        system_prompt = (
+            self.SYSTEM_PROMPT_WITH_CONTEXT if use_context_prompt else self.SYSTEM_PROMPT
+        )
+
         # 构建请求
         url = f"{self.api_base}/chat/completions"
         headers = {
@@ -147,7 +243,7 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
             "model": self.model,
             "temperature": self.temperature,
             "messages": [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
             ],
         }
@@ -169,8 +265,8 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
         try:
             result = json.loads(content)
         except json.JSONDecodeError:
-            # 尝试正则提取 JSON
-            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            # ✅ 尝试非贪婪正则提取 JSON
+            json_match = re.search(r"\{.*?\}", content, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
             else:
@@ -193,9 +289,34 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
         Returns:
             统一格式的检测结果
         """
-        is_spam = bool(result.get("is_spam", False))
-        confidence = float(result.get("confidence", 0.0))
-        reason = result.get("reason", "无理由")
+        import math
+
+        # ✅ 严格验证 is_spam（防止字符串 "false" 被当作 True）
+        raw_is_spam = result.get("is_spam", False)
+        if isinstance(raw_is_spam, bool):
+            is_spam = raw_is_spam
+        elif isinstance(raw_is_spam, str):
+            is_spam = raw_is_spam.lower() in ("true", "1", "yes")
+        else:
+            is_spam = bool(raw_is_spam)
+
+        # ✅ 严格验证并限制 confidence（防止 NaN/Inf/>1）
+        raw_confidence = result.get("confidence", 0.0)
+        try:
+            confidence = float(raw_confidence)
+            # 检查是否为有限数字
+            if not math.isfinite(confidence):
+                logger.warning(f"AI 返回非法 confidence: {raw_confidence}，使用默认值 0.0")
+                confidence = 0.0
+            # 限制在 [0.0, 1.0]
+            confidence = max(0.0, min(1.0, confidence))
+        except (TypeError, ValueError) as e:
+            logger.warning(f"AI 返回无效 confidence: {raw_confidence}，错误: {e}，使用默认值 0.0")
+            confidence = 0.0
+
+        # ✅ 强制转换 reason 为字符串
+        raw_reason = result.get("reason", "无理由")
+        reason = str(raw_reason) if raw_reason else "无理由"
 
         # 根据阈值判断
         final_is_spam = is_spam and confidence >= self.threshold

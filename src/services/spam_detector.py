@@ -184,6 +184,60 @@ class SpamDetector:
             # 降级到传统检测
             return await self.detect(text, user_id, chat_id, activity)
 
+    async def detect_with_ai_context(
+        self,
+        text: str,
+        user_id: int,
+        chat_id: int,
+        activity: int | None = None,
+        context_text: str | None = None,
+    ) -> DetectionResult:
+        """带上下文的并行检测入口 - 同时运行传统三阶段管道和 AI 上下文检测
+
+        Args:
+            text: 待检测文本
+            user_id: 用户 ID
+            chat_id: 群组 ID
+            activity: 用户活跃度（可选）
+            context_text: 上下文文本（格式化后的对话上下文）
+
+        Returns:
+            合并后的检测结果字典
+        """
+        # 如果 AI 检测未启用，直接使用传统三阶段
+        if not self.ai_detector.enabled:
+            return await self.detect(text, user_id, chat_id, activity)
+
+        # 并行执行传统检测和 AI 上下文检测
+        try:
+            results = await asyncio.gather(
+                self.detect(text, user_id, chat_id, activity),  # 传统三阶段
+                self.ai_detector.detect_with_context(text, context_text),  # AI 上下文检测
+                return_exceptions=True,
+            )
+
+            traditional_result = results[0]
+            ai_result = results[1]
+
+            # 检查是否有异常
+            if isinstance(traditional_result, Exception):
+                logger.error(f"传统检测失败: {traditional_result}")
+                traditional_result = None
+
+            if isinstance(ai_result, Exception):
+                logger.error(f"AI 上下文检测失败: {ai_result}")
+                ai_result = None
+
+            # 合并结果
+            return await self._merge_detection_results(
+                traditional_result, ai_result, text, user_id, activity
+            )
+
+        except Exception as e:
+            logger.error(f"并行上下文检测失败: {e}")
+            # 降级到传统检测
+            return await self.detect(text, user_id, chat_id, activity)
+
     async def _merge_detection_results(
         self,
         traditional: DetectionResult | None,
@@ -232,8 +286,8 @@ class SpamDetector:
             else:
                 # 处理高置信度负样本
                 await self._handle_ai_negative_detection(text, ai, user_id)
-            # AI 结果需要转换为 DetectionResult 格式
-            return {
+            # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
+            ai_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
                 "confidence": ai.get("confidence", 0.0),
                 "original_confidence": ai.get("original_confidence", 0.0),
@@ -242,6 +296,8 @@ class SpamDetector:
                 "reasons": ai.get("reasons", []),
                 "details": ai.get("details", {}),
             }
+            # ✅ 应用活跃度调整
+            return self._apply_activity_adjustment(ai_result, activity, user_id)
 
         # AI 检测失败 → 使用传统结果
         if ai is None:
@@ -260,8 +316,8 @@ class SpamDetector:
         if ai["is_spam"]:
             logger.info(f"AI 检测为垃圾 [用户:{user_id}] [置信度:{ai['confidence']:.2f}]")
             await self._handle_ai_spam_detection(text, ai, user_id)
-            # AI 结果需要转换为 DetectionResult 格式
-            return {
+            # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
+            converted_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
                 "confidence": ai.get("confidence", 0.0),
                 "original_confidence": ai.get("original_confidence", 0.0),
@@ -270,6 +326,8 @@ class SpamDetector:
                 "reasons": ai.get("reasons", []),
                 "details": ai.get("details", {}),
             }
+            # ✅ 应用活跃度调整
+            return self._apply_activity_adjustment(converted_result, activity, user_id)
 
         # 策略 3: 都不是垃圾 → 使用传统结果 + 检查是否入库负样本
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
