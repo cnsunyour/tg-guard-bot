@@ -198,16 +198,53 @@ class ModerationService:
         Args:
             action: 'unmute' 或 'unban'，仅用于日志记录
 
-        无论用户是被封禁(ban)还是被限制(restrict)，统一解除所有限制
+        修复方案：
+        - kicked（封禁）：解除封禁
+        - restricted（禁言）：恢复权限 + 30秒后自动从 restricted 列表移除
         """
         try:
-            # 使用 unban_chat_member 将用户从任何限制状态中移除
-            # only_if_banned=False 表示无论是 ban 还是 restrict 都解除
-            await bot.unban_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                only_if_banned=False,  # 关键：解除所有限制
-            )
+            # 先获取用户当前状态
+            member = await bot.get_chat_member(chat_id, user_id)
+
+            # 根据状态采取不同操作
+            if member.status == "kicked":
+                # 用户被封禁，解除封禁
+                await bot.unban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    only_if_banned=True,
+                )
+
+            elif member.status == "restricted":
+                # 用户被禁言，恢复权限 + 31秒后自动移出 restricted 列表
+                from datetime import datetime, timedelta
+                from aiogram.types import ChatPermissions
+
+                until_date = datetime.utcnow() + timedelta(seconds=31)
+
+                await bot.restrict_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    permissions=ChatPermissions(
+                        can_send_messages=True,
+                        can_send_audios=True,
+                        can_send_documents=True,
+                        can_send_photos=True,
+                        can_send_videos=True,
+                        can_send_video_notes=True,
+                        can_send_voice_notes=True,
+                        can_send_polls=True,
+                        can_send_other_messages=True,
+                        can_add_web_page_previews=True,
+                        can_change_info=False,
+                        can_invite_users=False,
+                        can_pin_messages=False,
+                        can_manage_topics=False,
+                    ),
+                    until_date=until_date,  # 30秒后自动从 restricted 列表移除
+                )
+
+            # 其他状态（member, left, administrator 等）无需操作
 
             # 记录日志
             await AuditRepository.log_action(
@@ -218,7 +255,10 @@ class ModerationService:
             )
 
             action_text = "解除禁言" if action == "unmute" else "解除封禁"
-            logger.info(f"用户 {user_id} 被管理员 {operator_id} {action_text}并从限制列表中移除")
+            logger.info(
+                f"用户 {user_id} 被管理员 {operator_id} {action_text} "
+                f"(原状态: {member.status})"
+            )
             return True
 
         except Exception as e:

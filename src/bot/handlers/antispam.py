@@ -2091,6 +2091,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         message: Message = callback.message
 
         _, feedback_type, _user_id_str, message_id_str = callback.data.split(":", 3)
+        user_id = int(_user_id_str)
 
         # 检查是否是管理员
         if callback.from_user.id not in settings.admin_ids:
@@ -2121,6 +2122,25 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             logger.debug(
                 f"使用缓存文本添加反馈 [消息ID:{message_id_str}] [长度:{len(cached_text)}]"
             )
+
+            # ✅ 误判反馈：自动恢复用户权限
+            if not is_spam:
+                success = await ModerationService.unmute_user(
+                    bot=callback.bot,
+                    chat_id=message.chat.id,  # type: ignore[arg-type]
+                    user_id=user_id,
+                    operator_id=callback.from_user.id,
+                )
+                if success:
+                    logger.info(
+                        f"误判反馈：已自动恢复用户 {user_id} 的权限 "
+                        f"[群组:{message.chat.id}]"
+                    )
+                else:
+                    logger.warning(
+                        f"误判反馈：恢复用户 {user_id} 权限失败 "
+                        f"[群组:{message.chat.id}]"
+                    )
 
             # 检查是否需要自动训练
             try:

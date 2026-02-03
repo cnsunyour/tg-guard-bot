@@ -30,6 +30,65 @@ from src.services.verification import VerificationService
 router = Router(name="verification")
 
 
+async def restore_user_permissions(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """恢复用户权限并从 restricted 列表移除（30秒后自动移除）
+
+    修复 unban_chat_member(..., only_if_banned=False) 导致 restricted 用户被踢出的 bug
+
+    Args:
+        bot: Bot 实例
+        chat_id: 群组 ID
+        user_id: 用户 ID
+
+    Returns:
+        是否成功
+    """
+    try:
+        # 获取用户当前状态
+        member = await bot.get_chat_member(chat_id, user_id)
+
+        if member.status == "kicked":
+            # 用户被封禁，解除封禁
+            await bot.unban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                only_if_banned=True,
+            )
+        elif member.status == "restricted":
+            # 用户被禁言，恢复权限 + 31秒后自动移出 restricted 列表
+            until_date = datetime.utcnow() + timedelta(seconds=31)
+
+            await bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=ChatPermissions(
+                    can_send_messages=True,
+                    can_send_audios=True,
+                    can_send_documents=True,
+                    can_send_photos=True,
+                    can_send_videos=True,
+                    can_send_video_notes=True,
+                    can_send_voice_notes=True,
+                    can_send_polls=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True,
+                    can_change_info=False,
+                    can_invite_users=False,
+                    can_pin_messages=False,
+                    can_manage_topics=False,
+                ),
+                until_date=until_date,
+            )
+        # 其他状态（member, administrator 等）无需操作
+
+        logger.info(f"已恢复用户 {user_id} 权限 (原状态: {member.status})")
+        return True
+
+    except Exception as e:
+        logger.error(f"恢复用户权限失败 [用户:{user_id}]: {e}")
+        return False
+
+
 async def send_verification_success_message(
     bot: Bot,
     user_id: int,
@@ -472,16 +531,8 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             # 用户已通过验证，恢复权限
             logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
 
-            # ✅ 恢复用户权限（从限制列表中完全移除）
-            try:
-                await bot.unban_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    only_if_banned=False,  # 即使只是 restrict 也解除
-                )
-                logger.info(f"已将用户 {user_id} 从限制列表中移除并恢复权限")
-            except Exception as e:
-                logger.error(f"恢复用户权限失败: {e}")
+            # ✅ 恢复用户权限（修复 bug：不再踢出用户）
+            await restore_user_permissions(bot, chat_id, user_id)
 
             # 清除验证标记
             await redis.delete(approved_key)
@@ -1182,12 +1233,8 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
                 logger.info(f"用户 {user_id} 验证成功，已批准加入请求")
             else:
-                # 解除限制（从限制列表中完全移除）
-                await bot.unban_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    only_if_banned=False,  # 即使只是 restrict 也解除
-                )
+                # ✅ 恢复用户权限（修复 bug：不再踢出用户）
+                await restore_user_permissions(bot, chat_id, user_id)
 
                 # 发送欢迎消息到群组
                 assert message.from_user  # 类型缩小
@@ -1475,19 +1522,11 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
             await redis.setex(approved_key, 600, "1")  # 10分钟
 
-            try:
-                await bot.unban_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    only_if_banned=False,
-                )
-                logger.info(
-                    f"用户 {user_id} {provider.upper()} 验证成功，已恢复权限 (群组 {chat_id})"
-                )
-            except Exception as e:
-                logger.error(f"恢复群组权限失败: {e}")
-                # ✅ 即使失败，用户已验证，approved_key 会在用户重新加入时生效
-                # 通知用户需要重新加入，并提供邀请链接
+            # ✅ 恢复用户权限（修复 bug：不再踢出用户）
+            success = await restore_user_permissions(bot, chat_id, user_id)
+
+            if not success:
+                # 恢复权限失败，通知用户需要重新加入，并提供邀请链接
                 with contextlib.suppress(Exception):
                     chat = await bot.get_chat(chat_id)
                     chat_title = escape_html(chat.title) if chat.title else "群组"
@@ -1585,12 +1624,9 @@ async def handle_verification_success(
             logger.info(f"用户 {user_id} 加入请求验证成功，已批准加入群组 {chat_id}")
 
         else:
-            # 正常入群模式：恢复群组权限（从限制列表中完全移除）
-            await bot.unban_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                only_if_banned=False,  # 即使只是 restrict 也解除
-            )
+            # 正常入群模式：恢复群组权限
+            # ✅ 恢复用户权限（修复 bug：不再踢出用户）
+            await restore_user_permissions(bot, chat_id, user_id)
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
