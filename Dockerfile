@@ -19,6 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     libwebp7 \
     libjpeg62-turbo \
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 如果启用 OCR，安装额外的系统依赖
