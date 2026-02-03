@@ -184,6 +184,84 @@ class SpamDetector:
             # 降级到传统检测
             return await self.detect(text, user_id, chat_id, activity)
 
+    async def detect_with_ai_context(
+        self,
+        text: str,
+        user_id: int,
+        chat_id: int,
+        activity: int | None = None,
+        context_text: str | None = None,
+        context_messages: list[dict] | None = None,
+        message: Any = None,
+    ) -> DetectionResult:
+        """带上下文的并行检测入口 - 同时运行传统三阶段管道和 AI 上下文检测
+
+        Args:
+            text: 待检测文本
+            user_id: 用户 ID
+            chat_id: 群组 ID
+            activity: 用户活跃度（可选）
+            context_text: 上下文文本（格式化后的对话上下文，给 AI 用）
+            context_messages: 原始上下文消息列表（给 Embedding 用）
+            message: Telegram Message 对象（用于回复链检测）
+
+        Returns:
+            合并后的检测结果字典
+        """
+        # 如果 AI 检测未启用，直接使用传统三阶段
+        if not self.ai_detector.enabled:
+            result = await self.detect(text, user_id, chat_id, activity)
+            # 应用上下文调整（即使没有 AI 也可以用 Embedding）
+            if settings.context_consistency_enabled and context_messages:
+                result = await self._apply_context_adjustment(
+                    result, text, message, context_messages, user_id
+                )
+            return result
+
+        # 并行执行传统检测和 AI 上下文检测
+        try:
+            results = await asyncio.gather(
+                self.detect(text, user_id, chat_id, activity),  # 传统三阶段
+                self.ai_detector.detect_with_context(text, context_text),  # AI 上下文检测
+                return_exceptions=True,
+            )
+
+            traditional_result = results[0]
+            ai_result = results[1]
+
+            # 检查是否有异常
+            if isinstance(traditional_result, Exception):
+                logger.error(f"传统检测失败: {traditional_result}")
+                traditional_result = None
+
+            if isinstance(ai_result, Exception):
+                logger.error(f"AI 上下文检测失败: {ai_result}")
+                ai_result = None
+
+            # 合并结果
+            merged_result = await self._merge_detection_results(
+                traditional_result, ai_result, text, user_id, activity
+            )
+
+            # 应用上下文调整（降低误判）
+            if settings.context_consistency_enabled and context_messages:
+                merged_result = await self._apply_context_adjustment(
+                    merged_result, text, message, context_messages, user_id
+                )
+
+            return merged_result
+
+        except Exception as e:
+            logger.error(f"并行上下文检测失败: {e}")
+            # 降级到传统检测
+            result = await self.detect(text, user_id, chat_id, activity)
+            # 应用上下文调整
+            if settings.context_consistency_enabled and context_messages:
+                result = await self._apply_context_adjustment(
+                    result, text, message, context_messages, user_id
+                )
+            return result
+
     async def _merge_detection_results(
         self,
         traditional: DetectionResult | None,
@@ -232,8 +310,8 @@ class SpamDetector:
             else:
                 # 处理高置信度负样本
                 await self._handle_ai_negative_detection(text, ai, user_id)
-            # AI 结果需要转换为 DetectionResult 格式
-            return {
+            # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
+            ai_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
                 "confidence": ai.get("confidence", 0.0),
                 "original_confidence": ai.get("original_confidence", 0.0),
@@ -242,6 +320,8 @@ class SpamDetector:
                 "reasons": ai.get("reasons", []),
                 "details": ai.get("details", {}),
             }
+            # ✅ 应用活跃度调整
+            return self._apply_activity_adjustment(ai_result, activity, user_id)
 
         # AI 检测失败 → 使用传统结果
         if ai is None:
@@ -260,8 +340,8 @@ class SpamDetector:
         if ai["is_spam"]:
             logger.info(f"AI 检测为垃圾 [用户:{user_id}] [置信度:{ai['confidence']:.2f}]")
             await self._handle_ai_spam_detection(text, ai, user_id)
-            # AI 结果需要转换为 DetectionResult 格式
-            return {
+            # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
+            converted_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
                 "confidence": ai.get("confidence", 0.0),
                 "original_confidence": ai.get("original_confidence", 0.0),
@@ -270,6 +350,8 @@ class SpamDetector:
                 "reasons": ai.get("reasons", []),
                 "details": ai.get("details", {}),
             }
+            # ✅ 应用活跃度调整
+            return self._apply_activity_adjustment(converted_result, activity, user_id)
 
         # 策略 3: 都不是垃圾 → 使用传统结果 + 检查是否入库负样本
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
@@ -312,9 +394,7 @@ class SpamDetector:
                 )
 
                 # 检查是否触发自动训练
-                triggered, message = await self.check_and_auto_train(
-                    admin_ids=settings.admin_ids, threshold=50
-                )
+                triggered, message = await self.check_and_auto_train(admin_ids=settings.admin_ids)
 
                 if triggered:
                     logger.info(f"AI 样本触发自动训练: {message}")
@@ -372,9 +452,7 @@ class SpamDetector:
                 )
 
                 # 检查是否触发自动训练
-                triggered, message = await self.check_and_auto_train(
-                    admin_ids=settings.admin_ids, threshold=50
-                )
+                triggered, message = await self.check_and_auto_train(admin_ids=settings.admin_ids)
 
                 if triggered:
                     logger.info(f"AI 负样本触发自动训练: {message}")
@@ -435,6 +513,97 @@ class SpamDetector:
                 f"{original_confidence:.2f} -> {adjusted_confidence:.2f} (减少 {reduction:.2f}), "
                 f"仍判定为垃圾"
             )
+
+        return result
+
+    async def _apply_context_adjustment(
+        self,
+        result: DetectionResult,
+        text: str,
+        message: Any,
+        context_messages: list[dict],
+        user_id: int,
+    ) -> DetectionResult:
+        """应用上下文调整（只降低误判，不提高检测）
+
+        Args:
+            result: 检测结果字典
+            text: 当前消息文本
+            message: Telegram Message 对象
+            context_messages: 上下文消息列表
+            user_id: 用户 ID
+
+        Returns:
+            调整后的检测结果
+        """
+        # 如果不是垃圾，不需要调整
+        if not result["is_spam"]:
+            return result
+
+        # 如果 Embedder 未初始化，无法进行语义分析
+        if not self.embedder.is_initialized:
+            logger.debug("Embedder 未初始化，跳过上下文调整")
+            return result
+
+        confidence_reduction = 0.0
+        reasons = []
+
+        try:
+            # 1. 检查回复链相关性（优先级最高）
+            if message and hasattr(message, "reply_to_message") and message.reply_to_message:
+                reply_msg = message.reply_to_message
+                if hasattr(reply_msg, "text") and reply_msg.text:
+                    reply_similarity = await self.embedder.compute_similarity(text, reply_msg.text)
+
+                    if reply_similarity >= settings.reply_similarity_threshold:
+                        confidence_reduction += settings.reply_confidence_reduction
+                        reasons.append(f"回复内容相关(相似度{reply_similarity:.2f})")
+                        logger.info(
+                            f"检测到回复链相关性 [用户:{user_id}] "
+                            f"相似度={reply_similarity:.2f}, "
+                            f"降低置信度 -{settings.reply_confidence_reduction}"
+                        )
+
+            # 2. 检查群组上下文一致性
+            if context_messages and len(context_messages) >= 3:
+                is_consistent, similarity = await self.embedder.detect_context_consistency(
+                    text, context_messages
+                )
+
+                if is_consistent:
+                    confidence_reduction += settings.context_confidence_reduction
+                    reasons.append(f"与群组话题一致(相似度{similarity:.2f})")
+                    logger.info(
+                        f"检测到上下文一致性 [用户:{user_id}] "
+                        f"相似度={similarity:.2f}, "
+                        f"降低置信度 -{settings.context_confidence_reduction}"
+                    )
+
+            # 3. 应用调整
+            if confidence_reduction > 0:
+                original_confidence = result["confidence"]
+                adjusted_confidence = max(0.0, original_confidence - confidence_reduction)
+                result["confidence"] = adjusted_confidence
+                result["reasons"].extend(reasons)
+
+                # 如果置信度降到阈值以下，改为非垃圾
+                threshold = settings.spam_threshold_embedding
+                if adjusted_confidence < threshold:
+                    result["is_spam"] = False
+                    logger.info(
+                        f"上下文调整后置信度降至 {adjusted_confidence:.2f} "
+                        f"(原始 {original_confidence:.2f}, 降低 {confidence_reduction:.2f}), "
+                        f"改判为正常消息 [用户:{user_id}]: {', '.join(reasons)}"
+                    )
+                else:
+                    logger.info(
+                        f"上下文调整后置信度 {adjusted_confidence:.2f} "
+                        f"(原始 {original_confidence:.2f}, 降低 {confidence_reduction:.2f}), "
+                        f"仍判定为垃圾 [用户:{user_id}]"
+                    )
+
+        except Exception as e:
+            logger.error(f"应用上下文调整失败 [用户:{user_id}]: {e}")
 
         return result
 
@@ -578,6 +747,14 @@ class SpamDetector:
 
             update_last_train_count(len(texts))
 
+            # 更新上次训练时间（用于冷却时间检查）
+            import time
+
+            from src.core.redis import RedisKeys, get_redis
+
+            redis = get_redis()
+            await redis.set(RedisKeys.last_train_time(), str(time.time()))
+
             message = (
                 f"模型训练成功！\n"
                 f"准确率: {accuracy:.2%}\n"
@@ -627,19 +804,43 @@ class SpamDetector:
             logger.error(f"发送训练完成通知失败: {e}")
 
     async def check_and_auto_train(
-        self, admin_ids: list[int] | None = None, threshold: int = 50
+        self, admin_ids: list[int] | None = None, threshold: int | None = None
     ) -> tuple[bool, str | None]:
         """检查是否需要自动训练，如果需要则触发训练
 
         Args:
             admin_ids: 管理员 ID 列表，用于发送通知
-            threshold: 触发自动训练的新样本阈值（默认 50）
+            threshold: 触发自动训练的新样本阈值（None 则使用配置 AUTO_TRAIN_THRESHOLD）
 
         Returns:
             (是否触发了训练, 消息)
         """
         try:
+            import time
+
+            from src.core.redis import RedisKeys, get_redis
             from src.repositories.spam_repo import get_last_train_count
+
+            # 使用配置的阈值（如果未指定）
+            if threshold is None:
+                threshold = settings.auto_train_threshold
+
+            # 检查冷却时间
+            redis = get_redis()
+            last_train_time_str = await redis.get(RedisKeys.last_train_time())
+
+            if last_train_time_str:
+                last_train_time = float(last_train_time_str)
+                current_time = time.time()
+                elapsed_hours = (current_time - last_train_time) / 3600
+
+                if elapsed_hours < settings.auto_train_cooldown_hours:
+                    remaining_hours = settings.auto_train_cooldown_hours - elapsed_hours
+                    logger.debug(
+                        f"训练冷却中: 已过 {elapsed_hours:.1f} 小时，"
+                        f"还需 {remaining_hours:.1f} 小时（冷却时间 {settings.auto_train_cooldown_hours} 小时）"
+                    )
+                    return False, None
 
             # 获取当前样本总数
             current_count = await SpamRepository.count_samples()
@@ -662,6 +863,8 @@ class SpamDetector:
                 success, message = await self.retrain_model(admin_ids)
 
                 if success:
+                    # 更新上次训练时间
+                    await redis.set(RedisKeys.last_train_time(), str(time.time()))
                     return True, f"自动训练成功: {message}"
                 else:
                     return False, f"自动训练失败: {message}"

@@ -10,11 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from loguru import logger
 from sqlalchemy import text
 
-from src.core.database import init_db, engine, close_db
-from src.models.group import Group
-from src.models.user import Warning
-from src.models.spam_sample import SpamSample
-from src.models.audit_log import AuditLog
+from src.core.database import close_db, engine, init_db
 
 
 async def create_tables():

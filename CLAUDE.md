@@ -110,53 +110,142 @@ else:
 - `handle_user_not_started_bot()` - 引导消息发送与去重
 - `delete_hint_message_after_delay()` - 支持 TTL 延长的延迟删除
 
-#### 3. 三阶段反垃圾检测管道
+#### 3. 多层反垃圾检测系统
 
-**设计目标**: 高效准确识别垃圾消息,减少误判
+**设计目标**: 高效准确识别垃圾消息，同时最大限度降低误判率
 
-**检测流程**:
+**完整检测流程**:
 ```
 消息输入
     ↓
-┌──────────────────────┐
-│ Stage 1: 规则引擎    │ ← 快速过滤 (~70% 垃圾)
-│ - 关键词黑名单       │   O(1) 查表
-│ - URL/链接检测       │   正则匹配
-│ - 频率限制           │   Redis 计数器
-│ - 新用户限制         │   时间阈值
-└──────────┬───────────┘
-           │ 可疑 (score >= 0.8)
-           ↓
-┌──────────────────────┐
-│ Stage 2: ML 分类器   │ ← TF-IDF + SVM (~90%)
-│ - 中文分词 (jieba)   │   CPU 密集
-│ - 特征提取           │   ~100ms
-│ - 二分类判定         │
-└──────────┬───────────┘
-           │ 不确定 (0.7 < score < 0.8)
-           ↓
-┌──────────────────────┐
-│ Stage 3: 语义分析    │ ← Embedding (~98%)
-│ - bge-small-zh       │   GPU/ONNX 加速
-│ - 余弦相似度         │   ~200ms
-│ - 垃圾原型匹配       │
-└──────────┬───────────┘
-           │
-           ↓
-      最终判定 (删除/警告)
+┌─────────────────────────────────────────────────────────┐
+│ 传统三段检测 (并行执行)                                   │
+├─────────────────────────────────────────────────────────┤
+│ Stage 1: 规则引擎                                        │
+│ - 关键词黑名单 (置信度 0.9)                              │
+│ - URL/链接检测 (置信度 0.85)                             │
+│ - 联系方式检测 (置信度 0.8)                              │
+│ - 重复字符/Emoji刷屏 (置信度 0.65-0.7)                   │
+│ - 性能: ~1ms, O(1)查表                                   │
+├─────────────────────────────────────────────────────────┤
+│ Stage 2: ML分类器 (TF-IDF + SVM)                        │
+│ - 中文分词 (jieba)                                       │
+│ - TF-IDF特征提取 (5000维)                                │
+│ - LinearSVC二分类                                        │
+│ - 性能: ~50-100ms, 捕获变体                              │
+├─────────────────────────────────────────────────────────┤
+│ Stage 3: Embedding语义分析 (bge-small-zh)               │
+│ - 文本嵌入向量生成                                       │
+│ - 与垃圾原型余弦相似度匹配                                │
+│ - 性能: ~100-200ms, 语义理解                             │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ↓
+┌─────────────────────────────────────────────────────────┐
+│ AI上下文检测 (可选, 并行执行)                            │
+│ - OpenAI兼容API (GPT-4o-mini/DeepSeek等)                │
+│ - 结合群组对话上下文理解语境                              │
+│ - 自动入库训练样本                                       │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ↓
+┌─────────────────────────────────────────────────────────┐
+│ 结果合并策略                                             │
+│ 1. 传统检测为垃圾 → 使用传统结果                         │
+│ 2. AI检测为垃圾 → 使用AI结果 + 自动入库                  │
+│ 3. 都不是垃圾 → 使用传统结果                             │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ↓
+┌─────────────────────────────────────────────────────────┐
+│ 活跃度置信度调整 (降低误判)                              │
+│ - 高活跃度用户 (activity >= 10)                          │
+│ - 对数公式: reduction = 0.01 × log2(activity / 10)      │
+│ - 最大降低: 0.15 (15%)                                   │
+│ - 调整后 < 阈值 → 改判为正常                             │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ↓
+┌─────────────────────────────────────────────────────────┐
+│ 上下文一致性调整 (降低误判) ⭐ 最后防线                   │
+│ 1. 回复链相关性检测 (优先级最高)                         │
+│    - 计算当前消息与被回复消息的语义相似度                 │
+│    - 相似度 >= 0.5 → 降低20%置信度                       │
+│ 2. 群组话题一致性检测                                    │
+│    - 计算与最近10条消息的平均相似度                       │
+│    - 相似度 >= 0.7 → 降低15%置信度                       │
+│ 3. 累计调整                                              │
+│    - 调整后 < 阈值 → 改判为正常消息                      │
+│ ⚠️ 设计原则: 只降低不提高 (避免误判话题转移)             │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ↓
+            最终判定
 ```
+
+**关键特性**:
+- ✅ **渐进式过滤**: Stage 1检测到垃圾直接返回，避免不必要的计算
+- ✅ **并行执行**: 传统检测和AI检测并行，提高效率
+- ✅ **多重保护**: 活跃度调整 + 上下文调整，双重降低误判
+- ✅ **线程池优化**: CPU密集操作在线程池执行，不阻塞事件循环
 
 **关键文件**:
 - `src/services/spam_detector.py` - 检测服务协调器
-- `src/ml/rule_engine.py` - 规则引擎
-- `src/ml/classifier.py` - TF-IDF + SVM 分类器
-- `src/ml/embedder.py` - 语义嵌入
+- `src/services/context_service.py` - 上下文管理服务
+- `src/ml/rule_engine.py` - 规则引擎 (Stage 1)
+- `src/ml/classifier.py` - TF-IDF + SVM (Stage 2)
+- `src/ml/embedder.py` - 语义嵌入 (Stage 3 + 上下文一致性)
+- `src/ml/ai_detector.py` - AI检测器
 
 **阈值配置** (`src/core/config.py`):
 ```python
+# 传统三段检测阈值
 spam_threshold_rule: float = 0.8       # 规则引擎
 spam_threshold_ml: float = 0.7         # ML 分类器
 spam_threshold_embedding: float = 0.75 # Embedding
+
+# AI检测配置
+ai_spam_enabled: bool = False          # 是否启用AI检测
+ai_spam_threshold: float = 0.8         # AI置信度阈值
+
+# 上下文检测配置
+context_enabled: bool = False          # 是否启用上下文检测
+context_consistency_enabled: bool = True  # 上下文一致性检测
+
+# 上下文一致性阈值
+context_high_similarity_threshold: float = 0.7  # 高相似度阈值
+context_confidence_reduction: float = 0.15      # 置信度降低幅度
+reply_similarity_threshold: float = 0.5         # 回复链相似度阈值
+reply_confidence_reduction: float = 0.2         # 回复链置信度降低幅度
+```
+
+**效果示例**:
+
+*场景1: 正常回复问题*
+```
+群组对话:
+  用户A: 这个手机壳哪里买的？
+  用户B: 淘宝搜 xxx → https://taobao.com/xxx
+
+检测结果:
+  - Stage 1: 垃圾 (链接) 置信度 0.85
+  - 回复链相似度: 0.72 (高度相关)
+  - 调整后置信度: 0.65 (降低 0.20)
+  - 最终判定: 正常消息 ✅
+```
+
+*场景2: 突然发广告*
+```
+群组对话:
+  用户A: 这个 Python 库怎么用？
+  用户B: 看官方文档吧
+  用户C: 加微信xxx，低价VPN
+
+检测结果:
+  - Stage 1: 垃圾 (关键词) 置信度 0.95
+  - 上下文相似度: 0.12 (话题不相关)
+  - 调整: 不降低置信度 (避免误判话题转移)
+  - 最终判定: 垃圾消息 ❌
 ```
 
 ---
@@ -257,12 +346,14 @@ src/
 ├── services/                 # 业务逻辑层
 │   ├── verification.py       # 验证挑战生成与验证
 │   ├── moderation.py         # 群管理服务
+│   ├── context_service.py    # ⭐ 上下文管理服务
 │   └── spam_detector.py      # ⭐ 反垃圾检测协调器
 │
 ├── ml/                       # ML/AI 模块
 │   ├── rule_engine.py        # ⭐ 规则引擎 (Stage 1)
 │   ├── classifier.py         # ⭐ TF-IDF + SVM (Stage 2)
-│   ├── embedder.py           # ⭐ bge-small-zh (Stage 3)
+│   ├── embedder.py           # ⭐ bge-small-zh (Stage 3 + 上下文一致性)
+│   ├── ai_detector.py        # ⭐ AI检测器 (OpenAI兼容API)
 │   ├── ocr.py                # PaddleOCR 图片识别
 │   └── trainer.py            # 模型训练脚本
 │
@@ -289,11 +380,14 @@ src/
 | 文件 | 职责 | 重要性 |
 |------|------|--------|
 | `src/bot/handlers/verification.py` | 私聊验证 + 共享引导消息 | ⭐⭐⭐ |
-| `src/services/spam_detector.py` | 反垃圾三阶段管道协调 | ⭐⭐⭐ |
+| `src/services/spam_detector.py` | 反垃圾多层检测协调 | ⭐⭐⭐ |
+| `src/services/context_service.py` | 上下文管理 (消息缓存/回复链) | ⭐⭐⭐ |
+| `src/ml/embedder.py` | Embedding + 上下文一致性检测 | ⭐⭐⭐ |
 | `src/core/redis.py` | Redis 键名管理 + TTL 模式 | ⭐⭐⭐ |
 | `src/core/config.py` | 全局配置 (阈值/超时/模型路径) | ⭐⭐ |
 | `src/main.py` | 应用入口 + 中间件注册 | ⭐⭐ |
 | `src/ml/rule_engine.py` | 第一阶段快速过滤 | ⭐⭐ |
+| `src/ml/ai_detector.py` | AI上下文检测 | ⭐⭐ |
 
 ---
 
@@ -349,10 +443,36 @@ DB_NAME=tg_guard
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# 反垃圾阈值
+# 传统三段检测阈值
 SPAM_THRESHOLD_RULE=0.8
 SPAM_THRESHOLD_ML=0.7
 SPAM_THRESHOLD_EMBEDDING=0.75
+
+# AI检测配置
+AI_SPAM_ENABLED=false
+AI_SPAM_API_KEY=...
+AI_SPAM_API_BASE=https://api.openai.com/v1
+AI_SPAM_MODEL=gpt-4o-mini
+AI_SPAM_THRESHOLD=0.8
+
+# 上下文检测配置
+CONTEXT_ENABLED=false              # 是否启用上下文检测（需要AI检测）
+CONTEXT_MESSAGE_COUNT=10           # 群组上下文消息数量
+CONTEXT_TTL_MINUTES=10             # 上下文缓存时间（分钟）
+CONTEXT_REPLY_DEPTH=3              # 回复链最大追溯深度
+CONTEXT_MAX_TEXT_LENGTH=200        # 单条消息最大文本长度
+
+# 上下文一致性检测配置（降低误判）
+CONTEXT_CONSISTENCY_ENABLED=true   # 推荐启用
+CONTEXT_HIGH_SIMILARITY_THRESHOLD=0.7    # 高相似度阈值
+CONTEXT_CONFIDENCE_REDUCTION=0.15        # 置信度降低幅度
+REPLY_SIMILARITY_THRESHOLD=0.5           # 回复链相似度阈值
+REPLY_CONFIDENCE_REDUCTION=0.2           # 回复链置信度降低幅度
+
+# 活跃度系统配置
+ACTIVITY_ENABLED=true
+ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15   # 最大置信度减少值
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过垃圾检测阈值
 
 # 验证配置
 VERIFICATION_TIMEOUT=120  # 私聊验证超时时间 (秒)
@@ -431,9 +551,121 @@ tail -f logs/error_*.log  # 查看错误日志
 4. **TelegramForbiddenError 需要捕获**: 私聊失败是正常情况,必须优雅处理
 5. **数据库模型修改后需要迁移**: 修改 `models/*.py` 后必须运行 `alembic revision`
 6. **代码提交前运行 `make check`**: 确保通过格式化、检查和测试
+7. **上下文检测需要AI检测**: `CONTEXT_ENABLED` 需要 `AI_SPAM_ENABLED=true` 才能工作
+8. **上下文一致性可独立使用**: `CONTEXT_CONSISTENCY_ENABLED` 即使没有AI也能通过Embedding工作
 
 ---
 
-**最后更新**: 2026-01-05
-**版本**: v1.0
-**适用于**: tg-guard-bot 私聊验证版本
+## 🎯 反垃圾检测最佳实践
+
+### 1. 配置推荐
+
+**基础配置** (无AI):
+```bash
+# 传统三段检测
+SPAM_THRESHOLD_RULE=0.8
+SPAM_THRESHOLD_ML=0.7
+SPAM_THRESHOLD_EMBEDDING=0.75
+
+# 活跃度系统
+ACTIVITY_ENABLED=true
+ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15
+
+# 上下文一致性（推荐启用）
+CONTEXT_CONSISTENCY_ENABLED=true
+CONTEXT_HIGH_SIMILARITY_THRESHOLD=0.7
+CONTEXT_CONFIDENCE_REDUCTION=0.15
+```
+
+**进阶配置** (含AI):
+```bash
+# 启用AI检测
+AI_SPAM_ENABLED=true
+AI_SPAM_API_KEY=sk-xxx
+AI_SPAM_MODEL=gpt-4o-mini
+AI_SPAM_THRESHOLD=0.8
+
+# 启用上下文检测
+CONTEXT_ENABLED=true
+CONTEXT_MESSAGE_COUNT=10
+CONTEXT_TTL_MINUTES=10
+
+# 上下文一致性
+CONTEXT_CONSISTENCY_ENABLED=true
+REPLY_SIMILARITY_THRESHOLD=0.5
+REPLY_CONFIDENCE_REDUCTION=0.2
+```
+
+### 2. 阈值调优指南
+
+**降低误判率** (更保守):
+```bash
+SPAM_THRESHOLD_RULE=0.85          # 提高规则引擎阈值
+SPAM_THRESHOLD_ML=0.75            # 提高ML阈值
+SPAM_THRESHOLD_EMBEDDING=0.80     # 提高Embedding阈值
+CONTEXT_CONFIDENCE_REDUCTION=0.20 # 增加上下文调整幅度
+```
+
+**提高检测率** (更激进):
+```bash
+SPAM_THRESHOLD_RULE=0.75          # 降低规则引擎阈值
+SPAM_THRESHOLD_ML=0.65            # 降低ML阈值
+SPAM_THRESHOLD_EMBEDDING=0.70     # 降低Embedding阈值
+CONTEXT_CONFIDENCE_REDUCTION=0.10 # 减少上下文调整幅度
+```
+
+### 3. 性能优化建议
+
+**CPU密集操作优化**:
+- ✅ 规则引擎、ML分类器、Embedding已在线程池执行
+- ✅ 传统检测和AI检测并行执行
+- ✅ 上下文一致性检测使用异步Embedding
+
+**内存优化**:
+- 上下文消息数量: 10条 (约1-2分钟对话)
+- 上下文TTL: 10分钟 (自动清理不活跃群组)
+- 单条消息最大长度: 200字符 (避免缓存冗余)
+
+**Redis优化**:
+- 使用Pipeline减少RTT (上下文记录: 3次调用→1次)
+- 合理设置TTL避免内存泄漏
+- 使用键名管理类统一管理
+
+### 4. 监控指标
+
+**关键指标**:
+```python
+# 检测准确率
+- 误判率 (False Positive Rate)
+- 漏检率 (False Negative Rate)
+- 各阶段检测占比
+
+# 性能指标
+- Stage 1 平均耗时: ~1ms
+- Stage 2 平均耗时: ~50-100ms
+- Stage 3 平均耗时: ~100-200ms
+- AI检测平均耗时: ~500-1000ms
+
+# 上下文调整效果
+- 改判为正常的消息数
+- 回复链相关性命中率
+- 群组话题一致性命中率
+```
+
+**日志分析**:
+```bash
+# 查看误判案例
+grep "改判为正常消息" logs/bot_*.log
+
+# 查看上下文调整效果
+grep "上下文调整后置信度" logs/bot_*.log
+
+# 查看各阶段检测分布
+grep "Stage [1-3] 检测到垃圾" logs/bot_*.log | wc -l
+```
+
+---
+
+**最后更新**: 2026-02-03
+**版本**: v1.1
+**适用于**: tg-guard-bot 多层反垃圾检测版本

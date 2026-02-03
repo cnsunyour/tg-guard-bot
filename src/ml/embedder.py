@@ -210,6 +210,119 @@ class SpamEmbedder:
             logger.error(f"批量 Embedding 预测失败: {e}")
             return [(False, 0.0)] * len(texts)
 
+    async def embed(self, texts: list[str]) -> list[np.ndarray]:
+        """生成文本嵌入向量（异步包装）
+
+        Args:
+            texts: 文本列表
+
+        Returns:
+            嵌入向量列表
+        """
+        if not self.is_initialized or not self.model:
+            logger.warning("Embedding 模型未初始化")
+            return []
+
+        try:
+            # fastembed 是同步的，但我们在线程池中运行以避免阻塞
+            from src.core.executor import run_in_executor
+
+            def _embed() -> list[np.ndarray]:
+                assert self.model is not None  # 类型检查
+                return [np.array(emb) for emb in self.model.embed(texts)]
+
+            embeddings = await run_in_executor(_embed)
+            return embeddings
+
+        except Exception as e:
+            logger.error(f"生成嵌入向量失败: {e}")
+            return []
+
+    async def compute_similarity(self, text1: str, text2: str) -> float:
+        """计算两个文本的余弦相似度
+
+        Args:
+            text1: 第一个文本
+            text2: 第二个文本
+
+        Returns:
+            余弦相似度 (0.0-1.0)
+        """
+        if not self.is_initialized or not self.model:
+            logger.debug("Embedding 模型未初始化")
+            return 0.0
+
+        try:
+            embeddings = await self.embed([text1, text2])
+            if len(embeddings) != 2:
+                return 0.0
+
+            similarity = self._cosine_similarity(embeddings[0], embeddings[1])
+            return float(similarity)
+
+        except Exception as e:
+            logger.error(f"计算相似度失败: {e}")
+            return 0.0
+
+    async def detect_context_consistency(
+        self, text: str, context_messages: list[dict], high_similarity_threshold: float | None = None
+    ) -> tuple[bool, float]:
+        """检测消息是否与上下文语义一致
+
+        ⚠️ 只用于降低误判，不用于提高检测
+
+        Args:
+            text: 当前消息文本
+            context_messages: 上下文消息列表 [{"text": str, ...}, ...]
+            high_similarity_threshold: 高相似度阈值（None 则使用配置）
+
+        Returns:
+            (is_consistent, similarity_score)
+            - is_consistent: 是否与上下文一致（高相似度）
+            - similarity_score: 与上下文的平均相似度
+        """
+        if not context_messages:
+            return False, 0.0
+
+        # 使用配置的阈值
+        if high_similarity_threshold is None:
+            high_similarity_threshold = settings.context_high_similarity_threshold
+
+        try:
+            # 提取上下文文本
+            context_texts = [msg["text"] for msg in context_messages if msg.get("text")]
+            if not context_texts:
+                return False, 0.0
+
+            # 生成嵌入向量
+            all_texts = [text, *context_texts]
+            embeddings = await self.embed(all_texts)
+
+            if len(embeddings) < 2:
+                return False, 0.0
+
+            current_emb = embeddings[0]
+            context_embs = embeddings[1:]
+
+            # 计算与上下文的平均相似度
+            similarities = [self._cosine_similarity(current_emb, ctx_emb) for ctx_emb in context_embs]
+            avg_similarity = float(np.mean(similarities))
+
+            # 判断是否一致（高相似度）
+            is_consistent = avg_similarity >= high_similarity_threshold
+
+            logger.debug(
+                f"上下文一致性检测: 相似度={avg_similarity:.2f}, "
+                f"阈值={high_similarity_threshold}, "
+                f"一致={is_consistent}"
+            )
+
+            return is_consistent, avg_similarity
+
+        except Exception as e:
+            logger.error(f"上下文一致性检测失败: {e}")
+            return False, 0.0
+
 
 # 全局 Embedder 实例
 _embedder: SpamEmbedder | None = None

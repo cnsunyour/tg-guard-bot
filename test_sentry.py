@@ -22,6 +22,7 @@ print(f"✓ 采样率: {settings.sentry_traces_sample_rate}")
 if settings.sentry_dsn:
     import sentry_sdk
     from sentry_sdk.integrations.loguru import LoguruIntegration
+
     from src.main import before_send
 
     sentry_sdk.init(
@@ -53,7 +54,7 @@ if settings.sentry_dsn:
     fake_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyz012345678"
     fake_url = f"https://api.telegram.org/bot{fake_token}/getUpdates"
 
-    print(f"\n测试数据:")
+    print("\n测试数据:")
     print(f"  假 Token: {fake_token}")
     print(f"  假 URL: {fake_url}")
 

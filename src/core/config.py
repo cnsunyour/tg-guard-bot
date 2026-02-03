@@ -72,6 +72,38 @@ class Settings(BaseSettings):
     ai_spam_max_length: int = Field(default=500, description="文本最大长度")
     ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
 
+    # 上下文检测配置
+    context_enabled: bool = Field(default=False, description="是否启用上下文检测（需要 AI 检测）")
+    context_message_count: int = Field(default=10, ge=1, description="群组上下文消息数量")
+    context_ttl_minutes: int = Field(default=10, ge=1, description="上下文缓存时间（分钟）")
+    context_reply_depth: int = Field(default=3, ge=0, description="回复链最大追溯深度")
+    context_max_text_length: int = Field(default=200, ge=1, description="单条消息最大文本长度")
+
+    # 上下文一致性检测配置（用于降低误判）
+    context_consistency_enabled: bool = Field(
+        default=True, description="是否启用上下文一致性检测（用于降低误判）"
+    )
+    context_high_similarity_threshold: float = Field(
+        default=0.7, ge=0.0, le=1.0, description="高相似度阈值（>= 此值视为正常对话）"
+    )
+    context_confidence_reduction: float = Field(
+        default=0.15, ge=0.0, le=1.0, description="上下文一致时降低的置信度"
+    )
+    reply_similarity_threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="回复链相似度阈值（>= 此值视为正常对话）"
+    )
+    reply_confidence_reduction: float = Field(
+        default=0.2, ge=0.0, le=1.0, description="回复内容相关时降低的置信度"
+    )
+
+    # 模型自动训练配置
+    auto_train_threshold: int = Field(
+        default=500, description="触发自动训练的新样本数阈值（默认 500）"
+    )
+    auto_train_cooldown_hours: int = Field(
+        default=168, description="自动训练冷却时间（小时），默认 168 小时（7 天）"
+    )
+
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
     # ⚠️ 已废弃：请使用 captcha_webapp_url 和 captcha_signature_key
@@ -157,9 +189,7 @@ class Settings(BaseSettings):
     telethon_enabled: bool = Field(default=False, description="是否启用 Telethon 客户端")
     cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
     # OCR 功能配置
-    enable_ocr: bool = Field(
-        default=False, description="是否启用 OCR 功能（需要 4GB+ RAM，ARM 架构可能不稳定）"
-    )
+    enable_ocr: bool = Field(default=False, description="是否启用 OCR 功能（需要 4GB+ RAM）")
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
         ...,

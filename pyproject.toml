@@ -107,9 +107,12 @@ dev = [
 
 ocr = [
     # OCR 功能（图片文字提取）
-    # ⚠️ ARM 架构兼容性：使用 2.6-2.8 版本，3.x 版本在 ARM 上不稳定
-    "paddleocr~=2.8.0",      # 锁定 2.8.x 版本
-    "paddlepaddle~=2.6.2",   # 锁定 2.6.x 版本
+    # ✅ 使用 EasyOCR（基于 PyTorch，兼容所有 CPU，无 AVX2 要求）
+    # 优点：兼容性极佳，支持虚拟化环境，准确率与 PaddleOCR 相当
+    # 缺点：模型较大（~500MB），速度略慢 10-20%
+    "easyocr>=1.7.0",        # OCR 引擎
+    "torch>=2.0.0",          # PyTorch（CPU 版本）
+    "torchvision>=0.15.0",   # PyTorch Vision
     # TGS 动画贴纸支持（依赖 OCR）
     "lottie>=0.7.0",         # TGS/Lottie 解析
     "cairosvg>=2.7.0",       # Cairo SVG 渲染（Lottie 栅格化）

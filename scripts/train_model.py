@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from loguru import logger
 
 from src.core.database import init_db
-from src.repositories.spam_repo import SpamRepository
 from src.ml.classifier import get_classifier
+from src.repositories.spam_repo import SpamRepository
 
 
 async def train_model_from_db():

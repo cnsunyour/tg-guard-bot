@@ -6,7 +6,7 @@
 
 一个功能强大的 Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾功能。
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.0.1)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.1.0)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-brightgreen.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -60,18 +60,53 @@
 - **防滥用限流** - 用户每天最多举报 10 次
 - **消息删除** - 回复消息执行处罚时自动删除违规消息
 
-### 🛡️ 智能反垃圾（三阶段检测）
-- **Stage 1: 规则引擎** - 快速过滤关键词、链接、联系方式（~70% 垃圾）
-- **Stage 2: ML 分类器** - TF-IDF + SVM 捕获变体（~90% 垃圾）
-- **Stage 3: 语义分析** - bge-small-zh-v1.5 Embedding（~98% 垃圾）
-- **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段（支持文本和图片标题）
-- **图片 OCR** - PaddleOCR 检测图片广告（可选，需 4GB RAM）
-- **活跃度系统** - 动态信任机制：
+### 🛡️ 智能反垃圾（多层检测系统）
+
+#### 传统三段检测
+- **Stage 1: 规则引擎** - 快速过滤关键词、链接、联系方式（~1ms，O(1)查表）
+  - 关键词黑名单（置信度 0.9）
+  - URL/链接检测（置信度 0.85）
+  - 联系方式检测（置信度 0.8）
+  - 重复字符/Emoji刷屏（置信度 0.65-0.7）
+- **Stage 2: ML 分类器** - TF-IDF + SVM 捕获变体（~50-100ms）
+  - 中文分词（jieba）
+  - TF-IDF特征提取（5000维）
+  - LinearSVC二分类
+- **Stage 3: 语义分析** - bge-small-zh-v1.5 Embedding（~100-200ms）
+  - 文本嵌入向量生成
+  - 与垃圾原型余弦相似度匹配
+
+#### AI上下文检测（可选）
+- **OpenAI兼容API** - 支持 GPT-4o-mini、DeepSeek、Moonshot 等
+- **上下文理解** - 结合群组对话上下文判断语境
+- **自动训练** - AI检测结果自动入库作为训练样本
+
+#### 活跃度系统
+- **动态信任机制**：
   - 文本消息 +1 活跃度
   - 非文本消息（图片/贴纸/转发/链接）-2 活跃度
   - 高活跃度用户可跳过垃圾检测
   - 低活跃度用户无法发送非文本消息
+- **置信度调整**：
+  - 对数公式：reduction = 0.01 × log2(activity / 10)
+  - 最大降低 15% 置信度
+  - 调整后低于阈值改判为正常
+
+#### 上下文一致性检测（降低误判）⭐
+- **回复链相关性检测**（优先级最高）：
+  - 计算当前消息与被回复消息的语义相似度
+  - 相似度 ≥ 0.5 → 降低 20% 置信度
+- **群组话题一致性检测**：
+  - 计算与最近10条消息的平均相似度
+  - 相似度 ≥ 0.7 → 降低 15% 置信度
+- **设计原则**：只降低不提高（避免误判话题转移）
+- **效果**：即使规则引擎误判，上下文调整也能救回正常对话
+
+#### 其他功能
+- **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段
+- **图片 OCR** - EasyOCR 检测图片广告（可选，需 4GB RAM）
 - **管理员反馈** - 误判纠正，持续优化
+- **自动模型训练** - 达到阈值自动触发训练
 
 ### ⚡ 其他功能
 - **群组白名单** - 只在授权群组中提供服务，自动退出未授权群组
@@ -94,7 +129,7 @@
 | SQLAlchemy | 2.0 | ORM |
 | scikit-learn | 1.4+ | ML 分类器 |
 | fastembed | 0.3+ | 语义嵌入 |
-| PaddleOCR | 2.7+ | 图片 OCR（可选） |
+| EasyOCR | 1.7+ | 图片 OCR（可选） |
 
 ## 🚀 快速开始
 
@@ -496,7 +531,7 @@ TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
 - [x] **Phase 2**: 入群验证（7 种验证方式 + 私聊验证）
 - [x] **Phase 3**: 群管理（Kick/Mute/Ban/Warn）
 - [x] **Phase 4**: 反垃圾系统（三阶段检测管道）
-- [x] **Phase 5**: 图片 OCR（PaddleOCR）
+- [x] **Phase 5**: 图片 OCR（EasyOCR）
 - [x] **Phase 6**: 部署优化（监控/备份/文档）
 - [x] **Phase 7**: 验证系统增强（7 种验证 + 动态超时配置）
 - [x] **Phase 8**: 多 CAPTCHA 集成（Friendly/hCaptcha/MTCaptcha/ALTCHA + 统一 WebApp）
@@ -518,7 +553,7 @@ TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
 ## 🙏 致谢
 
 - [aiogram](https://github.com/aiogram/aiogram) - 优秀的 Telegram Bot 框架
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 强大的 OCR 工具
+- [EasyOCR](https://github.com/JaidedAI/EasyOCR) - 强大的 OCR 工具
 - [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) - 中文语义嵌入模型
 
 ## 📞 联系方式
