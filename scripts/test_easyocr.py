@@ -49,7 +49,6 @@ def test_easyocr():
         print("  ✅ EasyOCR 初始化成功")
 
         # 获取模型信息
-        print(f"  → 支持的语言: {reader.lang_list}")
         print("  → 使用 CPU 模式")
 
     except Exception as e:
