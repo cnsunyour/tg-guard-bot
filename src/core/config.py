@@ -79,6 +79,23 @@ class Settings(BaseSettings):
     context_reply_depth: int = Field(default=3, ge=0, description="回复链最大追溯深度")
     context_max_text_length: int = Field(default=200, ge=1, description="单条消息最大文本长度")
 
+    # 上下文一致性检测配置（用于降低误判）
+    context_consistency_enabled: bool = Field(
+        default=True, description="是否启用上下文一致性检测（用于降低误判）"
+    )
+    context_high_similarity_threshold: float = Field(
+        default=0.7, ge=0.0, le=1.0, description="高相似度阈值（>= 此值视为正常对话）"
+    )
+    context_confidence_reduction: float = Field(
+        default=0.15, ge=0.0, le=1.0, description="上下文一致时降低的置信度"
+    )
+    reply_similarity_threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="回复链相似度阈值（>= 此值视为正常对话）"
+    )
+    reply_confidence_reduction: float = Field(
+        default=0.2, ge=0.0, le=1.0, description="回复内容相关时降低的置信度"
+    )
+
     # 模型自动训练配置
     auto_train_threshold: int = Field(
         default=500, description="触发自动训练的新样本数阈值（默认 500）"

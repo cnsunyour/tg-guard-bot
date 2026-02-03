@@ -781,12 +781,15 @@ async def on_message(message: Message, bot: Bot) -> None:
 
     # ✅ 获取上下文（如果启用）
     context_text = None
+    context_messages_raw = None
     if settings.context_enabled and settings.ai_spam_enabled:
         try:
             context = await ContextService.get_conversation_context(message)
             context_text = ContextService.format_context_for_ai(
                 context, message.text or "", message.message_id
             )
+            # 转换为 dict 列表（给 Embedding 用）
+            context_messages_raw = [dict(msg) for msg in context["recent_messages"]]
             logger.debug(
                 f"已构建上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
                 f"[回复链:{len(context['reply_chain'])}] [最近消息:{len(context['recent_messages'])}]"
@@ -794,14 +797,17 @@ async def on_message(message: Message, bot: Bot) -> None:
         except Exception as e:
             logger.warning(f"获取上下文失败，使用普通检测: {e}")
             context_text = None
+            context_messages_raw = None
 
-    # 检测垃圾（传入活跃度和上下文，使用并行 AI 检测）
+    # 检测垃圾（传入活跃度、上下文和消息对象，使用并行 AI 检测）
     result = await detector.detect_with_ai_context(
         text=message.text or "",
         user_id=message.from_user.id,
         chat_id=message.chat.id,
         activity=activity,
         context_text=context_text,
+        context_messages=context_messages_raw,
+        message=message,
     )
 
     # 如果检测到垃圾

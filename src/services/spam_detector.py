@@ -191,6 +191,8 @@ class SpamDetector:
         chat_id: int,
         activity: int | None = None,
         context_text: str | None = None,
+        context_messages: list[dict] | None = None,
+        message: Any = None,
     ) -> DetectionResult:
         """带上下文的并行检测入口 - 同时运行传统三阶段管道和 AI 上下文检测
 
@@ -199,14 +201,22 @@ class SpamDetector:
             user_id: 用户 ID
             chat_id: 群组 ID
             activity: 用户活跃度（可选）
-            context_text: 上下文文本（格式化后的对话上下文）
+            context_text: 上下文文本（格式化后的对话上下文，给 AI 用）
+            context_messages: 原始上下文消息列表（给 Embedding 用）
+            message: Telegram Message 对象（用于回复链检测）
 
         Returns:
             合并后的检测结果字典
         """
         # 如果 AI 检测未启用，直接使用传统三阶段
         if not self.ai_detector.enabled:
-            return await self.detect(text, user_id, chat_id, activity)
+            result = await self.detect(text, user_id, chat_id, activity)
+            # 应用上下文调整（即使没有 AI 也可以用 Embedding）
+            if settings.context_consistency_enabled and context_messages:
+                result = await self._apply_context_adjustment(
+                    result, text, message, context_messages, user_id
+                )
+            return result
 
         # 并行执行传统检测和 AI 上下文检测
         try:
@@ -229,14 +239,28 @@ class SpamDetector:
                 ai_result = None
 
             # 合并结果
-            return await self._merge_detection_results(
+            merged_result = await self._merge_detection_results(
                 traditional_result, ai_result, text, user_id, activity
             )
+
+            # 应用上下文调整（降低误判）
+            if settings.context_consistency_enabled and context_messages:
+                merged_result = await self._apply_context_adjustment(
+                    merged_result, text, message, context_messages, user_id
+                )
+
+            return merged_result
 
         except Exception as e:
             logger.error(f"并行上下文检测失败: {e}")
             # 降级到传统检测
-            return await self.detect(text, user_id, chat_id, activity)
+            result = await self.detect(text, user_id, chat_id, activity)
+            # 应用上下文调整
+            if settings.context_consistency_enabled and context_messages:
+                result = await self._apply_context_adjustment(
+                    result, text, message, context_messages, user_id
+                )
+            return result
 
     async def _merge_detection_results(
         self,
@@ -489,6 +513,97 @@ class SpamDetector:
                 f"{original_confidence:.2f} -> {adjusted_confidence:.2f} (减少 {reduction:.2f}), "
                 f"仍判定为垃圾"
             )
+
+        return result
+
+    async def _apply_context_adjustment(
+        self,
+        result: DetectionResult,
+        text: str,
+        message: Any,
+        context_messages: list[dict],
+        user_id: int,
+    ) -> DetectionResult:
+        """应用上下文调整（只降低误判，不提高检测）
+
+        Args:
+            result: 检测结果字典
+            text: 当前消息文本
+            message: Telegram Message 对象
+            context_messages: 上下文消息列表
+            user_id: 用户 ID
+
+        Returns:
+            调整后的检测结果
+        """
+        # 如果不是垃圾，不需要调整
+        if not result["is_spam"]:
+            return result
+
+        # 如果 Embedder 未初始化，无法进行语义分析
+        if not self.embedder.is_initialized:
+            logger.debug("Embedder 未初始化，跳过上下文调整")
+            return result
+
+        confidence_reduction = 0.0
+        reasons = []
+
+        try:
+            # 1. 检查回复链相关性（优先级最高）
+            if message and hasattr(message, "reply_to_message") and message.reply_to_message:
+                reply_msg = message.reply_to_message
+                if hasattr(reply_msg, "text") and reply_msg.text:
+                    reply_similarity = await self.embedder.compute_similarity(text, reply_msg.text)
+
+                    if reply_similarity >= settings.reply_similarity_threshold:
+                        confidence_reduction += settings.reply_confidence_reduction
+                        reasons.append(f"回复内容相关(相似度{reply_similarity:.2f})")
+                        logger.info(
+                            f"检测到回复链相关性 [用户:{user_id}] "
+                            f"相似度={reply_similarity:.2f}, "
+                            f"降低置信度 -{settings.reply_confidence_reduction}"
+                        )
+
+            # 2. 检查群组上下文一致性
+            if context_messages and len(context_messages) >= 3:
+                is_consistent, similarity = await self.embedder.detect_context_consistency(
+                    text, context_messages
+                )
+
+                if is_consistent:
+                    confidence_reduction += settings.context_confidence_reduction
+                    reasons.append(f"与群组话题一致(相似度{similarity:.2f})")
+                    logger.info(
+                        f"检测到上下文一致性 [用户:{user_id}] "
+                        f"相似度={similarity:.2f}, "
+                        f"降低置信度 -{settings.context_confidence_reduction}"
+                    )
+
+            # 3. 应用调整
+            if confidence_reduction > 0:
+                original_confidence = result["confidence"]
+                adjusted_confidence = max(0.0, original_confidence - confidence_reduction)
+                result["confidence"] = adjusted_confidence
+                result["reasons"].extend(reasons)
+
+                # 如果置信度降到阈值以下，改为非垃圾
+                threshold = settings.spam_threshold_embedding
+                if adjusted_confidence < threshold:
+                    result["is_spam"] = False
+                    logger.info(
+                        f"上下文调整后置信度降至 {adjusted_confidence:.2f} "
+                        f"(原始 {original_confidence:.2f}, 降低 {confidence_reduction:.2f}), "
+                        f"改判为正常消息 [用户:{user_id}]: {', '.join(reasons)}"
+                    )
+                else:
+                    logger.info(
+                        f"上下文调整后置信度 {adjusted_confidence:.2f} "
+                        f"(原始 {original_confidence:.2f}, 降低 {confidence_reduction:.2f}), "
+                        f"仍判定为垃圾 [用户:{user_id}]"
+                    )
+
+        except Exception as e:
+            logger.error(f"应用上下文调整失败 [用户:{user_id}]: {e}")
 
         return result
 
