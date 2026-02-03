@@ -1,13 +1,12 @@
 """数据库备份脚本 - PostgreSQL + Redis 自动备份与 GFS 轮转"""
 
 import asyncio
-import os
 import sys
 import time
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from subprocess import PIPE, run, TimeoutExpired
+from subprocess import TimeoutExpired, run
 
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
