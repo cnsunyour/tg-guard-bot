@@ -2082,6 +2082,11 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             await callback.answer("❌ 数据错误", show_alert=True)
             return
 
+        # 检查 bot 是否可用
+        if not callback.bot:
+            await callback.answer("❌ Bot 实例不可用", show_alert=True)
+            return
+
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
@@ -2097,7 +2102,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         if callback.from_user.id not in settings.admin_ids:
             # ✅ P1-10: 使用 Redis 缓存减少 API 调用
             if not await PermissionCache.is_admin(
-                callback.bot, message.chat.id, callback.from_user.id  # type: ignore[arg-type]
+                callback.bot, message.chat.id, callback.from_user.id
             ):
                 await callback.answer("❌ 只有管理员可以提供反馈", show_alert=True)
                 return
@@ -2127,7 +2132,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             if not is_spam:
                 success = await ModerationService.unmute_user(
                     bot=callback.bot,
-                    chat_id=message.chat.id,  # type: ignore[arg-type]
+                    chat_id=message.chat.id,
                     user_id=user_id,
                     operator_id=callback.from_user.id,
                 )
