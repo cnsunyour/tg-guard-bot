@@ -434,6 +434,16 @@ class SpamDetector:
             )
             return
 
+        # ✅ 过滤条件 1: 必须包含中文
+        if not any("\u4e00" <= char <= "\u9fff" for char in text):
+            logger.debug(f"AI 负样本不包含中文，跳过入库 [用户:{user_id}] [文本:{text[:50]}]")
+            return
+
+        # ✅ 过滤条件 2: 长度必须超过 10 个字符
+        if len(text) <= 10:
+            logger.debug(f"AI 负样本长度过短，跳过入库 [用户:{user_id}] [长度:{len(text)}]")
+            return
+
         try:
             # 入库负样本（labeled_by = -1 表示 AI 标注）
             success = await self.add_feedback(
