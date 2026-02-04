@@ -218,6 +218,7 @@ class ModerationService:
             elif member.status == "restricted":
                 # 用户被禁言，恢复权限 + 31秒后自动移出 restricted 列表
                 from datetime import datetime, timedelta
+
                 from aiogram.types import ChatPermissions
 
                 until_date = datetime.utcnow() + timedelta(seconds=31)
