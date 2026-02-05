@@ -276,11 +276,11 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要踢出的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /kick <用户ID> [原因]\n"
+            "方式2: /kick &lt;用户ID&gt; [原因]\n"
             "方式3: /kick @用户 [原因]\n\n"
             "<b>新功能</b>:\n"
             "• /kick -d [原因] - 踢出用户，<b>删除该用户的所有消息</b>\n"
-            "• /kick <用户ID> -d [原因] - 同上"
+            "• /kick &lt;用户ID&gt; -d [原因] - 同上"
         )
         return
 
@@ -346,7 +346,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要禁言的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /mute <用户ID> [时长] [原因]\n"
+            "方式2: /mute &lt;用户ID&gt; [时长] [原因]\n"
             "方式3: /mute @用户 [时长] [原因]\n\n"
             "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久"
         )
@@ -416,7 +416,7 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要解除限制的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /unmute <用户ID>\n"
+            "方式2: /unmute &lt;用户ID&gt;\n"
             "方式3: /unmute @用户\n\n"
             "💡 提示：/unmute 和 /unban 功能完全相同"
         )
@@ -460,11 +460,11 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要封禁的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /ban <用户ID> [原因]\n"
+            "方式2: /ban &lt;用户ID&gt; [原因]\n"
             "方式3: /ban @用户 [原因]\n\n"
             "<b>新功能</b>:\n"
             "• /ban -d [原因] - 封禁用户，<b>删除该用户的所有消息</b>\n"
-            "• /ban <用户ID> -d [原因] - 同上"
+            "• /ban &lt;用户ID&gt; -d [原因] - 同上"
         )
         return
 
@@ -533,7 +533,7 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要解除限制的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /unban <用户ID>\n"
+            "方式2: /unban &lt;用户ID&gt;\n"
             "方式3: /unban @用户\n\n"
             "💡 提示：/unban 和 /unmute 功能完全相同"
         )
@@ -577,7 +577,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         await message.answer(
             "❌ 请指定要警告的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /warn <用户ID> [原因]\n"
+            "方式2: /warn &lt;用户ID&gt; [原因]\n"
             "方式3: /warn @用户 [原因]"
         )
         return
@@ -746,7 +746,7 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
         reply = await message.answer(
             "❌ 请指定要清除警告的用户：\n\n"
             "方式1: 回复用户的消息\n"
-            "方式2: /clearwarnings <用户ID>\n"
+            "方式2: /clearwarnings &lt;用户ID&gt;\n"
             "方式3: /clearwarnings @用户"
         )
         await auto_delete_message(reply)
