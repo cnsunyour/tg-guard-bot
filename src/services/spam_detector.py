@@ -794,16 +794,21 @@ class SpamDetector:
         """
         try:
             from aiogram import Bot
+            from aiogram.client.default import DefaultBotProperties
+            from aiogram.enums import ParseMode
 
             from src.core.config import settings
 
-            bot = Bot(token=settings.bot_token)
+            bot = Bot(
+                token=settings.bot_token,
+                default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            )
 
             notification = f"🤖 <b>反垃圾模型自动训练完成</b>\n\n{message}"
 
             for admin_id in admin_ids:
                 try:
-                    await bot.send_message(admin_id, notification, parse_mode="HTML")
+                    await bot.send_message(admin_id, notification)
                     logger.info(f"训练完成通知已发送给管理员 {admin_id}")
                 except Exception as e:
                     logger.warning(f"发送训练通知给管理员 {admin_id} 失败: {e}")
