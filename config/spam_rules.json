@@ -1,0 +1,112 @@
+{
+  "version": "1.0",
+  "description": "高级正则规则配置文件 - 替代原有的简单关键词匹配",
+  "rules": [
+    {
+      "id": "social_engine_db",
+      "pattern": "免费社工库",
+      "risk_level": "critical",
+      "category": "illegal",
+      "description": "社工库非法获取",
+      "enabled": true
+    },
+    {
+      "id": "underage_content",
+      "pattern": "[呦幼][呦幼女童]",
+      "risk_level": "critical",
+      "category": "illegal",
+      "description": "未成年人色情",
+      "enabled": true
+    },
+    {
+      "id": "illegal_drugs",
+      "pattern": "(催情|迷)(药|💊)[\\s\\S]{0,50}听话水",
+      "risk_level": "critical",
+      "category": "illegal",
+      "description": "违禁药品",
+      "enabled": true,
+      "max_match_length": 100
+    },
+    {
+      "id": "crypto_multi_keyword",
+      "pattern": "(?i)(?=(.*(BTC|ETH|USDT)|以太|大[饼餅]|[幣币]圈|[现現][货货]|行情))(?=.*(分析|咨[询詢]|跟[單单]|[進进][群裙]|私聊|助理|合[約约]|[觀观][點点]|[參参]考|盈.{0,5}[虧亏损損]|策略|交流)).{1,200}",
+      "risk_level": "high",
+      "category": "crypto_scam",
+      "description": "加密货币多关键词联合检测",
+      "enabled": true,
+      "max_match_length": 200
+    },
+    {
+      "id": "crypto_exchange_group",
+      "pattern": "(以太|大[饼餅]|策略|[幣币]圈|交流|[现現][货货]|合[约約]|[觀观][點点]|[參参]考|分析|咨[询詢]).{0,5}([群裙]|[频頻]道)",
+      "risk_level": "high",
+      "category": "crypto_scam",
+      "description": "加密货币群组/频道",
+      "enabled": true
+    },
+    {
+      "id": "unblock_quick",
+      "pattern": "(?=(.*解封))(?=.*秒结).{1,100}",
+      "risk_level": "high",
+      "category": "scam",
+      "description": "解封秒结诈骗",
+      "enabled": true
+    },
+    {
+      "id": "wealth_password",
+      "pattern": "([财財致]富.{0,5}密[码碼])",
+      "risk_level": "high",
+      "category": "scam",
+      "description": "财富密码诈骗",
+      "enabled": true
+    },
+    {
+      "id": "private_chat_service",
+      "pattern": "(?=(.*私聊))(?=.*(发泄|欲望)).{1,100}",
+      "risk_level": "medium",
+      "category": "adult",
+      "description": "私聊陪聊服务",
+      "enabled": true
+    },
+    {
+      "id": "adult_chat_service",
+      "pattern": "(?=(.*[哥叔]))(?=.*(陪聊|聊聊|聊天|想[要约陪聊])[了的吗么])",
+      "risk_level": "medium",
+      "category": "adult",
+      "description": "成人陪聊服务",
+      "enabled": true
+    },
+    {
+      "id": "private_contact_service",
+      "pattern": "([售卖][Uu]|[搞赚挣][钱米]|跑分|代收|[頭头]像|[简簡]介|不影响|(相互|互相)(安慰|慰藉)|[资資]源|愿意的|懂的)[\\s\\S]*([私找看睇点點][我莪]|[来莱俫])",
+      "risk_level": "medium",
+      "category": "adult",
+      "description": "私密联系方式服务",
+      "enabled": true
+    },
+    {
+      "id": "trading_signals",
+      "pattern": "(方向|[進进][場场]|[區区][间间])[\\s\\S]*止[盈损]|[Kk]線[\\s\\S]*([說説]明|特徵|形成)|(力|金|势)[\\s\\S]*营销",
+      "risk_level": "low",
+      "category": "trading",
+      "description": "交易信号/营销",
+      "enabled": true
+    },
+    {
+      "id": "suspicious_platforms",
+      "pattern": "亿万国际|交易宝|绿色棋游",
+      "risk_level": "low",
+      "category": "gambling",
+      "description": "可疑博彩平台",
+      "enabled": true
+    },
+    {
+      "id": "telegram_spam",
+      "pattern": "(?i)(tg|telegram)[\\s\\S]*(私发|代发|僵尸)",
+      "risk_level": "low",
+      "category": "spam",
+      "description": "Telegram 垃圾推广",
+      "enabled": true
+    }
+  ]
+}
