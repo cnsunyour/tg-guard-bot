@@ -1367,6 +1367,21 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
 
     # ==================== 通用处理：添加到训练库 ====================
     try:
+        # ✅ 修复 bug：先查找并删除之前的正样本记录（如果存在）
+        # 当消息被自动检测为垃圾时，已经调用 add_feedback(is_spam=True) 标记为正样本
+        # 现在管理员标记为非垃圾，需要删除之前的正样本，避免数据冲突
+        existing_sample = await SpamRepository.find_sample_by_text(message_text, is_spam=True)
+
+        if existing_sample:
+            # 删除之前的正样本记录
+            deleted = await SpamRepository.delete_sample(existing_sample.id)
+            if deleted:
+                logger.info(
+                    f"notspam 命令：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
+                    f"[文本长度:{len(message_text)}] [{usage_type}]"
+                )
+
+        # 添加负样本
         await SpamRepository.add_sample(
             text=message_text,
             is_spam=False,  # 标记为非垃圾

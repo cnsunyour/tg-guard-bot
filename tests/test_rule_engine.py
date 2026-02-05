@@ -6,7 +6,7 @@ import pytest
 @pytest.mark.unit
 def test_regex_rule_engine():
     """测试正则规则引擎"""
-    from src.ml.rule_engine import RegexRuleEngine, SpamRule, SpamRiskLevel
+    from src.ml.rule_engine import RegexRuleEngine, SpamRiskLevel, SpamRule
 
     # 测试加密货币诈骗规则
     crypto_rule = SpamRule(
