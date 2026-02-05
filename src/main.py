@@ -220,6 +220,8 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="spam", description="举报垃圾消息"),
         BotCommand(command="report", description="举报垃圾消息"),
         BotCommand(command="notspam", description="标记非垃圾消息"),
+        BotCommand(command="nospam", description="标记非垃圾消息"),
+        BotCommand(command="unspam", description="标记非垃圾消息"),
         BotCommand(command="reports", description="查看举报列表"),
         BotCommand(command="approve", description="处理举报"),
         # 帮助

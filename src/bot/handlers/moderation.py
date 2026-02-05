@@ -1245,9 +1245,11 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             await auto_delete_message(reply)
 
 
-@router.message(Command("notspam"))
+@router.message(Command("notspam", "nospam", "unspam"))
 async def cmd_notspam(message: Message, bot: Bot) -> None:
     """标记为非垃圾消息（误报修正 + 预防性训练）
+
+    支持的命令：/notspam, /nospam, /unspam
 
     支持两种使用方式：
     1. 回复消息：/notspam [备注] - 预防性训练，将正常消息标记为负样本
