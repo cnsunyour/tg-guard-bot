@@ -1307,12 +1307,17 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
                 "❌ 请提供消息ID或回复要标记的消息\n\n"
                 "<b>用法</b>:\n"
                 "• /notspam [备注] - 回复消息，预防性训练\n"
-                "• /notspam &lt;message_id&gt; [备注] - 标记已删除消息为误报\n\n"
+                "• /notspam &lt;消息ID或链接&gt; [备注] - 标记已删除消息为误报\n\n"
+                "<b>支持的格式</b>:\n"
+                "• 纯数字：12345\n"
+                "• 私有群组链接：https://t.me/c/1234567890/12345\n"
+                "• 公开群组链接：https://t.me/channel_name/12345\n\n"
                 "<b>示例</b>:\n"
                 "• /notspam （回复正常消息）\n"
                 "• /notspam 这是正常讨论 （回复正常消息）\n"
                 "• /notspam 12345 （标记已删除的消息12345为误报）\n"
-                "• /notspam 12345 这是误报 （标记已删除消息并添加备注）\n\n"
+                "• /notspam 12345 这是误报 （标记已删除消息并添加备注）\n"
+                "• /notspam https://t.me/c/1234567890/12345 （使用消息链接）\n\n"
                 "💡 <b>说明</b>:\n"
                 "• 仅管理员可用\n"
                 "• 预防性训练：增强模型对正常消息的识别\n"
@@ -1321,13 +1326,16 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
             await auto_delete_message(reply)
             return
 
-        # 解析 message_id
-        try:
-            target_message_id = int(args[1])
-        except ValueError:
+        # 解析 message_id（支持纯数字和消息链接）
+        _link_chat_id, target_message_id, _link_username = parse_message_link_with_chat(args[1])
+
+        if target_message_id is None:
             reply = await message.answer(
-                f"❌ 无效的消息ID: {escape_html(args[1])}\n\n"
-                "消息ID应该是纯数字，例如：/notspam 12345"
+                f"❌ 无法解析消息ID: {escape_html(args[1])}\n\n"
+                "支持的格式：\n"
+                "• 纯数字：/notspam 12345\n"
+                "• 私有群组链接：/notspam https://t.me/c/1234567890/12345\n"
+                "• 公开群组链接：/notspam https://t.me/channel_name/12345"
             )
             await auto_delete_message(reply)
             return
