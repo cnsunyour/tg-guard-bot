@@ -803,7 +803,7 @@ class SpamDetector:
 
             for admin_id in admin_ids:
                 try:
-                    await bot.send_message(admin_id, notification)
+                    await bot.send_message(admin_id, notification, parse_mode="HTML")
                     logger.info(f"训练完成通知已发送给管理员 {admin_id}")
                 except Exception as e:
                     logger.warning(f"发送训练通知给管理员 {admin_id} 失败: {e}")
