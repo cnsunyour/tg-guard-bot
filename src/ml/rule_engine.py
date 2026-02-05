@@ -32,7 +32,6 @@ class RuleEngine:
         "赌博",
         "下注",
         "返水",
-        "充值",
         "提款",
         "博彩",
         # 色情相关
@@ -47,12 +46,6 @@ class RuleEngine:
         "躺赚",
         "零投资",
         "高回报",
-        # 垃圾推广
-        "点赞",
-        "关注",
-        "转发",
-        "免费送",
-        "领取",
     ]
 
     # Telegram 邀请链接模式
@@ -253,14 +246,14 @@ class RuleEngine:
         is_blacklist, keyword = self.check_keywords(text)
         if is_blacklist:
             result["is_spam"] = True
-            result["confidence"] = 0.9
+            result["confidence"] = 0.8
             result["reasons"].append(f"关键词黑名单: {keyword}")
 
         # 检查 URL
         has_suspicious_url, urls, url_reason = self.check_urls(text)
         if has_suspicious_url:
             result["is_spam"] = True
-            result["confidence"] = max(result["confidence"], 0.85)
+            result["confidence"] = max(result["confidence"], 0.8)
             result["reasons"].append(url_reason)
             result["details"]["urls"] = urls
 
