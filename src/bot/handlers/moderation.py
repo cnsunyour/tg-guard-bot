@@ -14,6 +14,7 @@ from src.core.utils import (
     auto_delete_message,
     check_admin_permission_strict_message,
     escape_html,
+    parse_message_link,
     parse_message_link_with_chat,
 )
 from src.repositories.report_repo import ReportRepository
@@ -1327,7 +1328,7 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
             return
 
         # 解析 message_id（支持纯数字和消息链接）
-        _link_chat_id, target_message_id, _link_username = parse_message_link_with_chat(args[1])
+        target_message_id = parse_message_link(args[1])
 
         if target_message_id is None:
             reply = await message.answer(
