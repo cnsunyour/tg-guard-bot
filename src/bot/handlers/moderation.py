@@ -25,18 +25,18 @@ from src.services.moderation import ModerationService
 router = Router(name="moderation")
 
 
-async def parse_user_from_message(message: Message, _bot: Bot | None = None) -> int | None:
+async def parse_user_from_message(message: Message) -> int | None:
     """从消息中解析用户ID
 
     支持的格式：
     1. 回复消息
     2. 用户ID：/command 123456
     3. @提及用户（text_mention）：/command @user
-    4. @username：/command @username（通过 API 查询）
+
+    ⚠️ 注意：不再支持通过 @username 查询（Telegram Bot API 限制）
 
     Args:
         message: 消息对象
-        bot: Bot 实例（用于查询 @username）
 
     Returns:
         用户ID，如果无法解析则返回 None
@@ -294,7 +294,7 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要踢出的用户：\n\n"
@@ -364,7 +364,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要禁言的用户：\n\n"
@@ -434,7 +434,7 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要解除限制的用户：\n\n"
@@ -478,7 +478,7 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要封禁的用户：\n\n"
@@ -551,7 +551,7 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要解除限制的用户：\n\n"
@@ -595,7 +595,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要警告的用户：\n\n"
@@ -690,7 +690,7 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         # 如果没有指定用户，查看自己的警告
         target_user_id = message.from_user.id
@@ -764,7 +764,7 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message, bot)
+    target_user_id = await parse_user_from_message(message)
     if target_user_id is None:
         reply = await message.answer(
             "❌ 请指定要清除警告的用户：\n\n"
