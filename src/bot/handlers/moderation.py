@@ -25,21 +25,14 @@ from src.services.moderation import ModerationService
 router = Router(name="moderation")
 
 
-async def parse_user_from_message(message: Message) -> int | None:
+async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
     """从消息中解析用户ID
 
     支持的格式：
     1. 回复消息
     2. 用户ID：/command 123456
     3. @提及用户（text_mention）：/command @user
-
-    ⚠️ 注意：不再支持通过 @username 查询（Telegram Bot API 限制）
-
-    Args:
-        message: 消息对象
-
-    Returns:
-        用户ID，如果无法解析则返回 None
+    4. @username（通过本地映射 + API 验证）
     """
     # 1. 检查是否回复了某条消息
     if message.reply_to_message:
@@ -49,35 +42,44 @@ async def parse_user_from_message(message: Message) -> int | None:
         # 如果是频道消息，返回 None
         return None
 
-    # 2. 检查 entities 中是否有 text_mention（用户被 @ 提及）
+    # 2. 检查 entities 中的 text_mention 和 mention
     if message.text and message.entities:
         for entity in message.entities:
-            # text_mention: 用户没有用户名，通过客户端点击选择用户时的提及
-            # 包含完整的 User 对象
+            # text_mention: 包含完整 User 对象
             if entity.type == "text_mention" and entity.user:
                 logger.debug(f"通过 text_mention 解析到用户: {entity.user.id}")
                 return entity.user.id
 
-            # mention: @username 格式的提及
-            # ⚠️ 注意：Telegram Bot API 不支持通过 @username 直接获取 user_id
-            # 需要用户使用其他方式（回复消息、text_mention、或直接提供 user_id）
+            # ✅ mention: @username 格式（通过映射查询 + API 验证）
             if entity.type == "mention":
                 # 提取 @username
                 username = message.text[entity.offset : entity.offset + entity.length]
                 if username.startswith("@"):
-                    username = username[1:]  # 去掉 @ 符号
+                    username = username[1:]
 
-                logger.debug(
-                    f"检测到 @username 提及: @{username}，但 Bot API 不支持通过 username 查询 user_id"
-                )
-                logger.debug(
-                    "请使用以下方式之一: 1) 回复消息 2) 使用 text_mention (点击 @) 3) 直接提供 user_id"
-                )
-                # 暂时跳过，不返回 None，继续尝试其他解析方式
-                continue
+                # ✅ 通过全局映射 + API 实时验证
+                from src.services.username_mapping import UsernameMappingService
 
-    # 3. 检查命令参数中是否有用户ID
+                user_id = await UsernameMappingService.get_user_id_by_username(
+                    username=username,
+                    bot=bot,
+                    chat_id=message.chat.id,
+                )
+
+                if user_id:
+                    logger.info(f"通过 username 映射解析到用户: @{username} -> {user_id}")
+                    return user_id
+                else:
+                    logger.debug(
+                        f"未找到 @username 映射或验证失败: @{username}，"
+                        "该用户可能未在群组发言、已更改 username 或已离开群组"
+                    )
+                    # 继续尝试其他解析方式
+                    continue
+
+    # 3. 检查命令参数中的用户ID
     if message.text:
+        # ... 现有纯数字 ID 解析逻辑保持不变 ...
         if not message.text:
             return None
         parts = message.text.split(maxsplit=1)
@@ -294,7 +296,7 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要踢出的用户：\n\n"
@@ -364,7 +366,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要禁言的用户：\n\n"
@@ -434,7 +436,7 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要解除限制的用户：\n\n"
@@ -478,7 +480,7 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要封禁的用户：\n\n"
@@ -551,7 +553,7 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要解除限制的用户：\n\n"
@@ -595,7 +597,7 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         await message.answer(
             "❌ 请指定要警告的用户：\n\n"
@@ -690,7 +692,7 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         # 如果没有指定用户，查看自己的警告
         target_user_id = message.from_user.id
@@ -764,7 +766,7 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
         return
 
     # 解析目标用户
-    target_user_id = await parse_user_from_message(message)
+    target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
         reply = await message.answer(
             "❌ 请指定要清除警告的用户：\n\n"

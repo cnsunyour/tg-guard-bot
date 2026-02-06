@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
-from aiogram.filters import JOIN_TRANSITION, ChatMemberUpdatedFilter
+from aiogram.filters import JOIN_TRANSITION, LEAVE_TRANSITION, ChatMemberUpdatedFilter
 from aiogram.types import (
     CallbackQuery,
     ChatJoinRequest,
@@ -25,6 +25,7 @@ from src.core.redis import RedisKeys, get_redis
 from src.core.utils import escape_html, format_user_mention
 from src.repositories.group_repo import GroupRepository
 from src.services.spam_detector import SpamDetector
+from src.services.username_mapping import UsernameMappingService
 from src.services.verification import VerificationService
 
 router = Router(name="verification")
@@ -360,6 +361,15 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
 
     logger.info(f"收到加入请求: 用户 {username} ({user_id}) 请求加入群组 {chat_id}")
 
+    # ✅ 新增：记录 username 映射
+    if user.username:
+        from src.services.username_mapping import UsernameMappingService
+
+        await UsernameMappingService.update_mapping(
+            user_id=user_id,
+            username=user.username,
+        )
+
     # ==================== 用户信息反垃圾检测 ====================
     if await check_user_spam_info(bot, chat_id, user_id, username, mode="join_request"):
         return  # 检测到垃圾信息，已处理，直接返回
@@ -460,6 +470,13 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     username = user.username or user.full_name
 
     logger.info(f"用户 {username} ({user_id}) 加入群组 {chat_id}")
+
+    # ✅ 记录 username 映射
+    if user.username:
+        await UsernameMappingService.update_mapping(
+            user_id=user_id,
+            username=user.username,
+        )
 
     # ✅ 检查是否为管理员邀请（from_user 是邀请者）
     if event.from_user:
@@ -609,6 +626,29 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"处理用户加入事件失败: {e}")
+
+
+@router.chat_member(ChatMemberUpdatedFilter(member_status_changed=LEAVE_TRANSITION))
+async def on_user_leave(event: ChatMemberUpdated) -> None:
+    """处理用户离开群组事件 - 更新 username 映射
+
+    用户离开群组时也会更新 username 映射，确保：
+    1. 用户在离开前如果改了 username，映射会更新
+    2. 保持映射是最新的状态
+    3. 查询时通过 API 实时验证，离开群组的用户映射仍可正常工作
+    """
+    user = event.old_chat_member.user
+    user_id = user.id
+    username = user.username or user.full_name
+
+    logger.info(f"用户 {username} ({user_id}) 离开群组 {event.chat.id}")
+
+    # ✅ 更新 username 映射
+    if user.username:
+        await UsernameMappingService.update_mapping(
+            user_id=user_id,
+            username=user.username,
+        )
 
 
 @router.callback_query(F.data.startswith("verify_math:"))

@@ -186,3 +186,17 @@ class RedisKeys:
         TTL: 可配置（默认 10 分钟）
         """
         return f"context:group:{chat_id}"
+
+    @staticmethod
+    def username_mapping(username: str) -> str:
+        """全局 username → user_id 映射
+
+        格式: "username_map:{username.lower()}"
+        存储: user_id (整数)
+        TTL: 7 天
+
+        注意：
+        - username 不区分大小写，统一转为小写
+        - 全局唯一，不区分群组
+        """
+        return f"username_map:{username.lower()}"

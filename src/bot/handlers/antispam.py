@@ -24,11 +24,25 @@ from src.services.activity import ActivityService  # 活跃度服务
 from src.services.context_service import ContextService  # 上下文服务
 from src.services.moderation import ModerationService
 from src.services.spam_detector import get_detector
+from src.services.username_mapping import UsernameMappingService  # ✅ username 映射服务
 
 router = Router(name="antispam")
 
 # 已注册的命令集合（将在 bot 启动时自动从 dispatcher 中提取）
 _registered_commands: set[str] = set()
+
+
+async def update_username_mapping_if_needed(message: Message) -> None:
+    """更新 username 映射（如果用户有 username）
+
+    Args:
+        message: 消息对象
+    """
+    if message.from_user and message.from_user.username:
+        await UsernameMappingService.update_mapping(
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+        )
 
 
 def set_registered_commands(commands: set[str]) -> None:
@@ -696,6 +710,9 @@ async def on_message(message: Message, bot: Bot) -> None:
         logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
         return
 
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
+
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
         logger.debug(f"跳过超级管理员文本消息 [用户:{message.from_user.id}]")
@@ -925,6 +942,9 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
         return
 
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
+
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
         logger.debug(f"跳过超级管理员图片消息 [用户:{message.from_user.id}]")
@@ -1102,6 +1122,9 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
     if not message.from_user:
         logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
         return
+
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
@@ -1533,6 +1556,9 @@ async def on_video_message(message: Message, bot: Bot) -> None:
     if not message.from_user:
         return
 
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1572,6 +1598,9 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
     # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
     if not message.from_user:
         return
+
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     if message.from_user.id in settings.admin_ids:
         return
@@ -1613,6 +1642,9 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
     if not message.from_user:
         return
 
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1652,6 +1684,9 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
     # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
     if not message.from_user:
         return
+
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     if message.from_user.id in settings.admin_ids:
         return
@@ -1693,6 +1728,9 @@ async def on_document_message(message: Message, bot: Bot) -> None:
     if not message.from_user:
         return
 
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
+
     if message.from_user.id in settings.admin_ids:
         return
 
@@ -1732,6 +1770,9 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
     # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
     if not message.from_user:
         return
+
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     if message.from_user.id in settings.admin_ids:
         return
@@ -1784,6 +1825,9 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
 
     if not message.from_user:
         return
+
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
@@ -1967,6 +2011,9 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
 
     if not message.from_user:
         return
+
+    # ✅ 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     # 跳过超级管理员消息
     if message.from_user.id in settings.admin_ids:
