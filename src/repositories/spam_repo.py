@@ -175,7 +175,7 @@ class SpamRepository:
         Returns:
             删除的样本数量
         """
-        from sqlalchemy import delete, and_
+        from sqlalchemy import and_, delete
 
         async with get_db_session() as session:
             result = await session.execute(
@@ -187,52 +187,8 @@ class SpamRepository:
                 )
             )
             await session.commit()
-            return result.rowcount
-
-    @staticmethod
-    async def find_sample_by_text(text: str, is_spam: bool | None = None) -> SpamSample | None:
-        """通过文本查找样本
-
-        Args:
-            text: 消息文本
-            is_spam: 是否为垃圾（可选过滤条件）
-
-        Returns:
-            找到的样本，未找到返回 None
-        """
-        async with get_db_session() as session:
-            query = select(SpamSample).where(SpamSample.text == text)
-
-            if is_spam is not None:
-                query = query.where(SpamSample.is_spam == is_spam)
-
-            query = query.order_by(SpamSample.created_at.desc()).limit(1)
-
-            result = await session.execute(query)
-            return result.scalar_one_or_none()
-
-    @staticmethod
-    async def delete_sample_by_text(text: str, is_spam: bool) -> int:
-        """删除指定文本和标签的样本
-
-        Args:
-            text: 消息文本
-            is_spam: 是否为垃圾
-
-        Returns:
-            删除的样本数量
-        """
-        async with get_db_session() as session:
-            result = await session.execute(
-                delete(SpamSample).where(
-                    and_(
-                        SpamSample.text == text,
-                        SpamSample.is_spam == is_spam,
-                    )
-                )
-            )
-            await session.commit()
-            return result.rowcount
+            # mypy: Result[Any] 实际上是 CursorResult，它有 rowcount 属性
+            return int(result.rowcount)  # type: ignore[attr-defined]
 
 
 # 全局变量：记录上次训练时的样本数量

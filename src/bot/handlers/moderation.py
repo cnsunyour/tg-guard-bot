@@ -25,7 +25,7 @@ from src.services.moderation import ModerationService
 router = Router(name="moderation")
 
 
-async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
+async def parse_user_from_message(message: Message, _bot: Bot | None = None) -> int | None:
     """从消息中解析用户ID
 
     支持的格式：
@@ -50,7 +50,7 @@ async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
         return None
 
     # 2. 检查 entities 中是否有 text_mention（用户被 @ 提及）
-    if message.entities:
+    if message.text and message.entities:
         for entity in message.entities:
             # text_mention: 用户没有用户名，通过客户端点击选择用户时的提及
             # 包含完整的 User 对象
@@ -58,23 +58,23 @@ async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
                 logger.debug(f"通过 text_mention 解析到用户: {entity.user.id}")
                 return entity.user.id
 
-            # mention: @username 格式的提及，需要通过 API 查询用户ID
+            # mention: @username 格式的提及
+            # ⚠️ 注意：Telegram Bot API 不支持通过 @username 直接获取 user_id
+            # 需要用户使用其他方式（回复消息、text_mention、或直接提供 user_id）
             if entity.type == "mention":
                 # 提取 @username
                 username = message.text[entity.offset : entity.offset + entity.length]
                 if username.startswith("@"):
                     username = username[1:]  # 去掉 @ 符号
 
-                logger.debug(f"检测到 @username 提及: @{username}，正在查询用户ID...")
-
-                try:
-                    # 通过 get_chat_member API 查询用户ID
-                    member = await bot.get_chat_member(chat_id=message.chat.id, username=username)
-                    logger.debug(f"成功解析 @{username} -> 用户ID: {member.user.id}")
-                    return member.user.id
-                except Exception as e:
-                    logger.warning(f"无法解析 @{username}: {e}")
-                    return None
+                logger.debug(
+                    f"检测到 @username 提及: @{username}，但 Bot API 不支持通过 username 查询 user_id"
+                )
+                logger.debug(
+                    "请使用以下方式之一: 1) 回复消息 2) 使用 text_mention (点击 @) 3) 直接提供 user_id"
+                )
+                # 暂时跳过，不返回 None，继续尝试其他解析方式
+                continue
 
     # 3. 检查命令参数中是否有用户ID
     if message.text:
