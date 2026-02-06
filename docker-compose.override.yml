@@ -14,6 +14,7 @@ services:
       - ./migrations:/app/migrations:ro  # 只读挂载迁移脚本
       - ./data:/app/data            # 挂载整个 data 目录（包含 models 和 session 文件）
       - ./logs:/app/logs
+      - ./config:/app/config
 
     # 开发环境：使用 watchfiles 监控文件变化并自动重启
     command:
