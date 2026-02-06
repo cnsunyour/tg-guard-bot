@@ -66,9 +66,36 @@ class SpamDetector:
             "details": {},
         }
 
+        # ========== 两阶段预过滤 ==========
+        # 阶段1: 先运行规则引擎快速检测（所有消息都检测）
+        rule_result = await run_in_executor(self.rule_engine.analyze, text)
+
+        # 如果规则引擎检测到垃圾，继续完整检测流程
+        # （即使是短消息，也会被检测到）
+        if rule_result["is_spam"]:
+            logger.debug(
+                f"规则引擎检测到垃圾特征 [用户:{user_id}] "
+                f"[置信度:{rule_result['confidence']:.2f}] "
+                f"[原因:{rule_result['reasons']}]"
+            )
+            # 继续执行后续检测流程...
+        else:
+            # 阶段2: 规则引擎未检测到垃圾，检查文本长度
+            min_length = settings.spam_min_text_length
+            if min_length > 0:
+                text_length = len(text)
+                if text_length < min_length:
+                    logger.debug(
+                        f"跳过过短消息检测 [群组:{chat_id}] [用户:{user_id}] "
+                        f"[长度:{text_length}] [阈值:{min_length}]"
+                    )
+                    result["stage"] = "skipped_short"
+                    result["details"] = {"text_length": text_length, "min_length": min_length}
+                    return result
+
         # Stage 1: 规则引擎（快速过滤）
         # ✅ P1-11: 在线程池中运行，避免阻塞事件循环
-        rule_result = await run_in_executor(self.rule_engine.analyze, text)
+        # 注意：rule_result 已在两阶段预过滤中计算过，这里直接使用
 
         if rule_result["is_spam"]:
             result["is_spam"] = True

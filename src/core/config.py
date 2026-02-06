@@ -49,15 +49,19 @@ class Settings(BaseSettings):
     spam_high_confidence_threshold: float = Field(
         default=0.9, description="高置信度阈值（>= 此值踢出并封禁，< 此值禁言）"
     )
+    spam_min_text_length: int = Field(
+        default=10,
+        ge=0,
+        le=1000,
+        description="垃圾检测的最小文本长度（字符数），低于此长度的消息跳过检测，设为0禁用",
+    )
 
     # ========== 高级正则规则引擎配置 ==========
     regex_rules_enabled: bool = Field(default=True, description="是否启用高级正则规则引擎")
     regex_rules_config_path: str = Field(
         default="config/spam_rules.json", description="自定义规则配置文件路径"
     )
-    regex_rules_max_text_length: int = Field(
-        default=500, description="正则规则检测的最大文本长度"
-    )
+    regex_rules_max_text_length: int = Field(default=500, description="正则规则检测的最大文本长度")
 
     # AI 垃圾检测配置（OpenAI 兼容 API）
     ai_spam_enabled: bool = Field(default=False, description="是否启用 AI API 垃圾检测")
