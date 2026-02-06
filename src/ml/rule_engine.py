@@ -376,12 +376,14 @@ class RuleEngine:
             result["is_spam"] = True
             result["confidence"] = rule.confidence
             result["reasons"].append(f"规则匹配: {rule.description}")
-            result["details"].update({
-                "rule_id": rule.id,
-                "category": rule.category,
-                "risk_level": rule.risk_level.value,
-                "matched_text": matched_text,
-            })
+            result["details"].update(
+                {
+                    "rule_id": rule.id,
+                    "category": rule.category,
+                    "risk_level": rule.risk_level.value,
+                    "matched_text": matched_text,
+                }
+            )
 
             # 🔴 极高危险等级直接返回，跳过后续检测
             if rule.risk_level == SpamRiskLevel.CRITICAL:

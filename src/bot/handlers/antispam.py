@@ -2123,7 +2123,9 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                 from src.repositories.spam_repo import SpamRepository
 
                 # 查找该文本的正样本记录（如果存在）
-                existing_sample = await SpamRepository.find_sample_by_text(cached_text, is_spam=True)
+                existing_sample = await SpamRepository.find_sample_by_text(
+                    cached_text, is_spam=True
+                )
 
                 if existing_sample:
                     # 删除之前的正样本记录
@@ -2154,13 +2156,11 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                 )
                 if success:
                     logger.info(
-                        f"误判反馈：已自动恢复用户 {user_id} 的权限 "
-                        f"[群组:{message.chat.id}]"
+                        f"误判反馈：已自动恢复用户 {user_id} 的权限 " f"[群组:{message.chat.id}]"
                     )
                 else:
                     logger.warning(
-                        f"误判反馈：恢复用户 {user_id} 权限失败 "
-                        f"[群组:{message.chat.id}]"
+                        f"误判反馈：恢复用户 {user_id} 权限失败 " f"[群组:{message.chat.id}]"
                     )
 
             # 检查是否需要自动训练

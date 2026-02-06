@@ -265,7 +265,10 @@ class SpamEmbedder:
             return 0.0
 
     async def detect_context_consistency(
-        self, text: str, context_messages: list[dict], high_similarity_threshold: float | None = None
+        self,
+        text: str,
+        context_messages: list[dict],
+        high_similarity_threshold: float | None = None,
     ) -> tuple[bool, float]:
         """检测消息是否与上下文语义一致
 
@@ -305,7 +308,9 @@ class SpamEmbedder:
             context_embs = embeddings[1:]
 
             # 计算与上下文的平均相似度
-            similarities = [self._cosine_similarity(current_emb, ctx_emb) for ctx_emb in context_embs]
+            similarities = [
+                self._cosine_similarity(current_emb, ctx_emb) for ctx_emb in context_embs
+            ]
             avg_similarity = float(np.mean(similarities))
 
             # 判断是否一致（高相似度）

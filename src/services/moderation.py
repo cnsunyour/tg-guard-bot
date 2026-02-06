@@ -257,8 +257,7 @@ class ModerationService:
 
             action_text = "解除禁言" if action == "unmute" else "解除封禁"
             logger.info(
-                f"用户 {user_id} 被管理员 {operator_id} {action_text} "
-                f"(原状态: {member.status})"
+                f"用户 {user_id} 被管理员 {operator_id} {action_text} " f"(原状态: {member.status})"
             )
             return True
 
