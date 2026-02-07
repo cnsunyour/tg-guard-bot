@@ -1,5 +1,8 @@
 """垃圾样本数据仓库"""
 
+import asyncio
+
+from loguru import logger
 from sqlalchemy import func, select
 
 from src.core.database import get_db_session
@@ -62,12 +65,43 @@ class SpamRepository:
 
     @staticmethod
     async def get_training_data() -> tuple[list[str], list[bool]]:
-        """获取训练数据
+        """获取训练数据（平衡样本策略）
+
+        策略：
+        1. 获取全部正样本
+        2. 获取最新的负样本，数量为正样本的 10 倍
+        3. 如果负样本总数不足，则使用全部可用的负样本
 
         Returns:
             (文本列表, 标签列表)
         """
-        samples = await SpamRepository.get_all_samples()
+        # 1. 统计正负样本数量
+        spam_count, normal_count = await SpamRepository.count_samples_by_label()
+
+        if spam_count == 0:
+            logger.warning("没有正样本，返回空训练集")
+            return [], []
+
+        # 2. 计算需要的负样本数量（正样本的 10 倍）
+        target_normal_count = spam_count * 10
+        actual_normal_count = min(target_normal_count, normal_count)
+
+        logger.info(
+            f"样本提取策略: "
+            f"正样本={spam_count} (全部), "
+            f"负样本={actual_normal_count}/{normal_count} (最新{actual_normal_count}个)"
+        )
+
+        # 3. 并行获取正负样本（提高性能）
+        spam_samples_task = SpamRepository.get_all_samples(is_spam=True, limit=None)
+        normal_samples_task = SpamRepository.get_all_samples(
+            is_spam=False, limit=actual_normal_count
+        )
+
+        spam_samples, normal_samples = await asyncio.gather(spam_samples_task, normal_samples_task)
+
+        # 4. 合并样本
+        samples = spam_samples + normal_samples
 
         texts = [sample.text for sample in samples]
         labels = [sample.is_spam for sample in samples]
@@ -89,6 +123,28 @@ class SpamRepository:
 
             result = await session.execute(query)
             return result.scalar() or 0
+
+    @staticmethod
+    async def count_samples_by_label() -> tuple[int, int]:
+        """统计正负样本数量
+
+        Returns:
+            (正样本数量, 负样本数量)
+        """
+        async with get_db_session() as session:
+            # 统计正样本
+            spam_result = await session.execute(
+                select(func.count(SpamSample.id)).where(SpamSample.is_spam.is_(True))
+            )
+            spam_count = spam_result.scalar() or 0
+
+            # 统计负样本
+            normal_result = await session.execute(
+                select(func.count(SpamSample.id)).where(SpamSample.is_spam.is_(False))
+            )
+            normal_count = normal_result.scalar() or 0
+
+            return spam_count, normal_count
 
     @staticmethod
     async def delete_sample(sample_id: int) -> bool:
