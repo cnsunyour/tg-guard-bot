@@ -1381,7 +1381,7 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
                 "❌ 未找到该消息的缓存\n\n"
                 "可能原因：\n"
                 "• 消息ID不正确\n"
-                "• 缓存已过期（1小时后自动删除）\n"
+                "• 缓存已过期（1天后自动删除）\n"
                 "• 该消息未被检测为垃圾"
             )
             await auto_delete_message(reply)

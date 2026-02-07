@@ -868,10 +868,10 @@ async def on_message(message: Message, bot: Bot) -> None:
 
             if success:
                 # ✅ P1-12: 缓存原始消息文本，用于管理员反馈
-                # TTL 1小时，因为管理员通常会很快反馈
+                # TTL 1天，给管理员充足的时间进行反馈
                 redis = get_redis()
                 text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
-                await redis.setex(text_cache_key, 3600, message.text or "")
+                await redis.setex(text_cache_key, 86400, message.text or "")
 
                 # 发送提示消息（包含管理员反馈按钮）
                 # ✅ 使用 message_id 代替文本内容，避免注入风险
@@ -1047,13 +1047,13 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
 
                 if success:
                     # ✅ P1-12: 缓存原始消息的 OCR 文本，用于管理员反馈
-                    # TTL 1小时
+                    # TTL 1天
                     if "ocr_text" in result["details"]:
                         redis = get_redis()
                         text_cache_key = RedisKeys.spam_message_text(
                             message.chat.id, message.message_id
                         )
-                        await redis.setex(text_cache_key, 3600, result["details"]["ocr_text"])
+                        await redis.setex(text_cache_key, 86400, result["details"]["ocr_text"])
 
                     # 发送提示消息（不包含 OCR 提取的敏感内容）
                     # ⚠️ 注意：callback_data 中也不应包含敏感信息，应使用 message_id 作为标识
@@ -1485,13 +1485,13 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     punishment_text = "禁言 10 分钟"
 
                 if success:
-                    # 缓存原始消息的 OCR 文本，用于管理员反馈
+                    # 缓存原始消息的 OCR 文本，用于管理员反馈（TTL 1天）
                     if "ocr_text" in result["details"]:
                         redis = get_redis()
                         text_cache_key = RedisKeys.spam_message_text(
                             message.chat.id, message.message_id
                         )
-                        await redis.setex(text_cache_key, 3600, result["details"]["ocr_text"])
+                        await redis.setex(text_cache_key, 86400, result["details"]["ocr_text"])
 
                     # 发送提示消息
                     message_id_str = str(message.message_id)
@@ -1943,10 +1943,10 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
                 punishment_text = "禁言 10 分钟"
 
             if success:
-                # 缓存原始消息文本，用于管理员反馈
+                # 缓存原始消息文本，用于管理员反馈（TTL 1天）
                 redis = get_redis()
                 text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
-                await redis.setex(text_cache_key, 3600, message.text or "")
+                await redis.setex(text_cache_key, 86400, message.text or "")
 
                 # 发送提示消息（包含管理员反馈按钮）
                 message_id_str = str(message.message_id)
