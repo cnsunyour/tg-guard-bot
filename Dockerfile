@@ -54,9 +54,11 @@ RUN pip install --upgrade pip setuptools wheel && \
         echo "安装 EasyOCR（兼容所有 CPU 和虚拟化环境）..." && \
         # 安装 CPU 版本的 PyTorch（避免下载 nvidia CUDA 依赖，减少镜像大小）\
         pip install --upgrade pip && \
-        pip install "torch>=2.0.0" --index-url https://download.pytorch.org/whl/cpu && \
-        pip install "torchvision>=0.15.0" --index-url https://download.pytorch.org/whl/cpu && \
+        pip install "torch>=2.0.0" -i https://download.pytorch.org/whl/cpu && \
+        pip install "torchvision>=0.15.0" -i https://download.pytorch.org/whl/cpu && \
         pip install "easyocr>=1.7.0" && \
+        pip install "paddlepaddle>=3.0.0" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/ && \
+        pip install "paddleocr>=3.0.0" && \
         pip install -e ".[ocr]"; \
     else \
         pip install -e .; \

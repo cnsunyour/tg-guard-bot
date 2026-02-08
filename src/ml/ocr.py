@@ -1,6 +1,13 @@
-"""图片 OCR 模块 - 使用 EasyOCR 提取图片中的文字"""
+"""图片 OCR 模块 - 使用混合 OCR 服务提取图片中的文字
 
-from pathlib import Path
+支持多种 OCR 提供者：
+- Gemini AI OCR（云 API，第一优先级）
+- 百度智能云 OCR（云 API，第二优先级）
+- PaddleOCR（本地，轻量级）
+- EasyOCR（本地，最终回退）
+"""
+
+import asyncio
 
 from loguru import logger
 
@@ -8,15 +15,18 @@ from src.core.utils import mask_text
 
 
 class OCRExtractor:
-    """图片文字提取器（使用 EasyOCR）"""
+    """图片文字提取器（使用混合 OCR 服务）
+
+    适配器模式，保持向后兼容
+    """
 
     def __init__(self):
         """初始化 OCR 提取器"""
-        self._reader = None
+        self._hybrid_ocr = None
         self._initialized = False
 
     def _init_ocr(self):
-        """延迟初始化 EasyOCR（首次使用时才加载）"""
+        """延迟初始化混合 OCR 服务"""
         if self._initialized:
             return
 
@@ -29,30 +39,22 @@ class OCRExtractor:
             return
 
         try:
-            import easyocr
+            from src.ml.hybrid_ocr import get_hybrid_ocr
 
-            logger.info("正在初始化 EasyOCR（首次使用会下载模型，约 500MB）...")
-
-            # ✅ EasyOCR：基于 PyTorch，兼容所有 CPU，无 AVX2 要求
-            self._reader = easyocr.Reader(
-                ["ch_sim", "en"],  # 简体中文 + 英文
-                gpu=False,  # 使用 CPU
-                model_storage_directory=str(Path.home() / ".EasyOCR" / "model"),
-                download_enabled=True,
-                verbose=False,  # 禁用详细日志
-            )
-
+            self._hybrid_ocr = get_hybrid_ocr()
             self._initialized = True
-            logger.info("✅ EasyOCR 初始化成功")
 
-        except ImportError:
-            logger.warning(
-                "EasyOCR 未安装，OCR 功能不可用。安装命令: pip install easyocr torch torchvision"
-            )
-            self._initialized = False
+            if self._hybrid_ocr.providers:
+                logger.info(
+                    f"✅ OCR 提取器初始化成功（混合模式） "
+                    f"[提供者数量:{len(self._hybrid_ocr.providers)}]"
+                )
+            else:
+                logger.warning("⚠️ OCR 提取器初始化完成，但没有可用的提供者")
+                self._initialized = False
+
         except Exception as e:
-            logger.error(f"EasyOCR 初始化失败: {e}")
-            logger.warning("OCR 功能不可用")
+            logger.error(f"OCR 提取器初始化失败: {e}")
             self._initialized = False
 
     def extract_text(self, image_path: str) -> str | None:
@@ -67,55 +69,28 @@ class OCRExtractor:
         if not self._initialized:
             self._init_ocr()
 
-        if not self._initialized:
+        if not self._initialized or not self._hybrid_ocr:
             return None
 
         try:
-            # ✅ M9: 验证路径安全性
-            image_path_obj = Path(image_path).resolve()
-
-            # 检查文件是否存在
-            if not image_path_obj.exists():
-                logger.error(f"图片文件不存在: {image_path}")
+            # 检查是否有运行的事件循环
+            try:
+                asyncio.get_running_loop()
+                # 在异步上下文中，无法等待异步任务
+                # 这种情况下，建议调用方直接使用异步方法
+                logger.warning(
+                    "⚠️ 在异步上下文中调用了同步的 extract_text()，"
+                    "建议使用异步方法或在新线程中运行"
+                )
                 return None
+            except RuntimeError:
+                # 在同步上下文中，创建新的事件循环
+                result = asyncio.run(self._hybrid_ocr.extract_text(image_path))
 
-            # 检查是否是文件（不是目录）
-            if not image_path_obj.is_file():
-                logger.error(f"路径不是文件: {image_path}")
-                return None
+                if result:
+                    logger.debug(f"从图片提取文字: {mask_text(result)}")
 
-            # 检查文件扩展名是否为图片格式
-            allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
-            if image_path_obj.suffix.lower() not in allowed_extensions:
-                logger.warning(f"不支持的图片格式: {image_path_obj.suffix}")
-                return None
-
-            # 执行 OCR（EasyOCR）
-            result = self._reader.readtext(str(image_path_obj))
-
-            if not result:
-                logger.debug(f"图片中未检测到文字: {image_path}")
-                return None
-
-            # 提取所有文本块
-            texts = []
-            for detection in result:
-                # detection 格式: (bbox, text, confidence)
-                _bbox, text, confidence = detection
-
-                # 过滤低置信度结果
-                if confidence > 0.6:
-                    texts.append(text)
-
-            if not texts:
-                logger.debug(f"图片中未提取到有效文字: {image_path}")
-                return None
-
-            # 拼接所有文本
-            full_text = " ".join(texts)
-            logger.debug(f"从图片提取文字 ({len(texts)} 块): {mask_text(full_text)}")
-
-            return full_text
+                return result
 
         except Exception as e:
             logger.error(f"OCR 提取失败: {e}")
@@ -133,44 +108,24 @@ class OCRExtractor:
         if not self._initialized:
             self._init_ocr()
 
-        if not self._initialized:
+        if not self._initialized or not self._hybrid_ocr:
             return None
 
         try:
-            # ✅ M9: 验证路径安全性
-            image_path_obj = Path(image_path).resolve()
-
-            if not image_path_obj.exists():
-                logger.error(f"图片文件不存在: {image_path}")
+            # 检查是否有运行的事件循环
+            try:
+                asyncio.get_running_loop()
+                # 在异步上下文中，无法等待异步任务
+                logger.warning(
+                    "⚠️ 在异步上下文中调用了同步的 extract_text_with_details()，"
+                    "建议使用异步方法或在新线程中运行"
+                )
                 return None
+            except RuntimeError:
+                # 在同步上下文中，创建新的事件循环
+                result = asyncio.run(self._hybrid_ocr.extract_text_with_details(image_path))
 
-            # 检查是否是文件（不是目录）
-            if not image_path_obj.is_file():
-                logger.error(f"路径不是文件: {image_path}")
-                return None
-
-            # 检查文件扩展名
-            allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
-            if image_path_obj.suffix.lower() not in allowed_extensions:
-                logger.warning(f"不支持的图片格式: {image_path_obj.suffix}")
-                return None
-
-            # 执行 OCR（EasyOCR）
-            result = self._reader.readtext(str(image_path_obj))
-
-            if not result:
-                return None
-
-            # 提取文本和置信度
-            texts_with_conf = []
-            for detection in result:
-                # detection 格式: (bbox, text, confidence)
-                _bbox, text, confidence = detection
-
-                if confidence > 0.6:
-                    texts_with_conf.append((text, confidence))
-
-            return texts_with_conf if texts_with_conf else None
+                return result
 
         except Exception as e:
             logger.error(f"OCR 提取失败: {e}")
@@ -181,7 +136,7 @@ class OCRExtractor:
         """OCR 是否可用"""
         if not self._initialized:
             self._init_ocr()
-        return self._initialized
+        return self._initialized and self._hybrid_ocr is not None
 
 
 # 全局 OCR 提取器实例

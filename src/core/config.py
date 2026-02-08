@@ -203,6 +203,32 @@ class Settings(BaseSettings):
     cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
     # OCR 功能配置
     enable_ocr: bool = Field(default=False, description="是否启用 OCR 功能（需要 4GB+ RAM）")
+
+    # ========== OpenAI OCR 配置 ==========
+    ocr_openai_enabled: bool = Field(default=False, description="是否启用 OpenAI OCR")
+    ocr_openai_api_key: str = Field(default="", description="OpenAI API Key")
+    ocr_openai_model: str = Field(
+        default="gpt-4o-mini", description="OpenAI 模型名称（推荐：gpt-4o-mini 或 gpt-4o）"
+    )
+    ocr_openai_api_url: str = Field(
+        default="",
+        description="自定义 API Base URL（可选，用于代理或兼容接口）",
+    )
+    ocr_openai_timeout: int = Field(default=30, description="超时时间（秒）")
+
+    # ========== 百度智能云 OCR 配置 ==========
+    ocr_baidu_enabled: bool = Field(default=False, description="是否启用百度云 OCR")
+    ocr_baidu_api_key: str = Field(default="", description="百度云 OCR API Key")
+    ocr_baidu_secret_key: str = Field(default="", description="百度云 OCR Secret Key")
+    ocr_baidu_use_accurate: bool = Field(default=False, description="是否使用高精度版")
+    ocr_baidu_timeout: int = Field(default=10, description="超时时间（秒）")
+
+    # ========== PaddleOCR 配置 ==========
+    ocr_paddle_enabled: bool = Field(default=True, description="是否启用 PaddleOCR")
+    ocr_paddle_lang: str = Field(default="ch", description="语言 (ch=中英文, en=英文)")
+
+    # ========== EasyOCR 配置 ==========
+    ocr_easy_enabled: bool = Field(default=True, description="是否启用 EasyOCR（最终回退）")
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
         ...,
