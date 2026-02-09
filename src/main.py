@@ -277,6 +277,15 @@ async def on_shutdown() -> None:
     """关闭时执行"""
     logger.info("Bot 正在关闭...")
 
+    # ✅ 关闭 AI 检测器（修复 Event loop is closed 错误）
+    try:
+        from src.ml.ai_detector import get_ai_detector
+
+        await get_ai_detector().close()
+        logger.info("✅ AI 检测器已关闭")
+    except Exception as e:
+        logger.warning(f"关闭 AI 检测器失败: {e}")
+
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)
 

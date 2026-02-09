@@ -86,11 +86,8 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
         self.max_retries = settings.ai_spam_max_retries
         self.max_length = settings.ai_spam_max_length
 
-        # 创建 HTTP 客户端
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.timeout, connect=5.0),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-        )
+        # ✅ 延迟创建 HTTP 客户端（只在启用时创建），避免未启用时也持有未关闭的 AsyncClient
+        self.client: httpx.AsyncClient | None = None
 
         if self.enabled:
             logger.info(
@@ -99,6 +96,19 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
             )
         else:
             logger.info("AI 垃圾检测器未启用")
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        """确保 HTTP 客户端已创建（延迟初始化）
+
+        Returns:
+            HTTP 客户端实例
+        """
+        if self.client is None:
+            self.client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout, connect=5.0),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            )
+        return self.client
 
     async def detect(self, text: str) -> dict[str, Any]:
         """检测文本是否为垃圾信息
@@ -249,7 +259,8 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
         }
 
         # 发送请求
-        response = await self.client.post(url, json=payload, headers=headers)
+        client = self._ensure_client()  # ✅ 使用延迟初始化的 client
+        response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
 
         # 解析响应
@@ -345,7 +356,15 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
 
     async def close(self):
         """关闭 HTTP 客户端"""
-        await self.client.aclose()
+        if self.client is not None:
+            try:
+                await self.client.aclose()
+                logger.debug("AI 检测器 HTTP 客户端已关闭")
+            except Exception as e:
+                # 忽略关闭时的错误（避免 Event loop is closed 等错误污染日志）
+                logger.debug(f"关闭 HTTP 客户端时出现错误（已忽略）: {e}")
+            finally:
+                self.client = None  # 防止重复关闭
 
 
 # 全局实例（延迟初始化）

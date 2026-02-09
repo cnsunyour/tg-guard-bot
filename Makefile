@@ -198,7 +198,7 @@ dev-logs:
 
 # 生产环境
 prod-build:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml build --build-arg ENABLE_OCR=false
+	docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
 	@echo "✅ 生产环境镜像构建完成"
 
 prod-build-ocr:

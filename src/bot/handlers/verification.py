@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import JOIN_TRANSITION, LEAVE_TRANSITION, ChatMemberUpdatedFilter
+from aiogram.methods.decline_chat_join_request import DeclineChatJoinRequest
 from aiogram.types import (
     CallbackQuery,
     ChatJoinRequest,
@@ -29,6 +30,32 @@ from src.services.username_mapping import UsernameMappingService
 from src.services.verification import VerificationService
 
 router = Router(name="verification")
+
+
+async def decline_join_request(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """拒绝加入请求（修复 HIDE_REQUESTER_MISSING 错误）
+
+    Telegram Bot API 6.3+ 引入了 hide_requester 参数，
+    但 aiogram 3.24.0 的封装方法尚未暴露该参数。
+
+    Args:
+        bot: Bot 实例
+        chat_id: 群组 ID
+        user_id: 用户 ID
+
+    Returns:
+        是否成功拒绝
+    """
+    try:
+        call = DeclineChatJoinRequest(
+            chat_id=chat_id,
+            user_id=user_id,
+            hide_requester=False,  # 显示是 Bot 拒绝的请求
+        )
+        return await bot(call)
+    except Exception as e:
+        logger.debug(f"拒绝加入请求失败: {e}")
+        raise
 
 
 async def restore_user_permissions(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -208,7 +235,7 @@ async def check_user_spam_info(
             # 处理加入请求模式：先拒绝加入请求
             if mode == "join_request":
                 try:
-                    await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                    await decline_join_request(bot, chat_id, user_id)
                     logger.info(f"已拒绝垃圾用户 {user_id} 的加入请求")
                 except Exception as decline_error:
                     logger.error(f"拒绝加入请求失败: {decline_error}")
@@ -451,7 +478,7 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
         except Exception as e:
             logger.error(f"发送私聊验证消息失败: {e}")
             # 拒绝加入请求
-            await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+            await decline_join_request(bot, chat_id, user_id)
 
     except Exception as e:
         logger.error(f"处理加入请求失败: {e}")
@@ -703,7 +730,7 @@ async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求并封禁1小时，防止立即重试
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -775,7 +802,7 @@ async def on_slider_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求并封禁1小时，防止立即重试
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -847,7 +874,7 @@ async def on_qa_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求并封禁1小时，防止立即重试
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -919,7 +946,7 @@ async def on_emoji_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求并封禁1小时，防止立即重试
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -997,7 +1024,7 @@ async def on_honeypot_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求并封禁1小时，防止立即重试
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -1069,7 +1096,7 @@ async def on_puzzle_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求并封禁1小时，防止立即重试
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
@@ -1309,7 +1336,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
 
             if verification_type == "join_request":
                 # 拒绝加入请求
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 await redis.delete(type_key)
             else:
                 # 踢出并封禁 1 小时
@@ -1876,7 +1903,7 @@ async def handle_join_request_timeout(
 
             # 1. 拒绝加入请求
             try:
-                await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+                await decline_join_request(bot, chat_id, user_id)
                 logger.info(f"已拒绝用户 {user_id} 的加入请求")
             except Exception as e:
                 logger.error(f"拒绝加入请求失败: {e}")
@@ -1996,7 +2023,7 @@ async def handle_user_not_started_bot_for_join_request(
 
     # 5. 拒绝加入请求
     try:
-        await bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+        await decline_join_request(bot, chat_id, user_id)
         logger.info(f"用户 {user_id} 未启动 Bot，已拒绝加入请求（群组 {chat_id}）")
     except Exception as e:
         logger.error(f"拒绝加入请求失败: {e}")
