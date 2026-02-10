@@ -897,7 +897,8 @@ async def on_message(message: Message, bot: Bot) -> None:
                     f"用户: {format_user_mention(message.from_user)}\n"
                     f"原因: {', '.join(result['reasons'])}\n"
                     f"置信度: {result['confidence']:.2%}\n"
-                    f"处罚: {punishment_text}",
+                    f"处罚: {punishment_text}\n"
+                    f"消息 ID: {message.message_id}",
                     reply_markup=keyboard,
                 )
                 await auto_delete_message(alert_msg)
@@ -1079,7 +1080,8 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
                         f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: {punishment_text}",
+                        f"处罚: {punishment_text}\n"
+                        f"消息 ID: {message.message_id}",
                         reply_markup=keyboard,
                     )
                     await auto_delete_message(alert_msg)
@@ -1516,7 +1518,8 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
                         f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: {punishment_text}",
+                        f"处罚: {punishment_text}\n"
+                        f"消息 ID: {message.message_id}",
                         reply_markup=keyboard,
                     )
                     await auto_delete_message(alert_msg)
@@ -1971,7 +1974,8 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
                     f"用户: {format_user_mention(message.from_user)}\n"
                     f"原因: {', '.join(result['reasons'])}\n"
                     f"置信度: {result['confidence']:.2%}\n"
-                    f"处罚: {punishment_text}",
+                    f"处罚: {punishment_text}\n"
+                    f"消息 ID: {message.message_id}",
                     reply_markup=keyboard,
                 )
                 await auto_delete_message(alert_msg)
@@ -2109,7 +2113,8 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
                         f"用户: {format_user_mention(message.from_user)}\n"
                         f"原因: {', '.join(result['reasons'])}\n"
                         f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: {punishment_text}"
+                        f"处罚: {punishment_text}\n"
+                        f"消息 ID: {message.message_id}"
                     )
                     await auto_delete_message(alert_msg)
 
