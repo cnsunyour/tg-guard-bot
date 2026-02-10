@@ -55,6 +55,7 @@ class SpamClassifier:
                     "tfidf",
                     TfidfVectorizer(
                         tokenizer=self._tokenize,
+                        token_pattern=None,  # 显式禁用正则模式，使用自定义分词器
                         ngram_range=(1, 2),  # 单字和双字组合
                         max_features=5000,  # 最多保留5000个特征
                         min_df=2,  # 至少在2个文档中出现
