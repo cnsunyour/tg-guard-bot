@@ -1425,7 +1425,7 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
 
             detector = get_detector()
             triggered, train_message = await detector.check_and_auto_train(
-                admin_ids=settings.admin_ids, threshold=50
+                admin_ids=settings.admin_ids
             )
             if triggered:
                 logger.info(f"样本添加后触发自动训练: {train_message}")
