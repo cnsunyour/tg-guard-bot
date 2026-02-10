@@ -235,7 +235,11 @@ class OpenAIOCRProvider(OCRProvider):
         return bool(self.api_key)
 
     async def extract(self, image_path: str) -> OCRResult | None:
-        """从图片中提取文本（使用 OpenAI Vision API）"""
+        """从图片中提取文本（使用 OpenAI Vision API）
+
+        注意：使用 async with 确保 AsyncOpenAI 客户端在临时 event loop 关闭前被清理
+        避免 "Event loop is closed" 错误
+        """
         try:
             # 验证图片路径
             path_obj = self._validate_image_path(image_path)
@@ -245,14 +249,7 @@ class OpenAIOCRProvider(OCRProvider):
 
             from openai import AsyncOpenAI
 
-            # 创建客户端
-            client_kwargs = {"api_key": self.api_key, "timeout": self.timeout}
-            if self.api_url:
-                client_kwargs["base_url"] = self.api_url
-
-            client = AsyncOpenAI(**client_kwargs)
-
-            # 读取图片并 base64 编码
+            # 读取图片并 base64 编码（在创建 client 前完成，避免资源泄漏）
             with open(path_obj, "rb") as f:
                 image_data = f.read()
             image_base64 = base64.b64encode(image_data).decode("utf-8")
@@ -260,30 +257,46 @@ class OpenAIOCRProvider(OCRProvider):
             # 检测图片 MIME 类型
             mime_type = self._get_mime_type(path_obj.suffix.lower())
 
-            # 调用 OpenAI Vision API
-            response = await client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an OCR assistant. Extract all text from the image accurately. Return only the extracted text without any additional explanation or commentary.",
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Extract all text from this image.",
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
-                            },
-                        ],
-                    },
-                ],
-                max_tokens=2000,
-            )
+            # 构建消息内容
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are an OCR assistant. Extract all text from the image accurately. Return only the extracted text without any additional explanation or commentary.",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract all text from this image.",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                        },
+                    ],
+                },
+            ]
+
+            # ✅ 使用 async with 确保 client 在临时 loop 关闭前被清理
+            # 修复跨 event loop 使用 httpx.AsyncClient 导致的 "Event loop is closed" 错误
+            # 根据是否有自定义 API URL 创建不同的 client（直接传递参数以满足类型检查）
+            if self.api_url:
+                async with AsyncOpenAI(
+                    api_key=self.api_key, base_url=self.api_url, timeout=self.timeout
+                ) as client:
+                    response = await client.chat.completions.create(
+                        model=self.model_name,
+                        messages=messages,  # type: ignore[arg-type]
+                        max_tokens=2000,
+                    )
+            else:
+                async with AsyncOpenAI(api_key=self.api_key, timeout=self.timeout) as client:
+                    response = await client.chat.completions.create(
+                        model=self.model_name,
+                        messages=messages,  # type: ignore[arg-type]
+                        max_tokens=2000,
+                    )
 
             # 解析响应
             if response.choices and response.choices[0].message.content:
