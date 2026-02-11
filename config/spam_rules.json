@@ -4,7 +4,7 @@
   "rules": [
     {
       "id": "social_engine_db",
-      "pattern": "免费社工库",
+      "pattern": "免[费費]社工[库庫]",
       "risk_level": "critical",
       "category": "illegal",
       "description": "社工库非法获取",
@@ -20,7 +20,7 @@
     },
     {
       "id": "illegal_drugs",
-      "pattern": "(催情|迷)(药|💊)[\\s\\S]{0,50}听话水",
+      "pattern": "((催情|迷|摇头)[藥药💊]|[听聽][話话]水|大[麻蔴]|[Kk]粉)[\\s\\S]*(送[貨货]|[私俬]聊|[私俬找看睇点點][我莪]|[购購][買买])",
       "risk_level": "critical",
       "category": "illegal",
       "description": "违禁药品",
@@ -78,7 +78,7 @@
     },
     {
       "id": "private_contact_service",
-      "pattern": "([售卖][Uu]|[搞赚挣][钱米]|跑分|代收|[頭头]像|[简簡]介|不影响|(相互|互相)(安慰|慰藉)|[资資]源|愿意的|懂的)[\\s\\S]*([私找看睇点點][我莪]|[来莱俫])",
+      "pattern": "([售卖][Uu]|[搞赚挣][钱米]|跑分|代收|[頭头]像|[简簡]介|不影响|(相互|互相)(安慰|慰藉)|[资資]源|愿意的|懂的)[\\s\\S]*([私俬找看睇点點][我莪]|[来莱俫])",
       "risk_level": "medium",
       "category": "adult",
       "description": "私密联系方式服务",
@@ -102,7 +102,7 @@
     },
     {
       "id": "telegram_spam",
-      "pattern": "(?i)(tg|telegram)[\\s\\S]*(私发|代发|僵尸)",
+      "pattern": "(?i)(tg|telegram|纸[飞飛]机|[电電][报報])[\\s\\S]*([私代群][发潑]|僵尸)",
       "risk_level": "low",
       "category": "spam",
       "description": "Telegram 垃圾推广",
