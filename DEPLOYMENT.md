@@ -11,7 +11,7 @@
 | 项目 | 最低配置 | 推荐配置 |
 |------|---------|---------|
 | CPU | 1 vCPU | 2 vCPU |
-| 内存 | 2GB | 4GB（启用 OCR） |
+| 内存 | 1GB（无 OCR） | 2GB（基础）/ 4GB（启用 OCR） |
 | 存储 | 20GB SSD | 40GB SSD |
 | 带宽 | 1TB/月 | 无限 |
 | 系统 | Debian 11+ / Ubuntu 20.04+ | Debian 12 / Ubuntu 22.04 |
@@ -87,8 +87,22 @@ DB_PASSWORD=your_secure_password_here  # ⚠️ 强烈建议修改
 # Redis 配置（生产环境请设置密码）
 REDIS_PASSWORD=your_redis_password     # ⚠️ 强烈建议设置
 
-# 是否启用 OCR（需要 4GB RAM）
+# 模型签名密钥（必填，防止模型文件被篡改）
+MODEL_SIGNATURE_KEY=<使用 openssl rand -hex 32 生成>  # ⚠️ 必填
+
+# 是否启用 OCR（需要更多内存）
 ENABLE_OCR=false  # 根据需要设置为 true
+
+# OCR 提供者配置（可选）
+# OpenAI OCR（推荐，云 API，内存占用低）
+OCR_OPENAI_ENABLED=false
+OCR_OPENAI_API_KEY=
+OCR_OPENAI_MODEL=gpt-4o-mini
+
+# 百度智能云 OCR（备选，云 API）
+OCR_BAIDU_ENABLED=false
+OCR_BAIDU_API_KEY=
+OCR_BAIDU_SECRET_KEY=
 ```
 
 **获取你的 Telegram User ID**:
@@ -402,19 +416,45 @@ make prod-up
 
 ### 问题 4: OCR 初始化失败
 
-**症状**: 日志显示 "PaddleOCR 未安装"
+**症状**: 日志显示 OCR 相关错误
 
 **解决方法**:
 
 ```bash
-# 确认 ENABLE_OCR 设置
-cat .env | grep ENABLE_OCR
+# 1. 检查 OCR 配置
+cat .env | grep OCR
 
-# 重新构建（确保传递 build-arg）
+# 2. 如果使用云 OCR（推荐）
+# 配置 OpenAI OCR 或百度云 OCR，无需本地 OCR
+OCR_OPENAI_ENABLED=true
+OCR_OPENAI_API_KEY=sk-...
+
+# 3. 如果使用本地 OCR
+# 确认 ENABLE_OCR 设置并重新构建
 make prod-build-ocr
 
 # 或
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml build --build-arg ENABLE_OCR=true
+```
+
+### 问题 5: 模型签名验证失败
+
+**症状**: 日志显示 "模型签名验证失败" 或 "MODEL_SIGNATURE_KEY is required"
+
+**解决方法**:
+
+```bash
+# 1. 生成签名密钥
+openssl rand -hex 32
+
+# 2. 添加到 .env 文件
+echo "MODEL_SIGNATURE_KEY=<生成的密钥>" >> .env
+
+# 3. 重新训练模型（使用新密钥签名）
+make train-model
+
+# 4. 重启服务
+make prod-restart
 ```
 
 ---
