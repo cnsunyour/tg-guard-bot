@@ -599,9 +599,30 @@ OCR_EASY_ENABLED=true
 
 ## 🙏 致谢
 
+### 核心框架
 - [aiogram](https://github.com/aiogram/aiogram) - 优秀的 Telegram Bot 框架
-- [EasyOCR](https://github.com/JaidedAI/EasyOCR) - 强大的 OCR 工具
+- [Telethon](https://github.com/LonamiWebs/Telethon) - 强大的 Telegram Client API
+- [SQLAlchemy](https://github.com/sqlalchemy/sqlalchemy) - Python SQL 工具包和 ORM
+- [Redis](https://redis.io/) - 高性能内存数据库
+- [PostgreSQL](https://www.postgresql.org/) - 强大的开源关系型数据库
+
+### 机器学习与 AI
+- [scikit-learn](https://github.com/scikit-learn/scikit-learn) - 机器学习库
+- [jieba](https://github.com/fxsjy/jieba) - 中文分词工具
 - [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) - 中文语义嵌入模型
+- [fastembed](https://github.com/qdrant/fastembed) - 快速文本嵌入库
+- [EasyOCR](https://github.com/JaidedAI/EasyOCR) - 易用的 OCR 工具
+- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 轻量级 OCR 工具
+
+### 开发工具
+- [Pydantic](https://github.com/pydantic/pydantic) - 数据验证库
+- [Loguru](https://github.com/Delgan/loguru) - 优雅的日志库
+- [Ruff](https://github.com/astral-sh/ruff) - 快速 Python Linter
+- [Docker](https://www.docker.com/) - 容器化平台
+
+### 特别感谢
+- 所有贡献者和使用者
+- 开源社区的支持和帮助
 
 ## 📞 联系方式
 
