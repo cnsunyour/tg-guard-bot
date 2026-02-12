@@ -5,6 +5,97 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-02-12
+
+### 新增功能
+
+#### 反垃圾系统增强
+- **高级正则规则引擎**：
+  - 替代简单关键词匹配，支持复杂模式识别
+  - 提升垃圾检测准确率和灵活性
+- **文本长度预过滤**：
+  - 过滤过短或过长的异常消息
+  - 减少无效检测，提升性能
+- **垃圾消息提示优化**：
+  - 在提示中添加消息 ID，方便管理员追溯
+  - 延长垃圾消息缓存时间至 1 天，避免重复检测
+- **垃圾检测规则更新**：
+  - 添加微信相关垃圾检测规则
+  - 更新垃圾检测模式变体，提升覆盖率
+
+#### OCR 服务增强
+- **混合 OCR 服务**：
+  - 支持多种 OCR 提供者（OpenAI、百度、EasyOCR、PaddleOCR）
+  - 自动回退机制：云 OCR 失败时自动切换到本地 OCR
+  - 提升 OCR 服务可用性和稳定性
+
+#### 用户管理功能
+- **@username 解析支持**：
+  - 实现 @username → user_id 映射功能
+  - 支持 @username 格式的用户提及解析
+  - 管理命令可直接使用 @username 操作用户
+
+#### 管理员反馈优化
+- **/notspam 命令增强**：
+  - 添加 /nospam 和 /unspam 别名，更符合使用习惯
+  - 支持消息链接格式（t.me/c/xxx/xxx）
+  - 正确处理误判反馈：删除旧正样本后再添加负样本
+  - 移除阈值参数，简化使用
+
+#### 模型训练优化
+- **样本提取策略优化**：
+  - 改进训练样本提取逻辑
+  - 提高模型训练质量
+
+### Bug 修复
+
+#### 严重 Bug 修复
+- **修复 OpenAI OCR 跨 event loop 错误**：
+  - 问题：跨 event loop 使用导致 "Event loop is closed" 错误
+  - 修复：正确管理异步资源生命周期
+- **修复验证失败后重复 decline 错误**：
+  - 问题：重复调用 decline 导致 HIDE_REQUESTER_MISSING 错误
+  - 修复：添加状态检查，避免重复操作
+- **修复验证拒绝和 AI 检测器的异步资源管理问题**：
+  - 正确处理异步上下文管理器
+  - 避免资源泄漏
+
+#### 类型检查修复
+- 修复 CallbackQuery.bot 的类型检查错误
+- 修复 mypy 类型错误
+- 提升代码类型安全性
+
+#### 消息格式修复
+- 修复命令错误消息中 HTML 实体未转义的问题
+- 训练完成通知消息添加 HTML 解析模式
+- 统一 Bot 实例的默认 parse_mode 配置
+
+#### sklearn 警告修复
+- 显式设置 `TfidfVectorizer` 的 `token_pattern=None`
+- 消除 "The parameter 'token_pattern' will not be used since 'tokenizer' is not None" 警告
+- 提升代码清晰度，明确表示使用自定义分词器
+
+### 代码改进
+
+#### 重构优化
+- 删除 parse_user_from_message 未使用的 bot 参数
+- /notspam 使用简化版 parse_message_link
+- 移除不必要的关键词和调整置信度阈值
+- 代码格式化（Black + isort）
+
+#### 配置优化
+- 添加 config volume 到 Docker Compose 配置管理
+- 更新基础镜像和 Python 版本
+- 移除安全审查报告和测试报告文件
+
+### 文档更新
+- 添加 AGENTS.md 符号链接到 CLAUDE.md
+
+### 验证通过
+- ✅ Ruff: 代码风格检查通过
+- ✅ Mypy: 类型检查通过
+- ✅ 功能测试：所有新功能正常工作
+
 ## [1.1.1] - 2026-02-04
 
 ### 新增功能
