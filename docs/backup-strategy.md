@@ -431,6 +431,6 @@ docker-compose exec redis redis-cli -a $REDIS_PASSWORD INFO persistence | grep r
 
 ---
 
-**最后更新**: 2026-01-09
-**版本**: v1.0
+**最后更新**: 2026-02-12
+**版本**: v1.2.0
 **维护者**: tg-guard-bot 团队
