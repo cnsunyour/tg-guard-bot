@@ -6,7 +6,7 @@
 
 一个功能强大的 Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾功能。
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.1.0)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/cnsunyour/tg-guard-bot/releases/tag/v1.2.0)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-brightgreen.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -63,7 +63,11 @@
 ### 🛡️ 智能反垃圾（多层检测系统）
 
 #### 传统三段检测
-- **Stage 1: 规则引擎** - 快速过滤关键词、链接、联系方式（~1ms，O(1)查表）
+- **Stage 1: 高级正则规则引擎** - 快速过滤关键词、链接、联系方式（~1ms，O(1)查表）
+  - **多关键词联合检测**：使用前瞻断言实现复杂模式匹配
+  - **Unicode 混淆检测**：识别繁简体、同义词等变体
+  - **置信度分级**：CRITICAL(0.95) / HIGH(0.88) / MEDIUM(0.80) / LOW(0.70)
+  - **自定义规则**：支持 JSON 配置文件扩展规则
   - 关键词黑名单（置信度 0.9）
   - URL/链接检测（置信度 0.85）
   - 联系方式检测（置信度 0.8）
@@ -104,7 +108,11 @@
 
 #### 其他功能
 - **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段
-- **图片 OCR** - EasyOCR 检测图片广告（可选，需 4GB RAM）
+- **混合 OCR 服务** - 多提供者自动回退（OpenAI OCR → 百度云 OCR → PaddleOCR → EasyOCR）
+  - 云 OCR 优先（内存占用低，准确率高）
+  - 本地 OCR 回退（离线可用）
+  - 熔断保护（自动跳过故障提供者）
+- **文本长度预过滤** - 过滤过短或过长的异常消息，减少无效检测
 - **管理员反馈** - 误判纠正，持续优化
 - **自动模型训练** - 达到阈值自动触发训练
 
@@ -129,7 +137,9 @@
 | SQLAlchemy | 2.0 | ORM |
 | scikit-learn | 1.4+ | ML 分类器 |
 | fastembed | 0.3+ | 语义嵌入 |
+| jieba | 0.42+ | 中文分词 |
 | EasyOCR | 1.7+ | 图片 OCR（可选） |
+| PaddleOCR | 3.0+ | 图片 OCR（可选） |
 
 ## 🚀 快速开始
 
@@ -257,7 +267,7 @@ make help            # 显示所有命令
 - `/verifyconfig` - 查看验证配置
 
 **成员管理**
-- `/kick @user` - 踢出成员
+- `/kick @user` 或 `/kick <user_id>` - 踢出成员（支持 @username 和 user_id）
 - `/mute @user [时长]` - 禁言成员（支持：30m/2h/1d/永久）
 - `/unmute @user` - 解除禁言
 - `/ban @user` - 封禁成员
@@ -284,7 +294,9 @@ make help            # 显示所有命令
 - `/spam` 或 `/report` - 举报/标记垃圾消息
   - 普通用户：创建举报，等待管理员审核
   - 管理员：直接封禁并加入训练库
-- `/notspam` - 标记非垃圾（误判反馈，帮助优化模型）
+- `/notspam`、`/nospam` 或 `/unspam` - 标记非垃圾（误判反馈，帮助优化模型）
+  - 支持消息链接格式（t.me/c/xxx/xxx）
+  - 自动删除旧正样本后添加负样本
 - `/reports` - 查看待处理举报列表
 - `/approve <id>` - 批准举报并执行封禁
 - `/reject <id>` - 拒绝举报
@@ -450,8 +462,13 @@ tg-guard-bot/
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `ENABLE_OCR` | 启用 OCR 功能 | false | ❌ |
+| `SPAM_THRESHOLD_RULE` | 规则引擎阈值 | 0.8 | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
 | `SPAM_THRESHOLD_EMBEDDING` | Embedding 阈值 | 0.75 | ❌ |
+| `SPAM_MIN_TEXT_LENGTH` | 最小文本长度（低于此长度跳过检测） | 10 | ❌ |
+| `REGEX_RULES_ENABLED` | 启用高级正则规则引擎 | true | ❌ |
+| `REGEX_RULES_CONFIG_PATH` | 自定义规则配置文件路径 | config/spam_rules.json | ❌ |
+| `REGEX_RULES_MAX_TEXT_LENGTH` | 正则规则检测的最大文本长度 | 500 | ❌ |
 
 #### CAPTCHA 验证配置（可选）
 
@@ -461,6 +478,7 @@ tg-guard-bot/
 |------|------|------|
 | `CAPTCHA_WEBAPP_URL` | 统一 CAPTCHA WebApp 地址 | ✅ (使用外部 CAPTCHA 时) |
 | `CAPTCHA_SIGNATURE_KEY` | 签名密钥（64 字符 hex） | ✅ (使用外部 CAPTCHA 时) |
+| `MODEL_SIGNATURE_KEY` | 模型文件签名密钥（至少 32 字符） | ✅ |
 
 **Friendly Captcha**（隐私友好，支持多 key 轮换）：
 ```env
@@ -494,11 +512,38 @@ ALTCHA_HMAC_KEY=<64字符hex密钥>
 TURNSTILE_ENABLED=true
 # ✅ 推荐：使用统一 CAPTCHA WebApp（与其他服务共用）
 # 配置 CAPTCHA_WEBAPP_URL 后会自动使用统一 WebApp
+```
 
-# ⚠️ 已过时：独立 Turnstile WebApp（向后兼容）
-# 如果未配置 CAPTCHA_WEBAPP_URL，将回退使用此配置
-TURNSTILE_WEBAPP_URL=https://verify.xxx.pages.dev
-TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
+#### OCR 配置（可选）
+
+**混合 OCR 服务**（多提供者自动回退）：
+
+**OpenAI OCR**（第一优先级，云 API）：
+```env
+OCR_OPENAI_ENABLED=true
+OCR_OPENAI_API_KEY=sk-...
+OCR_OPENAI_MODEL=gpt-4o-mini
+OCR_OPENAI_API_URL=  # 可选，自定义 API Base URL
+OCR_OPENAI_TIMEOUT=30
+```
+
+**百度智能云 OCR**（第二优先级，云 API）：
+```env
+OCR_BAIDU_ENABLED=true
+OCR_BAIDU_API_KEY=...
+OCR_BAIDU_SECRET_KEY=...
+OCR_BAIDU_USE_ACCURATE=false
+```
+
+**PaddleOCR**（第三优先级，本地）：
+```env
+OCR_PADDLE_ENABLED=true
+OCR_PADDLE_LANG=ch
+```
+
+**EasyOCR**（最终回退，本地）：
+```env
+OCR_EASY_ENABLED=true
 ```
 
 📚 详细配置参考：
@@ -535,6 +580,8 @@ TURNSTILE_SIGNATURE_KEY=<64字符hex密钥>
 - [x] **Phase 6**: 部署优化（监控/备份/文档）
 - [x] **Phase 7**: 验证系统增强（7 种验证 + 动态超时配置）
 - [x] **Phase 8**: 多 CAPTCHA 集成（Friendly/hCaptcha/MTCaptcha/ALTCHA + 统一 WebApp）
+- [x] **v1.1.0**: 上下文一致性检测（降低误判率）
+- [x] **v1.2.0**: 高级正则规则引擎 + 混合 OCR + @username 解析
 
 ## 🤝 贡献
 
