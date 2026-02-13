@@ -74,7 +74,7 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
 
 重要：只返回 JSON，不要返回其他任何内容。"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """初始化 AI 检测器"""
         self.enabled = settings.ai_spam_enabled
         self.api_key = settings.ai_spam_api_key
