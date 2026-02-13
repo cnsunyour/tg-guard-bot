@@ -20,7 +20,7 @@ class ActivityService:
     """
 
     # 非文本消息扣分值
-    NON_TEXT_PENALTY = 2
+    NON_TEXT_PENALTY = 1
 
     # 文本消息加分值
     TEXT_REWARD = 1
@@ -36,7 +36,7 @@ class ActivityService:
             user_id: 用户 ID
 
         Returns:
-            活跃度值 (可能为负数)
+            活跃度值 (最小为 0)
         """
         redis = get_redis()
         activity_key = RedisKeys.user_activity(chat_id, user_id)
@@ -52,7 +52,8 @@ class ActivityService:
         # 获取最后消息日期
         last_date_str = await redis.get(last_date_key)
         if last_date_str is None:
-            return stored_activity  # 无日期记录，不衰减
+            # ✅ 防御性检查：确保不返回历史负数数据
+            return max(stored_activity, 0)
 
         # 计算衰减
         try:
@@ -62,17 +63,21 @@ class ActivityService:
             if days_passed > 0:
                 actual_activity = stored_activity - days_passed
 
-                # 可选：清理严重负数数据（释放 Redis 内存）
-                if actual_activity <= -30:
-                    await redis.delete(activity_key, last_date_key)
-                    return 0
+                # ✅ 下限检查：活跃度不低于 0
+                if actual_activity < 0:
+                    actual_activity = 0
+
+                # 更新 Redis 存储为正确的值（避免下次读取时重复衰减）
+                await redis.set(activity_key, str(actual_activity))
+                await redis.set(last_date_key, date.today().isoformat())
 
                 return actual_activity
         except ValueError:
             logger.warning(f"活跃度日期解析失败 [群组:{chat_id}] [用户:{user_id}]")
             pass
 
-        return stored_activity
+        # ✅ 防御性检查：确保不返回历史负数数据
+        return max(stored_activity, 0)
 
     @staticmethod
     async def record_text_message(chat_id: int, user_id: int) -> int:
@@ -141,6 +146,10 @@ class ActivityService:
 
         # 扣除活跃度
         new_activity = current - ActivityService.NON_TEXT_PENALTY
+
+        # ✅ 下限检查：活跃度不低于 0
+        if new_activity < 0:
+            new_activity = 0
 
         # 更新 Redis
         await redis.set(activity_key, str(new_activity))
