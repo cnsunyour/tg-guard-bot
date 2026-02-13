@@ -479,15 +479,47 @@ class RuleEngine:
 
         return False, urls, ""
 
-    def check_repeated_chars(self, text: str, threshold: int = 5) -> bool:
-        """检查重复字符（如：啊啊啊啊啊）
+    def check_repeated_chars(
+        self, text: str, length_threshold: int = 10, ratio_threshold: float = 0.7
+    ) -> bool:
+        """检查重复字符（如：哈哈哈哈）
 
         Args:
-            threshold: 重复次数阈值
+            length_threshold: 字符串长度阈值（低于此长度直接返回 False）
+            ratio_threshold: 单个字符连续重复长度占比阈值（默认 0.7，即 70%）
+
+        Returns:
+            如果字符串长度超过阈值且单个字符的连续重复长度占比达到或超过阈值，返回 True
+
+        Examples:
+            "哈哈哈哈哈哈哈哈" (8个哈): 8/8=100% ≥ 0.7 → True
+            "哈哈哈哈 好好好好" (4个哈+4个好): 4/8=50% < 0.7 → False
         """
-        pattern = rf"(.)\1{{{threshold},}}"
-        if re.search(pattern, text):
-            logger.debug("检测到重复字符")
+        # 字符串长度不足，直接返回 False
+        if len(text) < length_threshold:
+            return False
+
+        # 找到最长的单个字符连续重复次数
+        max_repeated_count = 0
+        current_count = 1
+
+        for i in range(1, len(text)):
+            if text[i] == text[i - 1]:
+                current_count += 1
+            else:
+                max_repeated_count = max(max_repeated_count, current_count)
+                current_count = 1
+
+        # 处理最后一组重复字符
+        max_repeated_count = max(max_repeated_count, current_count)
+
+        # 计算最长单个字符连续重复长度占比
+        ratio = max_repeated_count / len(text)
+        if ratio >= ratio_threshold:
+            logger.debug(
+                f"检测到重复字符刷屏: {ratio:.2%} "
+                f"(单个字符最长连续重复 {max_repeated_count}/{len(text)})"
+            )
             return True
         return False
 
