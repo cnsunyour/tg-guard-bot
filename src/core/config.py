@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     ai_spam_max_length: int = Field(default=500, description="文本最大长度")
     ai_spam_labeled_by: int = Field(default=-1, description="AI 标注者 ID")
 
+    # ========== AI 垃圾检测配置（备份服务商） ==========
+    ai_spam_backup_enabled: bool = Field(
+        default=False,
+        description="是否启用备份 AI 服务商（需要同时启用 AI_SPAM_ENABLED）",
+    )
+    ai_spam_backup_api_key: str = Field(default="", description="备份 AI API Key")
+    ai_spam_backup_api_base: str = Field(
+        default="https://api.openai.com/v1",
+        description="备份 API Base URL（支持不同提供商）",
+    )
+    ai_spam_backup_model: str = Field(default="gpt-4o-mini", description="备份模型名称")
+    ai_spam_backup_temperature: float = Field(default=0.0, description="备份生成温度")
+    ai_spam_backup_threshold: float = Field(default=0.8, description="备份置信度阈值")
+    ai_spam_backup_timeout: int = Field(default=10, description="备份超时时间（秒）")
+    ai_spam_backup_max_retries: int = Field(default=2, description="备份最大重试次数")
+
     # 上下文检测配置
     context_enabled: bool = Field(default=False, description="是否启用上下文检测（需要 AI 检测）")
     context_message_count: int = Field(default=10, ge=1, description="群组上下文消息数量")
