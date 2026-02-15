@@ -626,7 +626,8 @@ class HybridAIDetector:
                 logger.info(
                     f"✅ {self.primary.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
-                    f"[成功率:{self._get_success_rate(self.primary.name):.1%}]"
+                    f"[成功率:{self._get_success_rate(self.primary.name):.1%}] "
+                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -656,7 +657,8 @@ class HybridAIDetector:
                 logger.info(
                     f"✅ {self.backup.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
-                    f"[成功率:{self._get_success_rate(self.backup.name):.1%}]"
+                    f"[成功率:{self._get_success_rate(self.backup.name):.1%}] "
+                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -727,7 +729,8 @@ class HybridAIDetector:
                 logger.info(
                     f"✅ {self.primary.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
-                    f"[成功率:{self._get_success_rate(self.primary.name):.1%}]"
+                    f"[成功率:{self._get_success_rate(self.primary.name):.1%}] "
+                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -757,7 +760,8 @@ class HybridAIDetector:
                 logger.info(
                     f"✅ {self.backup.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
-                    f"[成功率:{self._get_success_rate(self.backup.name):.1%}]"
+                    f"[成功率:{self._get_success_rate(self.backup.name):.1%}] "
+                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
                 )
                 return {
                     "is_spam": result.is_spam,
