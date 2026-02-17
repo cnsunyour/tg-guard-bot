@@ -82,8 +82,8 @@ class SpamRepository:
             logger.warning("没有正样本，返回空训练集")
             return [], []
 
-        # 2. 计算需要的负样本数量（正样本的 10 倍）
-        target_normal_count = spam_count * 10
+        # 2. 计算需要的负样本数量（正样本的 20 倍）
+        target_normal_count = spam_count * 20
         actual_normal_count = min(target_normal_count, normal_count)
 
         logger.info(
