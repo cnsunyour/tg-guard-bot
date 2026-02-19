@@ -413,7 +413,9 @@ async def _handle_spam_with_confirmation(
 
     # 如果有 OCR 识别的文本，显示在提示消息中
     if ocr_text:
-        prompt_text += f"\n📝 OCR 识别内容:\n「{ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}」\n"
+        prompt_text += (
+            f"\n📝 OCR 识别内容:\n「{ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}」\n"
+        )
 
     prompt_text += "\n⏰ 请确认处理方式（删除此提示视为放弃处理）"
 
@@ -989,12 +991,14 @@ async def on_antispam_confirm_toggle(callback: CallbackQuery) -> None:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="✅ 启用确认模式", callback_data=f"antispam_confirm_toggle:{chat_id}:on"
+                        text="✅ 启用确认模式",
+                        callback_data=f"antispam_confirm_toggle:{chat_id}:on",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        text="❌ 关闭确认模式", callback_data=f"antispam_confirm_toggle:{chat_id}:off"
+                        text="❌ 关闭确认模式",
+                        callback_data=f"antispam_confirm_toggle:{chat_id}:off",
                     )
                 ],
                 [InlineKeyboardButton(text="🔙 返回", callback_data=f"antispam_back:{chat_id}")],
