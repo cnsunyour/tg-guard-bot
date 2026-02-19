@@ -7,6 +7,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import imageio.v3 as iio
 from aiogram import Bot, F, Router
@@ -373,7 +374,7 @@ def _extract_ocr_text_from_prompt(prompt_text: str) -> str:
 async def _handle_spam_with_confirmation(
     message: Message,
     _bot: Bot,
-    result: dict,
+    result: dict[str, Any],
     _group: Group,
     ocr_text: str | None = None,
 ) -> None:
@@ -387,18 +388,23 @@ async def _handle_spam_with_confirmation(
 
     Args:
         message: 原消息对象
-        bot: Bot 实例
+        _bot: Bot 实例
         result: 检测结果
-        group: 群组配置
+        _group: 群组配置
         ocr_text: OCR 识别的文本（用于图片/视频/贴纸）
     """
+    # 检查消息发送者
+    if not message.from_user:
+        logger.warning("消息缺少发送者信息，跳过处理")
+        return
+
     # 1. 构建确认提示消息
     user_mention = format_user_mention(message.from_user)
     reasons_text = "、".join(result["reasons"])
 
     # 判断消息类型
     message_type = "文本消息"
-    if message.photo:
+    if message.photo and len(message.photo) > 0:
         message_type = "图片消息"
     elif message.sticker:
         message_type = "贴纸消息"
@@ -451,7 +457,7 @@ async def _handle_spam_with_confirmation(
 async def _handle_spam_immediately(
     message: Message,
     bot: Bot,
-    result: dict,
+    result: dict[str, Any],
     _group: Group,
 ) -> None:
     """立即处罚模式处理（现有流程）
@@ -466,8 +472,13 @@ async def _handle_spam_immediately(
         message: 原消息对象
         bot: Bot 实例
         result: 检测结果
-        group: 群组配置
+        _group: 群组配置
     """
+    # 检查消息发送者
+    if not message.from_user:
+        logger.warning("消息缺少发送者信息，跳过处理")
+        return
+
     try:
         # 删除垃圾消息
         await message.delete()
@@ -907,6 +918,9 @@ async def on_antispam_confirm_menu(callback: CallbackQuery) -> None:
 
     # 权限验证
     if callback.from_user.id not in settings.admin_ids:
+        if not callback.bot:
+            await callback.answer("❌ Bot 实例不可用", show_alert=True)
+            return
         if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
             await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
             return
@@ -969,6 +983,9 @@ async def on_antispam_confirm_toggle(callback: CallbackQuery) -> None:
 
     # 权限验证
     if callback.from_user.id not in settings.admin_ids:
+        if not callback.bot:
+            await callback.answer("❌ Bot 实例不可用", show_alert=True)
+            return
         if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
             await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
             return
@@ -1376,7 +1393,7 @@ async def on_message(message: Message, bot: Bot) -> None:
             await _handle_spam_with_confirmation(
                 message=message,
                 _bot=bot,
-                result=result,
+                result=dict(result),  # type: ignore[arg-type]
                 _group=group,
             )
         else:
@@ -1384,8 +1401,8 @@ async def on_message(message: Message, bot: Bot) -> None:
             await _handle_spam_immediately(
                 message=message,
                 bot=bot,
-                result=result,
-                _group=group,
+                result=dict(result),  # type: ignore[arg-type]
+                _group=group if group else None,  # type: ignore[arg-type]
             )
     else:
         # ✅ 消息通过检测，记录到上下文缓存（防止污染上下文）
@@ -1435,6 +1452,10 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     detector = get_detector()
 
     # 下载图片到临时文件
+    if not message.photo:
+        logger.warning("图片消息缺少 photo 数据")
+        return
+
     with managed_temp_file(suffix=".jpg") as temp_file_path:
         photo = message.photo[-1]  # 获取最大尺寸的图片
         logger.debug(f"开始下载图片 [file_id:{photo.file_id}]")
@@ -1468,7 +1489,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
             await _handle_spam_with_confirmation(
                 message=message,
                 _bot=bot,
-                result=result,
+                result=dict(result),  # type: ignore[arg-type]
                 _group=group,
                 ocr_text=ocr_text,  # 传递 OCR 文本
             )
