@@ -349,6 +349,341 @@ def managed_temp_file(suffix: str = ".jpg") -> Iterator[str]:
                 logger.error(f"删除临时文件失败 {temp_file_path}: {e}")
 
 
+def _extract_ocr_text_from_prompt(prompt_text: str) -> str:
+    """从提示消息中提取 OCR 识别的文本
+
+    格式: "📝 OCR 识别内容:\n「{content}」"
+
+    Args:
+        prompt_text: 提示消息文本
+
+    Returns:
+        提取的 OCR 文本，如果提取失败返回空字符串
+    """
+    # 使用正则提取「」之间的内容
+    match = re.search(r"📝 OCR 识别内容:\n「(.+?)」", prompt_text, re.DOTALL)
+    if match:
+        content = match.group(1)
+        # 移除可能的截断标记
+        return content.replace("...", "").strip()
+    return ""
+
+
+async def _handle_spam_with_confirmation(
+    message: Message,
+    bot: Bot,
+    result: dict,
+    group: "Group",
+    ocr_text: str | None = None,
+) -> None:
+    """垃圾消息确认模式处理（保留原消息）
+
+    流程：
+    1. 保留原消息（不删除）
+    2. 发送确认提示消息（回复原消息）
+    3. 通过回复链建立关联，回调时可获取原消息
+    4. 对于 OCR 识别的消息，将识别文本嵌入提示消息
+
+    Args:
+        message: 原消息对象
+        bot: Bot 实例
+        result: 检测结果
+        group: 群组配置
+        ocr_text: OCR 识别的文本（用于图片/视频/贴纸）
+    """
+    # 1. 构建确认提示消息
+    user_mention = format_user_mention(message.from_user)
+    reasons_text = "、".join(result["reasons"])
+
+    # 判断消息类型
+    message_type = "文本消息"
+    if message.photo:
+        message_type = "图片消息"
+    elif message.sticker:
+        message_type = "贴纸消息"
+    elif message.video:
+        message_type = "视频消息"
+
+    prompt_text = (
+        f"🚨 检测到疑似垃圾{message_type}\n\n"
+        f"👤 用户: {user_mention}\n"
+        f"📊 置信度: {result['confidence']:.2%}\n"
+        f"🔍 检测原因: {reasons_text}\n"
+    )
+
+    # 如果有 OCR 识别的文本，显示在提示消息中
+    if ocr_text:
+        prompt_text += f"\n📝 OCR 识别内容:\n「{ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}」\n"
+
+    prompt_text += "\n⏰ 请确认处理方式（删除此提示视为放弃处理）"
+
+    # 2. 创建内联按钮
+    # 回调数据格式: spam_confirm:{action}:{user_id}:{has_ocr}
+    # has_ocr: 1 表示有 OCR 文本，0 表示没有
+    has_ocr = "1" if ocr_text else "0"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 确认垃圾",
+                    callback_data=f"spam_confirm:ban:{message.from_user.id}:{has_ocr}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ 误判",
+                    callback_data=f"spam_confirm:false_positive:{message.from_user.id}:{has_ocr}",
+                ),
+            ]
+        ]
+    )
+
+    # 3. 发送提示消息（回复原消息）
+    await message.reply(text=prompt_text, reply_markup=keyboard)
+
+    logger.info(
+        f"垃圾消息待确认 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+        f"类型:{message_type} 置信度:{result['confidence']:.2%}"
+    )
+
+
+async def _handle_spam_immediately(
+    message: Message,
+    bot: Bot,
+    result: dict,
+    group: "Group",
+) -> None:
+    """立即处罚模式处理（现有流程）
+
+    流程：
+    1. 删除垃圾消息
+    2. 根据置信度决定处罚措施（高置信度：踢出封禁，低置信度：禁言）
+    3. 发送提示消息（包含反馈按钮）
+    4. 入库正样本
+
+    Args:
+        message: 原消息对象
+        bot: Bot 实例
+        result: 检测结果
+        group: 群组配置
+    """
+    try:
+        # 删除垃圾消息
+        await message.delete()
+
+        # 根据置信度决定处罚措施
+        if result["confidence"] >= settings.spam_high_confidence_threshold:
+            # 高置信度：踢出并封禁 1 小时
+            success, error_msg = await ModerationService.ban_user_temporarily(
+                bot=bot,
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                operator_id=bot.id,
+                duration=60,  # 60 分钟 = 1 小时
+                reason=f"垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+            )
+            punishment_text = "踢出并封禁 1 小时"
+        else:
+            # 低置信度：禁言 10 分钟
+            success, error_msg = await ModerationService.mute_user(
+                bot=bot,
+                chat_id=message.chat.id,
+                user_id=message.from_user.id,
+                operator_id=bot.id,  # Bot 作为操作者
+                duration=10,  # 10分钟
+                reason=f"垃圾信息: {', '.join(result['reasons'])}",
+            )
+            punishment_text = "禁言 10 分钟"
+
+        if success:
+            # 缓存原始消息文本，用于管理员反馈
+            # TTL 1天，给管理员充足的时间进行反馈
+            redis = get_redis()
+            text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
+            await redis.setex(text_cache_key, 86400, message.text or "")
+
+            # 发送提示消息（包含管理员反馈按钮）
+            message_id_str = str(message.message_id)
+
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="✅ 误判",
+                            callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
+                        ),
+                        InlineKeyboardButton(
+                            text="❌ 确认垃圾",
+                            callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
+                        ),
+                    ]
+                ]
+            )
+
+            alert_msg = await message.answer(
+                f"🚫 检测到垃圾信息并已处理\n\n"
+                f"用户: {format_user_mention(message.from_user)}\n"
+                f"原因: {', '.join(result['reasons'])}\n"
+                f"置信度: {result['confidence']:.2%}\n"
+                f"处罚: {punishment_text}\n"
+                f"消息 ID: {message.message_id}",
+                reply_markup=keyboard,
+            )
+            await auto_delete_message(alert_msg)
+
+            # 记录原始消息文本用于反馈
+            detector = get_detector()
+            await detector.add_feedback(
+                text=message.text or "",
+                is_spam=True,
+                labeled_by=bot.id,
+                confidence=result["confidence"],
+            )
+
+        else:
+            logger.error(f"禁言垃圾用户失败: {error_msg}")
+
+    except Exception as e:
+        logger.error(f"处理垃圾消息失败: {e}")
+
+
+async def _handle_spam_confirm_ban(
+    bot: Bot,
+    callback: CallbackQuery,
+    message: Message,
+    original_message: Message,
+    user_id: int,
+    original_text: str,
+) -> None:
+    """处理管理员确认垃圾消息（删除原消息 + 处罚）
+
+    操作：
+    1. 删除原消息
+    2. 踢出并封禁用户（1小时）
+    3. 入库正样本
+    4. 更新提示消息
+    5. 记录审计日志
+
+    Args:
+        bot: Bot 实例
+        callback: 回调查询对象
+        message: 提示消息对象
+        original_message: 原消息对象
+        user_id: 被处理用户的 ID
+        original_text: 原消息文本内容
+    """
+    # 1. 删除原消息
+    with contextlib.suppress(Exception):
+        await original_message.delete()
+
+    # 2. 踢出并封禁用户
+    success, error_msg = await ModerationService.ban_user_temporarily(
+        bot=bot,
+        chat_id=message.chat.id,
+        user_id=user_id,
+        operator_id=callback.from_user.id,
+        duration=60,  # 1小时
+        reason="垃圾信息（管理员确认）",
+    )
+
+    if not success:
+        await callback.answer(f"❌ 处理失败: {error_msg}", show_alert=True)
+        return
+
+    # 3. 入库正样本
+    detector = get_detector()
+    await detector.add_feedback(
+        text=original_text,
+        is_spam=True,
+        labeled_by=callback.from_user.id,
+        confidence=None,  # 管理员确认，不需要置信度
+    )
+
+    # 4. 更新提示消息
+    operator_mention = format_user_mention(callback.from_user)
+    updated_text = (
+        f"{message.text}\n\n"
+        f"✅ 已确认为垃圾消息并处理\n"
+        f"👮 操作者: {operator_mention}\n"
+        f"⚖️ 处罚: 踢出并封禁 1 小时"
+    )
+
+    await message.edit_text(updated_text)
+    await callback.answer("✅ 已确认并处理", show_alert=True)
+
+    # 5. 记录审计日志
+    from src.repositories.audit_repo import AuditRepository
+
+    await AuditRepository.log_action(
+        group_id=message.chat.id,
+        operator_id=callback.from_user.id,
+        action="spam_confirm_ban",
+        target_user_id=user_id,
+        details={
+            "original_message_id": original_message.message_id,
+            "text_preview": original_text[:100],
+        },
+    )
+
+    logger.info(
+        f"管理员确认垃圾消息 [群组:{message.chat.id}] [用户:{user_id}] "
+        f"[操作者:{callback.from_user.id}]"
+    )
+
+
+async def _handle_spam_confirm_false_positive(
+    bot: Bot,
+    callback: CallbackQuery,
+    message: Message,
+    user_id: int,
+    original_text: str,
+) -> None:
+    """处理管理员确认误判（保留原消息 + 删除提示）
+
+    操作：
+    1. 入库负样本
+    2. 删除提示消息（保留原消息）
+    3. 记录审计日志
+
+    Args:
+        bot: Bot 实例
+        callback: 回调查询对象
+        message: 提示消息对象
+        user_id: 被处理用户的 ID
+        original_text: 原消息文本内容
+    """
+    # 1. 入库负样本
+    detector = get_detector()
+    await detector.add_feedback(
+        text=original_text,
+        is_spam=False,
+        labeled_by=callback.from_user.id,
+        confidence=None,
+    )
+
+    # 2. 删除提示消息（保留原消息）
+    with contextlib.suppress(Exception):
+        await message.delete()
+
+    await callback.answer("✅ 已确认为误判并记录", show_alert=True)
+
+    # 3. 记录审计日志
+    from src.repositories.audit_repo import AuditRepository
+
+    await AuditRepository.log_action(
+        group_id=message.chat.id,
+        operator_id=callback.from_user.id,
+        action="spam_confirm_false_positive",
+        target_user_id=user_id,
+        details={
+            "text_preview": original_text[:100],
+        },
+    )
+
+    logger.info(
+        f"管理员确认误判 [群组:{message.chat.id}] [用户:{user_id}] "
+        f"[操作者:{callback.from_user.id}]"
+    )
+
+
 @router.message(Command("antispam"))
 async def cmd_antispam(message: Message, bot: Bot) -> None:
     """反垃圾配置命令"""
@@ -402,6 +737,12 @@ async def cmd_antispam(message: Message, bot: Bot) -> None:
                 InlineKeyboardButton(
                     text="🔄 重新训练模型",
                     callback_data=f"antispam_retrain:{message.chat.id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔍 管理员确认模式",
+                    callback_data=f"antispam_confirm_menu:{message.chat.id}",
                 )
             ],
         ]
@@ -540,6 +881,193 @@ async def on_antispam_retrain(callback: CallbackQuery) -> None:
     except Exception as e:
         logger.error(f"重新训练模型失败: {e}")
         await callback.answer("❌ 训练失败", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("antispam_confirm_menu:"))
+async def on_antispam_confirm_menu(callback: CallbackQuery) -> None:
+    """显示管理员确认模式子菜单"""
+    # 类型检查
+    if not callback.data or not callback.message:
+        await callback.answer("❌ 数据错误", show_alert=True)
+        return
+
+    from aiogram.types import InaccessibleMessage, Message
+
+    if isinstance(callback.message, InaccessibleMessage):
+        await callback.answer("❌ 消息不可访问", show_alert=True)
+        return
+
+    message: Message = callback.message
+
+    _, chat_id_str = callback.data.split(":")
+    chat_id = int(chat_id_str)
+
+    # 权限验证
+    if callback.from_user.id not in settings.admin_ids:
+        if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
+            await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+            return
+
+    # 获取当前配置
+    group = await GroupRepository.get_or_create(chat_id, message.chat.title or "")
+    status = "✅ 已启用" if group.spam_confirm_enabled else "❌ 已关闭"
+
+    # 显示子菜单
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 启用确认模式", callback_data=f"antispam_confirm_toggle:{chat_id}:on"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ 关闭确认模式", callback_data=f"antispam_confirm_toggle:{chat_id}:off"
+                )
+            ],
+            [InlineKeyboardButton(text="🔙 返回", callback_data=f"antispam_back:{chat_id}")],
+        ]
+    )
+
+    await message.edit_text(
+        f"🔍 <b>管理员确认模式</b>\n\n"
+        f"当前状态: {status}\n\n"
+        f"<b>功能说明:</b>\n"
+        f"• 启用后，检测到垃圾消息时不会立即处罚\n"
+        f"• 发送确认提示，等待管理员确认后再处理\n"
+        f"• 降低误判对用户的影响\n\n"
+        f"<b>注意:</b>\n"
+        f"• 确认模式下原消息会保留，让管理员查看完整内容\n"
+        f"• 管理员确认为垃圾后，统一踢出并封禁1小时\n"
+        f"• 确认为误判后，消息保留并入库负样本",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("antispam_confirm_toggle:"))
+async def on_antispam_confirm_toggle(callback: CallbackQuery) -> None:
+    """处理管理员确认模式开关"""
+    # 类型检查
+    if not callback.data or not callback.message:
+        await callback.answer("❌ 数据错误", show_alert=True)
+        return
+
+    from aiogram.types import InaccessibleMessage, Message
+
+    if isinstance(callback.message, InaccessibleMessage):
+        await callback.answer("❌ 消息不可访问", show_alert=True)
+        return
+
+    message: Message = callback.message
+
+    _, chat_id_str, action = callback.data.split(":")
+    chat_id = int(chat_id_str)
+
+    # 权限验证
+    if callback.from_user.id not in settings.admin_ids:
+        if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):
+            await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+            return
+
+    # 参数白名单验证
+    if action not in ["on", "off"]:
+        await callback.answer("❌ 无效的操作", show_alert=True)
+        return
+
+    enabled = action == "on"
+
+    # 更新配置
+    success = await GroupRepository.update_spam_confirm_settings(chat_id, enabled)
+
+    if success:
+        status = "✅ 已启用" if enabled else "❌ 已关闭"
+        await callback.answer(f"✅ 管理员确认模式{status}", show_alert=True)
+
+        # 更新菜单显示
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ 启用确认模式", callback_data=f"antispam_confirm_toggle:{chat_id}:on"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ 关闭确认模式", callback_data=f"antispam_confirm_toggle:{chat_id}:off"
+                    )
+                ],
+                [InlineKeyboardButton(text="🔙 返回", callback_data=f"antispam_back:{chat_id}")],
+            ]
+        )
+
+        await message.edit_text(
+            f"🔍 <b>管理员确认模式</b>\n\n"
+            f"当前状态: {status}\n\n"
+            f"<b>功能说明:</b>\n"
+            f"• 启用后，检测到垃圾消息时不会立即处罚\n"
+            f"• 发送确认提示，等待管理员确认后再处理\n"
+            f"• 降低误判对用户的影响\n\n"
+            f"<b>注意:</b>\n"
+            f"• 确认模式下原消息会保留，让管理员查看完整内容\n"
+            f"• 管理员确认为垃圾后，统一踢出并封禁1小时\n"
+            f"• 确认为误判后，消息保留并入库负样本",
+            reply_markup=keyboard,
+        )
+
+        logger.info(f"群组 {chat_id} 管理员确认模式已{'启用' if enabled else '关闭'}")
+    else:
+        await callback.answer("❌ 更新失败", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("antispam_back:"))
+async def on_antispam_back(callback: CallbackQuery) -> None:
+    """返回反垃圾主菜单"""
+    # 类型检查
+    if not callback.data or not callback.message:
+        await callback.answer("❌ 数据错误", show_alert=True)
+        return
+
+    from aiogram.types import InaccessibleMessage, Message
+
+    if isinstance(callback.message, InaccessibleMessage):
+        await callback.answer("❌ 消息不可访问", show_alert=True)
+        return
+
+    message: Message = callback.message
+
+    _, chat_id_str = callback.data.split(":")
+    chat_id = int(chat_id_str)
+
+    # 恢复主菜单
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ 启用反垃圾", callback_data=f"antispam_toggle:{chat_id}:on"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ 禁用反垃圾", callback_data=f"antispam_toggle:{chat_id}:off"
+                )
+            ],
+            [InlineKeyboardButton(text="📊 查看统计", callback_data=f"antispam_stats:{chat_id}")],
+            [
+                InlineKeyboardButton(
+                    text="🔄 重新训练模型", callback_data=f"antispam_retrain:{chat_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔍 管理员确认模式", callback_data=f"antispam_confirm_menu:{chat_id}"
+                )
+            ],
+        ]
+    )
+
+    await message.edit_text("🛡️ 反垃圾配置", reply_markup=keyboard)
+    await callback.answer()
 
 
 @router.message(Command("antichannel"))
@@ -837,86 +1365,23 @@ async def on_message(message: Message, bot: Bot) -> None:
             f"原因: {', '.join(map(str, result['reasons']))}"
         )
 
-        try:
-            # 删除垃圾消息
-            await message.delete()
-
-            # 根据置信度决定处罚措施
-            if result["confidence"] >= settings.spam_high_confidence_threshold:
-                # 高置信度：踢出并封禁 1 小时
-                success, error_msg = await ModerationService.ban_user_temporarily(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,
-                    duration=60,  # 60 分钟 = 1 小时
-                    reason=f"垃圾信息（高置信度）: {', '.join(result['reasons'])}",
-                )
-                punishment_text = "踢出并封禁 1 小时"
-            else:
-                # 低置信度：禁言 10 分钟
-                # ✅ P1-6: 正确处理 mute_user 的返回值 (bool, str)
-                success, error_msg = await ModerationService.mute_user(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,  # Bot 作为操作者
-                    duration=10,  # 10分钟
-                    reason=f"垃圾信息: {', '.join(result['reasons'])}",
-                )
-                punishment_text = "禁言 10 分钟"
-
-            if success:
-                # ✅ P1-12: 缓存原始消息文本，用于管理员反馈
-                # TTL 1天，给管理员充足的时间进行反馈
-                redis = get_redis()
-                text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
-                await redis.setex(text_cache_key, 86400, message.text or "")
-
-                # 发送提示消息（包含管理员反馈按钮）
-                # ✅ 使用 message_id 代替文本内容，避免注入风险
-                message_id_str = str(message.message_id)
-
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="✅ 误判",
-                                callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
-                            ),
-                            InlineKeyboardButton(
-                                text="❌ 确认垃圾",
-                                callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
-                            ),
-                        ]
-                    ]
-                )
-
-                alert_msg = await message.answer(
-                    f"🚫 检测到垃圾信息并已处理\n\n"
-                    f"用户: {format_user_mention(message.from_user)}\n"
-                    f"原因: {', '.join(result['reasons'])}\n"
-                    f"置信度: {result['confidence']:.2%}\n"
-                    f"处罚: {punishment_text}\n"
-                    f"消息 ID: {message.message_id}",
-                    reply_markup=keyboard,
-                )
-                await auto_delete_message(alert_msg)
-
-                # 记录原始消息文本用于反馈
-                await detector.add_feedback(
-                    text=message.text or "",
-                    is_spam=True,
-                    labeled_by=bot.id,
-                    confidence=result["confidence"],
-                )
-
-            else:
-                # ✅ P1-6: 处理禁言失败情况
-                logger.error(f"禁言垃圾用户失败: {error_msg}")
-
-        except Exception as e:
-            logger.error(f"处理垃圾消息失败: {e}")
+        # 根据群组配置决定处理方式
+        if group and group.spam_confirm_enabled:
+            # 启用确认模式：发送确认提示，等待管理员操作
+            await _handle_spam_with_confirmation(
+                message=message,
+                bot=bot,
+                result=result,
+                group=group,
+            )
+        else:
+            # 关闭确认模式：按现有流程立即处罚
+            await _handle_spam_immediately(
+                message=message,
+                bot=bot,
+                result=result,
+                group=group,
+            )
     else:
         # ✅ 消息通过检测，记录到上下文缓存（防止污染上下文）
         await ContextService.record_message(message)
@@ -929,95 +1394,81 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     if message.chat.type == "private":
         return
 
-    # 跳过匿名管理员消息
-    if is_anonymous_admin(message):
-        logger.debug(f"跳过匿名管理员图片消息 [群组:{message.chat.id}]")
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user，这里提前返回
+    # 跳过没有发送者的消息
     if not message.from_user:
-        logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
         return
 
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    # 跳过超级管理员消息
+    # 跳过管理员消息
     if message.from_user.id in settings.admin_ids:
-        logger.debug(f"跳过超级管理员图片消息 [用户:{message.from_user.id}]")
         return
 
     # ✅ P1-10: 使用 Redis 缓存减少 API 调用
-    # 跳过群组管理员消息
     if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
-        logger.debug(
-            f"跳过群组管理员图片消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
-        )
         return
 
-    # 检查群组配置
-    try:
-        group = await GroupRepository.get(message.chat.id)
-    except Exception as e:
-        logger.debug(f"获取群组配置失败（非关键）: {e}")
-        group = None
+    # 获取群组配置
+    group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
-    # ✅ 活跃度检查（管理员已在上面跳过）
-    if await check_non_text_message(
-        message, bot, "photo", activity_enabled=activity_system_enabled
-    ):
-        return  # 消息已被删除
-
-    # 检查群组是否启用反垃圾
-    if group and not group.antispam_enabled:
+    # 检查反垃圾是否启用
+    if not group.antispam_enabled:
         return
+
+    # ✅ 处理频道马甲（优先级最高）
+    if await check_and_handle_channel_as_sender(message, bot):
+        return  # 已处理频道马甲，直接返回
+
+    # ✅ 活跃度系统：检查是否允许发送非文本消息
+    activity_system_enabled = settings.activity_enabled and group.activity_enabled
+    if activity_system_enabled:
+        if await check_non_text_message(message, bot, "photo", activity_enabled=True):
+            return  # 活跃度不足，消息已被删除
+
+    # 更新 username 映射
+    await update_username_mapping_if_needed(message)
 
     # 获取检测器
     detector = get_detector()
 
-    # 检查 OCR 是否可用
-    if not detector.ocr_extractor.is_available:
-        logger.debug("OCR 不可用，跳过图片检测")
-        return
+    # 下载图片到临时文件
+    with managed_temp_file(suffix=".jpg") as temp_file_path:
+        photo = message.photo[-1]  # 获取最大尺寸的图片
+        logger.debug(f"开始下载图片 [file_id:{photo.file_id}]")
+        await bot.download(photo, destination=temp_file_path)
+        logger.debug(f"图片已下载到临时文件: {temp_file_path}")
 
-    # ✅ M8: 使用 context manager 确保临时文件一定会被清理
-    try:
-        # 获取最大的图片（最后一个）
-        if not message.photo:
-            return
-        photo = message.photo[-1]
+        # 检测图片
+        result = await detector.detect_image(
+            image_path=temp_file_path,
+            user_id=message.from_user.id,
+            chat_id=message.chat.id,
+        )
+    # 注意：临时文件在退出 with 块时自动删除
 
-        # 使用 managed_temp_file context manager 确保清理
-        with managed_temp_file(suffix=".jpg") as temp_file_path:
-            # 下载图片到临时文件
-            await bot.download(photo, destination=temp_file_path)
-            logger.debug(f"图片已下载到临时文件: {temp_file_path}")
+    # 如果检测到垃圾
+    if result["is_spam"]:
+        logger.warning(
+            f"检测到图片垃圾信息 [群组:{message.chat.id}] "
+            f"[用户:{message.from_user.id}] "
+            f"阶段: {result['stage']}, "
+            f"置信度: {result['confidence']:.2f}, "
+            f"原因: {', '.join(result['reasons'])}"
+        )
 
-            # 检测图片
-            result = await detector.detect_image(
-                image_path=temp_file_path,
-                user_id=message.from_user.id,
-                chat_id=message.chat.id,
+        # 获取 OCR 识别的文本（如果有）
+        ocr_text = result.get("details", {}).get("ocr_text", "")
+
+        # 根据群组配置决定处理方式
+        if group and group.spam_confirm_enabled:
+            # 确认模式：保留原消息，发送确认提示
+            await _handle_spam_with_confirmation(
+                message=message,
+                bot=bot,
+                result=result,
+                group=group,
+                ocr_text=ocr_text,  # 传递 OCR 文本
             )
-        # 注意：临时文件在退出 with 块时自动删除
-
-        # 如果检测到垃圾
-        if result["is_spam"]:
-            logger.warning(
-                f"检测到图片垃圾信息 [群组:{message.chat.id}] "
-                f"[用户:{message.from_user.id}] "
-                f"阶段: {result['stage']}, "
-                f"置信度: {result['confidence']:.2f}, "
-                f"原因: {', '.join(result['reasons'])}"
-            )
-
+        else:
+            # 立即处罚模式：删除消息，立即处罚
             try:
                 # 删除垃圾消息
                 await message.delete()
@@ -1047,17 +1498,15 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                     punishment_text = "禁言 10 分钟"
 
                 if success:
-                    # ✅ P1-12: 缓存原始消息的 OCR 文本，用于管理员反馈
-                    # TTL 1天
-                    if "ocr_text" in result["details"]:
+                    # 缓存 OCR 文本用于管理员反馈（如果有）
+                    if ocr_text:
                         redis = get_redis()
                         text_cache_key = RedisKeys.spam_message_text(
                             message.chat.id, message.message_id
                         )
-                        await redis.setex(text_cache_key, 86400, result["details"]["ocr_text"])
+                        await redis.setex(text_cache_key, 86400, ocr_text)
 
-                    # 发送提示消息（不包含 OCR 提取的敏感内容）
-                    # ⚠️ 注意：callback_data 中也不应包含敏感信息，应使用 message_id 作为标识
+                    # 发送提示消息（包含管理员反馈按钮）
                     message_id_str = str(message.message_id)
 
                     keyboard = InlineKeyboardMarkup(
@@ -1086,22 +1535,19 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                     )
                     await auto_delete_message(alert_msg)
 
-                    # 记录反馈（可选）
-                    if "ocr_text" in result["details"]:
+                    # 记录反馈（如果有 OCR 文本）
+                    if ocr_text:
                         await detector.add_feedback(
-                            text=result["details"]["ocr_text"],
+                            text=ocr_text,
                             is_spam=True,
                             labeled_by=bot.id,
                             confidence=result["confidence"],
                         )
                 else:
-                    logger.error(f"禁言用户失败: {error_msg}")
+                    logger.error(f"处罚用户失败: {error_msg}")
 
             except Exception as e:
                 logger.error(f"处理图片垃圾消息失败: {e}")
-
-    except Exception as e:
-        logger.error(f"图片检测失败: {e}")
 
 
 @router.message(F.sticker)
@@ -2120,6 +2566,82 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
 
             except Exception as e:
                 logger.error(f"处理编辑图片标题垃圾失败: {e}")
+
+
+@router.callback_query(F.data.startswith("spam_confirm:"))
+async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
+    """处理垃圾消息确认回调（通过回复链获取原消息）
+
+    回调数据格式: spam_confirm:{action}:{user_id}:{has_ocr}
+    - action: ban（确认垃圾） 或 false_positive（误判）
+    - user_id: 被处理用户的 ID
+    - has_ocr: 1 表示有 OCR 文本，0 表示没有
+
+    原消息通过 callback.message.reply_to_message 获取
+    """
+    # 1. 类型检查
+    if not callback.data or not callback.message:
+        await callback.answer("❌ 数据错误", show_alert=True)
+        return
+
+    from aiogram.types import InaccessibleMessage, Message
+
+    if isinstance(callback.message, InaccessibleMessage):
+        await callback.answer("❌ 消息不可访问", show_alert=True)
+        return
+
+    message: Message = callback.message
+
+    # 2. 检查回复链
+    if not message.reply_to_message:
+        await callback.answer("❌ 原消息已被删除", show_alert=True)
+        return
+
+    # 3. 解析回调数据
+    _, action, user_id_str, has_ocr_str = callback.data.split(":", 3)
+    user_id = int(user_id_str)
+    has_ocr = has_ocr_str == "1"
+
+    original_message = message.reply_to_message
+
+    # 4. 权限验证（超级管理员或群组管理员）
+    if callback.from_user.id not in settings.admin_ids:
+        if not await PermissionCache.is_admin(bot, message.chat.id, callback.from_user.id):
+            await callback.answer("❌ 只有管理员可以确认处理", show_alert=True)
+            return
+
+    # 5. 获取原消息内容
+    # 优先从 caption 获取，如果没有且有 OCR 标记，则从提示消息中提取
+    original_text = original_message.text or original_message.caption or ""
+
+    if not original_text and has_ocr:
+        # 从提示消息中提取 OCR 识别的文本
+        original_text = _extract_ocr_text_from_prompt(message.text or "")
+
+    if not original_text:
+        await callback.answer("❌ 无法获取消息内容", show_alert=True)
+        return
+
+    # 6. 根据操作类型处理
+    if action == "ban":
+        # 确认垃圾：删除原消息 + 踢出并封禁
+        await _handle_spam_confirm_ban(
+            bot=bot,
+            callback=callback,
+            message=message,
+            original_message=original_message,
+            user_id=user_id,
+            original_text=original_text,
+        )
+    elif action == "false_positive":
+        # 误判：保留原消息 + 入库负样本
+        await _handle_spam_confirm_false_positive(
+            bot=bot,
+            callback=callback,
+            message=message,
+            user_id=user_id,
+            original_text=original_text,
+        )
 
 
 @router.callback_query(F.data.startswith("spam_feedback:"))

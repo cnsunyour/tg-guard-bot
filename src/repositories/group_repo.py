@@ -125,6 +125,27 @@ class GroupRepository:
                 await session.commit()
 
     @staticmethod
+    async def update_spam_confirm_settings(chat_id: int, enabled: bool) -> bool:
+        """更新垃圾消息管理员确认设置
+
+        Args:
+            chat_id: 群组 ID
+            enabled: 是否启用管理员确认模式
+
+        Returns:
+            是否更新成功
+        """
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.spam_confirm_enabled = enabled
+                await session.commit()
+                return True
+            return False
+
+    @staticmethod
     async def get_whitelisted_groups() -> list[Group]:
         """获取所有白名单群组"""
         async with get_db_session() as session:

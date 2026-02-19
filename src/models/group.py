@@ -31,6 +31,9 @@ class Group(Base):
     antispam_level: Mapped[int] = mapped_column(
         Integer, default=2, comment="反垃圾严格程度: 1-宽松, 2-中等, 3-严格"
     )
+    spam_confirm_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, comment="是否启用管理员确认模式（检测到垃圾后等待管理员确认再处罚）"
+    )
 
     # 反频道马甲配置
     anti_channel_enabled: Mapped[bool] = mapped_column(
