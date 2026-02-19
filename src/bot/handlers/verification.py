@@ -240,6 +240,10 @@ async def check_user_spam_info(
                 except Exception as decline_error:
                     logger.error(f"拒绝加入请求失败: {decline_error}")
 
+                # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
+                verification_service = VerificationService()
+                await verification_service.clear_verification(chat_id, user_id)
+
             # 封禁 1 小时（两种模式通用）
             try:
                 await bot.ban_chat_member(
@@ -479,6 +483,10 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
             logger.error(f"发送私聊验证消息失败: {e}")
             # 拒绝加入请求
             await decline_join_request(bot, chat_id, user_id)
+
+            # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
+            verification_service = VerificationService()
+            await verification_service.clear_verification(chat_id, user_id)
 
     except Exception as e:
         logger.error(f"处理加入请求失败: {e}")
@@ -894,6 +902,9 @@ async def on_qa_verify(callback: CallbackQuery, bot: Bot) -> None:
                     user_id=user_id,
                     until_date=datetime.now() + timedelta(hours=1),
                 )
+
+            # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
+            await verification_service.clear_verification(chat_id, user_id)
 
             # 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -2047,6 +2058,10 @@ async def handle_user_not_started_bot_for_join_request(
     except Exception as e:
         logger.error(f"拒绝加入请求失败: {e}")
 
-    # 6. 清除验证类型标记
+    # 6. ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
+    verification_service = VerificationService()
+    await verification_service.clear_verification(chat_id, user_id)
+
+    # 7. 清除验证类型标记
     type_key = RedisKeys.verification_type(chat_id, user_id)
     await redis.delete(type_key)
