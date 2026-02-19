@@ -19,6 +19,7 @@ from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
 from src.core.utils import auto_delete_message, check_admin_permission, format_user_mention
+from src.models.group import Group
 from src.repositories.group_repo import GroupRepository
 from src.services.activity import ActivityService  # 活跃度服务
 from src.services.context_service import ContextService  # 上下文服务
@@ -371,9 +372,9 @@ def _extract_ocr_text_from_prompt(prompt_text: str) -> str:
 
 async def _handle_spam_with_confirmation(
     message: Message,
-    bot: Bot,
+    _bot: Bot,
     result: dict,
-    group: "Group",
+    _group: Group,
     ocr_text: str | None = None,
 ) -> None:
     """垃圾消息确认模式处理（保留原消息）
@@ -451,7 +452,7 @@ async def _handle_spam_immediately(
     message: Message,
     bot: Bot,
     result: dict,
-    group: "Group",
+    _group: Group,
 ) -> None:
     """立即处罚模式处理（现有流程）
 
@@ -632,7 +633,7 @@ async def _handle_spam_confirm_ban(
 
 
 async def _handle_spam_confirm_false_positive(
-    bot: Bot,
+    _bot: Bot,
     callback: CallbackQuery,
     message: Message,
     user_id: int,
@@ -1374,9 +1375,9 @@ async def on_message(message: Message, bot: Bot) -> None:
             # 启用确认模式：发送确认提示，等待管理员操作
             await _handle_spam_with_confirmation(
                 message=message,
-                bot=bot,
+                _bot=bot,
                 result=result,
-                group=group,
+                _group=group,
             )
         else:
             # 关闭确认模式：按现有流程立即处罚
@@ -1384,7 +1385,7 @@ async def on_message(message: Message, bot: Bot) -> None:
                 message=message,
                 bot=bot,
                 result=result,
-                group=group,
+                _group=group,
             )
     else:
         # ✅ 消息通过检测，记录到上下文缓存（防止污染上下文）
@@ -1466,9 +1467,9 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
             # 确认模式：保留原消息，发送确认提示
             await _handle_spam_with_confirmation(
                 message=message,
-                bot=bot,
+                _bot=bot,
                 result=result,
-                group=group,
+                _group=group,
                 ocr_text=ocr_text,  # 传递 OCR 文本
             )
         else:
@@ -2640,7 +2641,7 @@ async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
     elif action == "false_positive":
         # 误判：保留原消息 + 入库负样本
         await _handle_spam_confirm_false_positive(
-            bot=bot,
+            _bot=bot,
             callback=callback,
             message=message,
             user_id=user_id,
