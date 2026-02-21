@@ -14,6 +14,7 @@ from src.core.utils import (
     auto_delete_message,
     check_admin_permission_strict_message,
     escape_html,
+    get_chat_administrators_mention,
     parse_message_link,
     parse_message_link_with_chat,
 )
@@ -1240,6 +1241,12 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 f"[被举报:{target_user_id}] [原因:{reason}]"
             )
 
+            # 获取管理员 mention
+            admin_mentions = await get_chat_administrators_mention(
+                bot=bot,
+                chat_id=message.chat.id,
+            )
+
             # 创建管理员操作按钮
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -1254,7 +1261,11 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 ]
             )
 
+            # 构建消息 header（包含管理员 mention）
+            report_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+
             reply = await message.answer(
+                f"{report_header}"
                 f"✅ 举报已提交\n"
                 f"• 举报ID: #{report.id}\n"
                 f"• 原因: {escape_html(reason)}\n"

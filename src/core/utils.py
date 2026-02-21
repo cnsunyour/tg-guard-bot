@@ -2,10 +2,15 @@
 
 import asyncio
 import html
+import json
 import re
+from typing import Any
 
+from aiogram import Bot
+from aiogram.types import ChatMemberAdministrator, ChatMemberOwner
 from loguru import logger
 
+from src.core.redis import RedisKeys, get_redis
 from src.core.retry import retry_on_network_error
 
 
@@ -411,3 +416,75 @@ def parse_message_link_with_chat(text: str) -> tuple[int | None, int | None, str
     masked_text = mask_sensitive_text(text, keep_chars=15)
     logger.debug(f"无法从文本中解析消息链接: {masked_text}")
     return None, None, None
+
+
+@retry_on_network_error(max_retries=3, initial_delay=1.0)
+async def get_chat_administrators_mention(
+    bot: Bot,
+    chat_id: int,
+) -> str:
+    """获取群组管理员列表的 mention 字符串
+
+    使用 user_id 方式生成 mention，适用于所有管理员（包括没有 username 的）
+    结果会被缓存 5 分钟，减少 Telegram API 调用
+
+    Args:
+        bot: Bot 实例
+        chat_id: 群组 ID
+
+    Returns:
+        mention 字符串，包含所有非匿名管理员，空格分隔
+        每个管理员显示为 👤 emoji，不会显示真实姓名
+
+    Example:
+        >>> mentions = await get_chat_administrators_mention(bot, chat_id)
+        >>> print(mentions)
+        '<a href="tg://user?id=123">👤</a> <a href="tg://user?id=456">👤</a>'
+    """
+    redis = get_redis()
+    cache_key = RedisKeys.chat_admins(chat_id)
+
+    # 1. 尝试从 Redis 缓存获取
+    cached_data = await redis.get(cache_key)
+    if cached_data:
+        try:
+            admins: list[dict[str, Any]] = json.loads(cached_data)
+            mentions = " ".join(f'<a href="tg://user?id={admin["id"]}">👤</a>' for admin in admins)
+            logger.debug(f"从缓存获取管理员列表 [群组:{chat_id}] [数量:{len(admins)}]")
+            return mentions
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"解析管理员缓存失败 [群组:{chat_id}]: {e}")
+
+    # 2. 从 Telegram API 获取
+    try:
+        administrators = await bot.get_chat_administrators(chat_id)
+
+        # 3. 过滤匿名管理员（无法 mention）
+        # 仅保留有用户信息的非匿名管理员
+        non_anonymous_admins = [
+            admin
+            for admin in administrators
+            if not getattr(admin, "is_anonymous", False)
+            and admin.user
+            and isinstance(admin, (ChatMemberOwner, ChatMemberAdministrator))
+        ]
+
+        if not non_anonymous_admins:
+            logger.debug(f"群组没有非匿名管理员 [群组:{chat_id}]")
+            return ""
+
+        # 4. 构建缓存数据（只存 ID）
+        admins_data = [{"id": admin.user.id} for admin in non_anonymous_admins]
+
+        # 5. 缓存结果（5分钟 TTL）
+        await redis.setex(cache_key, 300, json.dumps(admins_data, ensure_ascii=False))
+
+        # 6. 构建 mention 字符串（使用 emoji 代替显示名称）
+        mentions = " ".join(f'<a href="tg://user?id={admin["id"]}">👤</a>' for admin in admins_data)
+
+        logger.debug(f"获取管理员列表 [群组:{chat_id}] [数量:{len(admins_data)}] [已缓存]")
+        return mentions
+
+    except Exception as e:
+        logger.error(f"获取管理员列表失败 [群组:{chat_id}]: {e}")
+        return ""

@@ -19,7 +19,12 @@ from PIL import Image
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
-from src.core.utils import auto_delete_message, check_admin_permission, format_user_mention
+from src.core.utils import (
+    auto_delete_message,
+    check_admin_permission,
+    format_user_mention,
+    get_chat_administrators_mention,
+)
 from src.models.group import Group
 from src.repositories.group_repo import GroupRepository
 from src.services.activity import ActivityService  # 活跃度服务
@@ -398,7 +403,13 @@ async def _handle_spam_with_confirmation(
         logger.warning("消息缺少发送者信息，跳过处理")
         return
 
-    # 1. 构建确认提示消息
+    # 1. 获取管理员 mention
+    admin_mentions = await get_chat_administrators_mention(
+        bot=_bot,
+        chat_id=message.chat.id,
+    )
+
+    # 2. 构建确认提示消息
     user_mention = format_user_mention(message.from_user)
     reasons_text = "、".join(result["reasons"])
 
@@ -411,7 +422,11 @@ async def _handle_spam_with_confirmation(
     elif message.video:
         message_type = "视频消息"
 
+    # 构建 prompt header（包含管理员 mention）
+    prompt_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+
     prompt_text = (
+        f"{prompt_header}"
         f"🚨 检测到疑似垃圾{message_type}\n\n"
         f"👤 用户: {user_mention}\n"
         f"📊 置信度: {result['confidence']:.2%}\n"
@@ -426,7 +441,7 @@ async def _handle_spam_with_confirmation(
 
     prompt_text += "\n⏰ 请确认处理方式（删除此提示视为放弃处理）"
 
-    # 2. 创建内联按钮
+    # 3. 创建内联按钮
     # 回调数据格式: spam_confirm:{action}:{user_id}:{has_ocr}
     # has_ocr: 1 表示有 OCR 文本，0 表示没有
     has_ocr = "1" if ocr_text else "0"
@@ -445,7 +460,7 @@ async def _handle_spam_with_confirmation(
         ]
     )
 
-    # 3. 发送提示消息（回复原消息）
+    # 4. 发送提示消息（回复原消息）
     await message.reply(text=prompt_text, reply_markup=keyboard)
 
     logger.info(
@@ -514,6 +529,12 @@ async def _handle_spam_immediately(
             text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
             await redis.setex(text_cache_key, 86400, message.text or "")
 
+            # 获取管理员 mention
+            admin_mentions = await get_chat_administrators_mention(
+                bot=bot,
+                chat_id=message.chat.id,
+            )
+
             # 发送提示消息（包含管理员反馈按钮）
             message_id_str = str(message.message_id)
 
@@ -532,7 +553,11 @@ async def _handle_spam_immediately(
                 ]
             )
 
+            # 构建消息 header（包含管理员 mention）
+            alert_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+
             alert_msg = await message.answer(
+                f"{alert_header}"
                 f"🚫 检测到垃圾信息并已处理\n\n"
                 f"用户: {format_user_mention(message.from_user)}\n"
                 f"原因: {', '.join(result['reasons'])}\n"

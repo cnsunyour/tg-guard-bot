@@ -200,3 +200,13 @@ class RedisKeys:
         - 全局唯一，不区分群组
         """
         return f"username_map:{username.lower()}"
+
+    @staticmethod
+    def chat_admins(chat_id: int) -> str:
+        """群组管理员列表缓存键名
+
+        用于缓存群组管理员列表，减少 Telegram API 调用
+        存储格式: JSON 数字符串 [{"id": int, "full_name": str}, ...]
+        TTL: 300 秒（5分钟）
+        """
+        return f"chat_admins:{chat_id}"
