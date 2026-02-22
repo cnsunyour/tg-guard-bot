@@ -1394,6 +1394,9 @@ async def on_message(message: Message, bot: Bot) -> None:
             context_text = None
             context_messages_raw = None
 
+    # ✅ 检查是否启用确认模式，决定是否跳过 AI 自动入库
+    skip_auto_train = bool(group and group.spam_confirm_enabled)
+
     # 检测垃圾（传入活跃度、上下文和消息对象，使用并行 AI 检测）
     result = await detector.detect_with_ai_context(
         text=message.text or "",
@@ -1403,6 +1406,7 @@ async def on_message(message: Message, bot: Bot) -> None:
         context_text=context_text,
         context_messages=context_messages_raw,
         message=message,
+        skip_auto_train=skip_auto_train,  # ✅ 确认模式下跳过 AI 自动入库
     )
 
     # 如果检测到垃圾

@@ -220,6 +220,7 @@ class SpamDetector:
         context_text: str | None = None,
         context_messages: list[dict] | None = None,
         message: Any = None,
+        skip_auto_train: bool = False,
     ) -> DetectionResult:
         """带上下文的并行检测入口 - 同时运行传统三阶段管道和 AI 上下文检测
 
@@ -231,6 +232,7 @@ class SpamDetector:
             context_text: 上下文文本（格式化后的对话上下文，给 AI 用）
             context_messages: 原始上下文消息列表（给 Embedding 用）
             message: Telegram Message 对象（用于回复链检测）
+            skip_auto_train: 是否跳过 AI 自动入库（确认模式下使用）
 
         Returns:
             合并后的检测结果字典
@@ -267,7 +269,7 @@ class SpamDetector:
 
             # 合并结果
             merged_result = await self._merge_detection_results(
-                traditional_result, ai_result, text, user_id, activity
+                traditional_result, ai_result, text, user_id, activity, skip_auto_train
             )
 
             # 应用上下文调整（降低误判）
@@ -296,6 +298,7 @@ class SpamDetector:
         text: str,
         user_id: int,
         activity: int | None = None,
+        skip_auto_train: bool = False,
     ) -> DetectionResult:
         """合并传统检测和 AI 检测结果
 
@@ -333,10 +336,15 @@ class SpamDetector:
             logger.warning(f"传统检测失败，使用 AI 结果 [用户:{user_id}]")
             assert ai is not None  # 类型检查
             if ai["is_spam"]:
-                await self._handle_ai_spam_detection(text, ai, user_id)
+                # ✅ 确认模式下跳过 AI 自动入库，等待管理员确认
+                if not skip_auto_train:
+                    await self._handle_ai_spam_detection(text, ai, user_id)
+                else:
+                    logger.debug(f"确认模式：跳过 AI 自动入库 [用户:{user_id}]")
             else:
                 # 处理高置信度负样本
-                await self._handle_ai_negative_detection(text, ai, user_id)
+                if not skip_auto_train:
+                    await self._handle_ai_negative_detection(text, ai, user_id)
             # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
             ai_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
@@ -366,7 +374,11 @@ class SpamDetector:
         # 策略 2: AI 检测为垃圾 → 使用 AI 结果 + 自动入库训练
         if ai["is_spam"]:
             logger.info(f"AI 检测为垃圾 [用户:{user_id}] [置信度:{ai['confidence']:.2f}]")
-            await self._handle_ai_spam_detection(text, ai, user_id)
+            # ✅ 确认模式下跳过 AI 自动入库，等待管理员确认
+            if not skip_auto_train:
+                await self._handle_ai_spam_detection(text, ai, user_id)
+            else:
+                logger.debug(f"确认模式：跳过 AI 自动入库 [用户:{user_id}]")
             # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
             converted_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
@@ -383,7 +395,8 @@ class SpamDetector:
         # 策略 3: 都不是垃圾 → 使用传统结果 + 检查是否入库负样本
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
         # 处理高置信度负样本
-        await self._handle_ai_negative_detection(text, ai, user_id)
+        if not skip_auto_train:
+            await self._handle_ai_negative_detection(text, ai, user_id)
         return traditional
 
     async def _handle_ai_spam_detection(
