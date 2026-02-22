@@ -648,6 +648,9 @@ async def _handle_spam_confirm_ban(
     await message.edit_text(updated_text)
     await callback.answer("✅ 已确认并处理", show_alert=True)
 
+    # 自动删除提示消息
+    await auto_delete_message(message, delay=30)
+
     # 5. 记录审计日志
     from src.repositories.audit_repo import AuditRepository
 
@@ -2811,6 +2814,9 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         await message.edit_text(
             message_text + f"\n\n{feedback_text} (by {format_user_mention(callback.from_user)})"
         )
+
+        # 自动删除提示消息
+        await auto_delete_message(message, delay=30)
 
         await callback.answer(f"反馈已记录: {feedback_text}")
 
