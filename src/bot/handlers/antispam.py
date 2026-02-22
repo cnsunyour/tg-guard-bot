@@ -2767,6 +2767,23 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                             f"误判反馈：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
                             f"[文本长度:{len(cached_text)}]"
                         )
+            else:
+                # ✅ 确认垃圾反馈：检查是否已存在 AI 自动入库的样本，避免重复
+                from src.repositories.spam_repo import SpamRepository
+
+                # 查找该文本的正样本记录（如果存在）
+                existing_sample = await SpamRepository.find_sample_by_text(
+                    cached_text, is_spam=True
+                )
+
+                if existing_sample and existing_sample.labeled_by == -1:
+                    # 删除 AI 自动入库的样本（labeled_by=-1）
+                    deleted = await SpamRepository.delete_sample(existing_sample.id)
+                    if deleted:
+                        logger.info(
+                            f"确认垃圾反馈：已删除 AI 自动入库的样本 [样本ID:{existing_sample.id}] "
+                            f"[文本长度:{len(cached_text)}]，将替换为管理员标注"
+                        )
 
             # 添加新的样本记录
             await detector.add_feedback(
