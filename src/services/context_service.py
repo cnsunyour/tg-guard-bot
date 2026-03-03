@@ -227,7 +227,11 @@ class ContextService:
 
     @staticmethod
     def format_context_for_ai(
-        context: ConversationContext, current_text: str, current_message_id: int | None = None
+        context: ConversationContext,
+        current_text: str,
+        current_message_id: int | None = None,
+        chat_title: str | None = None,
+        chat_description: str | None = None,
     ) -> str:
         """格式化上下文供 AI 使用
 
@@ -235,11 +239,20 @@ class ContextService:
             context: 对话上下文
             current_text: 当前待检测消息文本
             current_message_id: 当前消息 ID（用于排除自身）
+            chat_title: 群组名称
+            chat_description: 群组简介
 
         Returns:
             格式化的上下文字符串
         """
         parts = []
+
+        # 群组信息（帮助 AI 理解群组话题，降低误判）
+        if chat_title:
+            group_info = f"【群组信息】\n群名称：{chat_title}"
+            if chat_description:
+                group_info += f"\n群简介：{chat_description}"
+            parts.append(group_info)
 
         # 回复链
         if context["reply_chain"]:

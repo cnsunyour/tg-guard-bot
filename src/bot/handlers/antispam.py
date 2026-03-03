@@ -1381,7 +1381,11 @@ async def on_message(message: Message, bot: Bot) -> None:
         try:
             context = await ContextService.get_conversation_context(message)
             context_text = ContextService.format_context_for_ai(
-                context, message.text or "", message.message_id
+                context,
+                message.text or "",
+                message.message_id,
+                chat_title=message.chat.title,
+                chat_description=message.chat.description,
             )
             # 转换为 dict 列表（给 Embedding 用）
             context_messages_raw = [dict(msg) for msg in context["recent_messages"]]
@@ -2392,7 +2396,11 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
         try:
             context = await ContextService.get_conversation_context(message)
             context_text = ContextService.format_context_for_ai(
-                context, message.text or "", message.message_id
+                context,
+                message.text or "",
+                message.message_id,
+                chat_title=message.chat.title,
+                chat_description=message.chat.description,
             )
             logger.debug(
                 f"已构建编辑消息上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
@@ -2559,7 +2567,11 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
             try:
                 context = await ContextService.get_conversation_context(message)
                 context_text = ContextService.format_context_for_ai(
-                    context, message.caption, message.message_id
+                    context,
+                    message.caption,
+                    message.message_id,
+                    chat_title=message.chat.title,
+                    chat_description=message.chat.description,
                 )
                 logger.debug(
                     f"已构建编辑图片 caption 上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
