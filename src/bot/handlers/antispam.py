@@ -188,6 +188,20 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
             logger.debug(f"群组 {message.chat.id} 未启用反频道马甲功能，跳过频道马甲检测")
             return False
 
+        # 排除群组关联频道（linked channel）的消息
+        with contextlib.suppress(Exception):
+            chat_info = await bot.get_chat(message.chat.id)
+            if (
+                chat_info.linked_chat_id is not None
+                and message.sender_chat is not None
+                and message.sender_chat.id == chat_info.linked_chat_id
+            ):
+                logger.debug(
+                    f"跳过群组关联频道消息 [群组:{message.chat.id}] "
+                    f"[关联频道:{message.sender_chat.id}]"
+                )
+                return False
+
         # 频道马甲消息：删除消息并警告
         channel_title = (
             message.sender_chat.title
