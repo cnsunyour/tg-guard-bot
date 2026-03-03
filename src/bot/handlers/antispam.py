@@ -172,14 +172,19 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
         bot: Bot 实例
 
     Returns:
-        True 表示是频道马甲且已处理(调用者应直接 return)，False 表示不是频道马甲或未启用检测
+        True 表示应跳过后续处理（频道马甲已处理，或关联频道消息），False 表示继续正常处理
     """
     # 类型缩小
     assert message.chat
 
-    # 检查是否是频道马甲
+    # 检查是否是频道类型发言
     if not is_channel_as_sender(message):
         return False
+
+    # 快速路径：Telegram 系统账号 777000 专用于关联频道同步转发，直接跳过
+    if message.from_user and message.from_user.id == 777000:
+        logger.debug(f"跳过关联频道同步消息（系统账号 777000）[群组:{message.chat.id}]")
+        return True
 
     # 检查群组是否启用反频道马甲
     try:
@@ -188,8 +193,8 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
             logger.debug(f"群组 {message.chat.id} 未启用反频道马甲功能，跳过频道马甲检测")
             return False
 
-        # 排除群组关联频道（linked channel）的消息
-        with contextlib.suppress(Exception):
+        # 排除群组关联频道（linked channel）的消息（双重保险）
+        try:
             chat_info = await bot.get_chat(message.chat.id)
             if (
                 chat_info.linked_chat_id is not None
@@ -200,7 +205,9 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
                     f"跳过群组关联频道消息 [群组:{message.chat.id}] "
                     f"[关联频道:{message.sender_chat.id}]"
                 )
-                return False
+                return True
+        except Exception as e:
+            logger.debug(f"获取群组关联频道信息失败，继续马甲检测: {e}")
 
         # 频道马甲消息：删除消息并警告
         channel_title = (
