@@ -279,6 +279,10 @@ async def check_non_text_message(
     # 类型缩小
     assert message.from_user
 
+    # 跳过 Telegram 系统账号（777000），关联频道同步消息即以此身份转发
+    if message.from_user.id == 777000:
+        return False
+
     # 检查活跃度系统是否启用
     if activity_enabled is None:
         activity_enabled = settings.activity_enabled
