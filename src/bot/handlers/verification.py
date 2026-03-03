@@ -1148,7 +1148,7 @@ async def on_puzzle_verify(callback: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("verify_captcha_input:"))
-async def on_captcha_input_request(callback: CallbackQuery, _bot: Bot) -> None:
+async def on_captcha_input_request(callback: CallbackQuery) -> None:
     """处理验证码输入请求 - 私聊模式"""
     try:
         # 类型检查
