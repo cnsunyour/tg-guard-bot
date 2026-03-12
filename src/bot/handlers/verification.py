@@ -526,6 +526,12 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
                 f"用户 {user_id} 由管理员 {inviter_name} ({inviter_id}) 邀请，" f"跳过验证直接通过"
             )
 
+            # ✅ 清除可能存在的待验证状态（管理员批准加入请求场景）
+            verification_service = VerificationService()
+            if await verification_service.is_verification_pending(chat_id, user_id):
+                await verification_service.clear_verification(chat_id, user_id)
+                logger.info(f"用户 {user_id} 由管理员邀请，已清除待验证状态")
+
             # 直接发送欢迎消息（不需要限制权限）
             welcome_msg = await bot.send_message(
                 chat_id=chat_id,
@@ -1968,11 +1974,6 @@ async def handle_join_request_timeout(
             # 5. 清除验证状态
             await verification_service.clear_verification(chat_id, user_id)
 
-            # 6. 清除验证类型标记
-            redis = get_redis()
-            type_key = RedisKeys.verification_type(chat_id, user_id)
-            await redis.delete(type_key)
-
             logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁1小时）")
         else:
             logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
@@ -2061,7 +2062,3 @@ async def handle_user_not_started_bot_for_join_request(
     # 6. ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
     verification_service = VerificationService()
     await verification_service.clear_verification(chat_id, user_id)
-
-    # 7. 清除验证类型标记
-    type_key = RedisKeys.verification_type(chat_id, user_id)
-    await redis.delete(type_key)

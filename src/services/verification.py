@@ -1151,10 +1151,14 @@ class VerificationService:
 
     @staticmethod
     async def clear_verification(chat_id: int, user_id: int) -> None:
-        """清除验证状态"""
+        """清除验证状态（包括验证类型标记）"""
         redis = get_redis()
+        # 清除主验证 key
         key = RedisKeys.verification(chat_id, user_id)
         await redis.delete(key)
+        # 清除验证类型标记
+        type_key = RedisKeys.verification_type(chat_id, user_id)
+        await redis.delete(type_key)
 
     @staticmethod
     async def is_verification_pending(chat_id: int, user_id: int) -> bool:
