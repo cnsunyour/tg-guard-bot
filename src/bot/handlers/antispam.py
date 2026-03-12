@@ -1506,6 +1506,31 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         if await check_non_text_message(message, bot, "photo", activity_enabled=True):
             return  # 活跃度不足，消息已被删除
 
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled:
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 确定最终阈值（全局配置优先）
+        if global_threshold > 0:
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            # 记录到上下文
+            await ContextService.record_message(message)
+            return  # 直接返回，不进行垃圾检测
+
     # 更新 username 映射
     await update_username_mapping_if_needed(message)
 
@@ -1688,6 +1713,31 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         message, bot, "sticker", activity_enabled=activity_system_enabled
     ):
         return  # 消息已被删除
+
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled:
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 确定最终阈值（全局配置优先）
+        if global_threshold > 0:
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            # 记录到上下文
+            await ContextService.record_message(message)
+            return  # 直接返回，不进行垃圾检测
 
     # 检查群组是否启用反垃圾
     if group and not group.antispam_enabled:
