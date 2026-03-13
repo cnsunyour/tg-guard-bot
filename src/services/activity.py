@@ -15,12 +15,12 @@ class ActivityService:
     活跃度规则:
     - 初始值: 0
     - 文本消息: +1
-    - 非文本消息: -2 (活跃度 > 0 时) 或 阻止发送 (活跃度 <= 0)
+    - 非文本消息: 0 (不扣减，但需要活跃度 > 0 才能发送)
     - 每日衰减: -1 (活跃度 < 10 时，无消息则衰减；>= 10 时不衰减)
     """
 
     # 非文本消息扣分值
-    NON_TEXT_PENALTY = 1
+    NON_TEXT_PENALTY = 0
 
     # 文本消息加分值
     TEXT_REWARD = 1
@@ -129,7 +129,7 @@ class ActivityService:
 
     @staticmethod
     async def record_non_text_message(chat_id: int, user_id: int) -> int:
-        """记录非文本消息，扣除活跃度 (仅在活跃度 > 0 时调用)
+        """记录非文本消息，扣除活跃度 (扣减值为 0 时不实际扣减)
 
         Args:
             chat_id: 群组 ID
