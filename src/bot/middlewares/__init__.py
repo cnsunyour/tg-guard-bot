@@ -1,12 +1,14 @@
 """中间件模块"""
 
 from .auto_delete import AutoDeleteMiddleware
+from .cas_check import CASCheckMiddleware
 from .retry_after import RetryAfterMiddleware
 from .throttle import ThrottleMiddleware
 from .whitelist import WhitelistMiddleware
 
 __all__ = [
     "AutoDeleteMiddleware",
+    "CASCheckMiddleware",
     "RetryAfterMiddleware",
     "ThrottleMiddleware",
     "WhitelistMiddleware",

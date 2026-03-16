@@ -193,6 +193,18 @@ class Settings(BaseSettings):
     warning_kick_threshold: int = Field(default=5, description="踢出群组阈值（次）")
     warning_ban_threshold: int = Field(default=7, description="封禁阈值（次，踢出+拉黑）")
 
+    # CAS (Combot Anti-Spam) API 配置
+    cas_enabled: bool = Field(
+        default=False,
+        description="是否启用 CAS 黑名单检查（启用后自动拦截入群和消息）",
+    )
+    cas_api_url: str = Field(default="https://api.cas.chat", description="CAS API 基础 URL")
+    cas_check_timeout: int = Field(default=5, description="API 请求超时时间（秒）")
+    cas_cache_ttl: int = Field(
+        default=86400,
+        description="检查结果缓存时间（秒），默认 24 小时",
+    )
+
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
     activity_max_confidence_reduction: float = Field(

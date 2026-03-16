@@ -172,14 +172,19 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
         bot: Bot 实例
 
     Returns:
-        True 表示是频道马甲且已处理(调用者应直接 return)，False 表示不是频道马甲或未启用检测
+        True 表示应跳过后续处理（频道马甲已处理，或关联频道消息），False 表示继续正常处理
     """
     # 类型缩小
     assert message.chat
 
-    # 检查是否是频道马甲
+    # 检查是否是频道类型发言
     if not is_channel_as_sender(message):
         return False
+
+    # 快速路径：Telegram 系统账号 777000 专用于关联频道同步转发，直接跳过
+    if message.from_user and message.from_user.id == 777000:
+        logger.debug(f"跳过关联频道同步消息（系统账号 777000）[群组:{message.chat.id}]")
+        return True
 
     # 检查群组是否启用反频道马甲
     try:
@@ -187,6 +192,22 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
         if group and not group.anti_channel_enabled:
             logger.debug(f"群组 {message.chat.id} 未启用反频道马甲功能，跳过频道马甲检测")
             return False
+
+        # 排除群组关联频道（linked channel）的消息（双重保险）
+        try:
+            chat_info = await bot.get_chat(message.chat.id)
+            if (
+                chat_info.linked_chat_id is not None
+                and message.sender_chat is not None
+                and message.sender_chat.id == chat_info.linked_chat_id
+            ):
+                logger.debug(
+                    f"跳过群组关联频道消息 [群组:{message.chat.id}] "
+                    f"[关联频道:{message.sender_chat.id}]"
+                )
+                return True
+        except Exception as e:
+            logger.debug(f"获取群组关联频道信息失败，继续马甲检测: {e}")
 
         # 频道马甲消息：删除消息并警告
         channel_title = (
@@ -264,6 +285,10 @@ async def check_non_text_message(
     """
     # 类型缩小
     assert message.from_user
+
+    # 跳过 Telegram 系统账号（777000），关联频道同步消息即以此身份转发
+    if message.from_user.id == 777000:
+        return False
 
     # 检查活跃度系统是否启用
     if activity_enabled is None:
@@ -1381,7 +1406,11 @@ async def on_message(message: Message, bot: Bot) -> None:
         try:
             context = await ContextService.get_conversation_context(message)
             context_text = ContextService.format_context_for_ai(
-                context, message.text or "", message.message_id
+                context,
+                message.text or "",
+                message.message_id,
+                chat_title=message.chat.title,
+                chat_description=message.chat.description,
             )
             # 转换为 dict 列表（给 Embedding 用）
             context_messages_raw = [dict(msg) for msg in context["recent_messages"]]
@@ -1476,6 +1505,31 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     if activity_system_enabled:
         if await check_non_text_message(message, bot, "photo", activity_enabled=True):
             return  # 活跃度不足，消息已被删除
+
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled:
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 确定最终阈值（全局配置优先）
+        if global_threshold > 0:
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            # 记录到上下文
+            await ContextService.record_message(message)
+            return  # 直接返回，不进行垃圾检测
 
     # 更新 username 映射
     await update_username_mapping_if_needed(message)
@@ -1659,6 +1713,31 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         message, bot, "sticker", activity_enabled=activity_system_enabled
     ):
         return  # 消息已被删除
+
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    if activity_system_enabled:
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        global_threshold = settings.activity_skip_spam_check_threshold
+
+        # 确定最终阈值（全局配置优先）
+        if global_threshold > 0:
+            final_threshold = global_threshold
+            threshold_source = "全局配置"
+        elif global_threshold == 0:
+            final_threshold = group.activity_skip_threshold if group else 0
+            threshold_source = "群组配置"
+        else:
+            final_threshold = 0
+            threshold_source = "全局禁用"
+
+        if final_threshold > 0 and activity >= final_threshold:
+            logger.debug(
+                f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            )
+            # 记录到上下文
+            await ContextService.record_message(message)
+            return  # 直接返回，不进行垃圾检测
 
     # 检查群组是否启用反垃圾
     if group and not group.antispam_enabled:
@@ -2392,7 +2471,11 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
         try:
             context = await ContextService.get_conversation_context(message)
             context_text = ContextService.format_context_for_ai(
-                context, message.text or "", message.message_id
+                context,
+                message.text or "",
+                message.message_id,
+                chat_title=message.chat.title,
+                chat_description=message.chat.description,
             )
             logger.debug(
                 f"已构建编辑消息上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
@@ -2559,7 +2642,11 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
             try:
                 context = await ContextService.get_conversation_context(message)
                 context_text = ContextService.format_context_for_ai(
-                    context, message.caption, message.message_id
+                    context,
+                    message.caption,
+                    message.message_id,
+                    chat_title=message.chat.title,
+                    chat_description=message.chat.description,
                 )
                 logger.debug(
                     f"已构建编辑图片 caption 上下文 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
