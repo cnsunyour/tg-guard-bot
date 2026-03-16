@@ -1048,7 +1048,7 @@ class VerificationService:
         available_types = ["math", "slider", "qa", "emoji", "captcha", "honeypot", "puzzle"]
 
         # 动态检测已启用的 CAPTCHA 服务
-        if settings.turnstile_enabled and settings.turnstile_webapp_url:
+        if settings.turnstile_enabled and settings.turnstile_site_key:
             available_types.append("turnstile")
 
         if settings.friendly_enabled and settings.friendly_keys:
