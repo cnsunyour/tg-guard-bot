@@ -87,10 +87,10 @@
 
 #### 活跃度系统
 - **动态信任机制**：
-  - 文本消息 +1 活跃度
-  - 非文本消息（图片/贴纸/转发/链接）-2 活跃度
-  - 高活跃度用户可跳过垃圾检测
-  - 低活跃度用户无法发送非文本消息
+  - 普通文本消息：+1 活跃度
+  - 非文本消息（图片/贴纸等）：不扣减活跃度，但需要活跃度允许才可发送（不足则删除并私聊提示）
+  - 外部转发/带链接消息：按“特殊非文本”处理（需要活跃度允许）
+  - 高活跃度用户可跳过垃圾检测（阈值支持全局/群组配置）
 - **置信度调整**：
   - 对数公式：reduction = 0.01 × log2(activity / 10)
   - 最大降低 15% 置信度
@@ -130,16 +130,17 @@
 | 组件 | 版本 | 说明 |
 |------|------|------|
 | Python | 3.12+ | 异步编程 |
-| aiogram | 3.x | Telegram Bot 框架 |
-| Telethon | 1.36+ | Telegram Client API（用于大群成员管理） |
+| aiogram | 3.6+ | Telegram Bot 框架 |
+| Telethon | 1.42+ | Telegram Client API（用于大群成员管理） |
 | PostgreSQL | 16 | 主数据库 |
 | Redis | 7 | 缓存和队列 |
-| SQLAlchemy | 2.0 | ORM |
+| SQLAlchemy | 2.0+ | ORM |
 | scikit-learn | 1.4+ | ML 分类器 |
 | fastembed | 0.3+ | 语义嵌入 |
 | jieba | 0.42+ | 中文分词 |
-| EasyOCR | 1.7+ | 图片 OCR（可选） |
-| PaddleOCR | 3.0+ | 图片 OCR（可选） |
+| OpenAI/Baidu OCR | - | 云 OCR（推荐，内存占用低） |
+| PaddleOCR | 3.0+ | 本地 OCR（可选） |
+| EasyOCR | 1.7+ | 本地 OCR（最终回退） |
 
 ## 🚀 快速开始
 
@@ -166,7 +167,9 @@ nano .env  # 或使用其他编辑器
 ```env
 BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 ADMIN_IDS=123456789
-DB_PASSWORD=your_secure_password_here
+MODEL_SIGNATURE_KEY=please_set_a_random_secret_at_least_32_chars
+# 生产环境还必须设置 REDIS_PASSWORD（否则启动会被拒绝）
+# DB_PASSWORD 在生产环境也不能使用默认值 postgres
 ```
 
 ### 3. 启动服务
@@ -179,8 +182,8 @@ make dev-logs      # 查看日志
 
 或使用 Docker Compose：
 ```bash
-docker-compose up -d
-docker-compose logs -f bot
+docker compose up -d
+docker compose logs -f bot
 ```
 
 ### 4. 初始化数据库
@@ -208,8 +211,10 @@ make train-model    # 训练模型
 |------|------|
 | [QUICKSTART.md](QUICKSTART.md) | 详细的快速开始指南 |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 生产环境部署指南 |
-| [PHASE3_TESTING.md](PHASE3_TESTING.md) | 群管理功能测试 |
-| [PHASE5_OCR_TESTING.md](PHASE5_OCR_TESTING.md) | OCR 功能测试 |
+| [SECURITY.md](SECURITY.md) | 安全说明与建议 |
+| [docs/backup-strategy.md](docs/backup-strategy.md) | 备份策略说明 |
+| [captcha-webapp/README.md](captcha-webapp/README.md) | 统一 CAPTCHA WebApp 部署指南 |
+| [altcha-backend/README.md](altcha-backend/README.md) | ALTCHA PHP 后端部署指南 |
 
 ## 🔧 Make 命令
 
@@ -233,8 +238,6 @@ make prod-logs       # 查看日志
 ### 数据库
 ```bash
 make db-migrate      # 运行数据库迁移
-make db-backup       # 备份数据库
-make db-restore      # 恢复数据库
 make db-shell        # 进入数据库 Shell
 ```
 
@@ -250,6 +253,18 @@ make clean           # 清理临时文件
 make clean-all       # 清理所有数据（危险）
 make status          # 查看服务状态
 make help            # 显示所有命令
+```
+
+### 备份与恢复（GFS 轮转策略）
+```bash
+make backup                              # 自动备份（PostgreSQL + Redis）
+make backup-postgres                      # 仅备份 PostgreSQL
+make backup-redis                         # 仅备份 Redis
+make backup-list                          # 列出所有备份文件
+make backup-cleanup                       # 清理过期备份
+make backup-restore-postgres FILE=<文件>   # 恢复 PostgreSQL
+make backup-restore-redis FILE=<文件>      # 恢复 Redis
+make backup-setup-cron                    # 设置自动备份定时任务
 ```
 
 ## 🎮 Bot 命令
@@ -438,6 +453,7 @@ tg-guard-bot/
 | `ADMIN_IDS` | 超级管理员 ID（逗号分隔） | - | ✅ |
 | `DB_PASSWORD` | 数据库密码 | postgres | ❌ |
 | `REDIS_PASSWORD` | Redis 密码 | 空 | ❌ |
+| `MODEL_SIGNATURE_KEY` | 模型文件签名密钥（至少 32 字符） | - | ✅ |
 | `LOG_LEVEL` | 日志级别 | INFO | ❌ |
 
 #### Telethon 配置（用于大群管理）
@@ -446,7 +462,8 @@ tg-guard-bot/
 |------|------|--------|------|
 | `TELETHON_API_ID` | Telegram API ID（从 my.telegram.org 获取） | - | ✅ (使用 /cleanup 时) |
 | `TELETHON_API_HASH` | Telegram API Hash | - | ✅ (使用 /cleanup 时) |
-| `TELETHON_SESSION_NAME` | Session 文件名 | bot_session | ❌ |
+| `TELETHON_SESSION_PATH` | Session 文件路径 | ./data/user_bot.session | ❌ |
+| `TELETHON_ENABLED` | 是否启用 Telethon 客户端 | false | ❌ |
 
 **注意**：首次启动时会提示登录手机号并输入验证码，生成 session 文件后后续无需再次登录。
 
@@ -461,6 +478,10 @@ tg-guard-bot/
 
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
+| `CAS_ENABLED` | 启用 CAS 黑名单检查（入群 + 消息阶段） | false | ❌ |
+| `CAS_API_URL` | CAS API 基础 URL | https://api.cas.chat | ❌ |
+| `CAS_CHECK_TIMEOUT` | CAS 检查超时（秒） | 5 | ❌ |
+| `CAS_CACHE_TTL` | CAS 缓存 TTL（秒） | 86400 | ❌ |
 | `ENABLE_OCR` | 启用 OCR 功能 | false | ❌ |
 | `SPAM_THRESHOLD_RULE` | 规则引擎阈值 | 0.8 | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
@@ -470,6 +491,8 @@ tg-guard-bot/
 | `REGEX_RULES_CONFIG_PATH` | 自定义规则配置文件路径 | config/spam_rules.json | ❌ |
 | `REGEX_RULES_MAX_TEXT_LENGTH` | 正则规则检测的最大文本长度 | 500 | ❌ |
 
+> 说明：CAS 检查采用“失败放行”降级策略；Redis 不可用时会直连 API（仍失败放行），避免误伤正常用户。
+
 #### CAPTCHA 验证配置（可选）
 
 所有外部 CAPTCHA 服务都需要先部署统一 WebApp 到 Cloudflare Pages。
@@ -477,7 +500,7 @@ tg-guard-bot/
 | 变量 | 说明 | 必填 |
 |------|------|------|
 | `CAPTCHA_WEBAPP_URL` | 统一 CAPTCHA WebApp 地址 | ✅ (使用外部 CAPTCHA 时) |
-| `CAPTCHA_SIGNATURE_KEY` | 签名密钥（64 字符 hex） | ✅ (使用外部 CAPTCHA 时) |
+| `CAPTCHA_SIGNATURE_KEY` | 签名密钥（至少 32 字符） | ✅ (使用外部 CAPTCHA 时) |
 | `MODEL_SIGNATURE_KEY` | 模型文件签名密钥（至少 32 字符） | ✅ |
 
 **Friendly Captcha**（隐私友好，支持多 key 轮换）：
@@ -510,13 +533,22 @@ ALTCHA_HMAC_KEY=<64字符hex密钥>
 **Turnstile**（Cloudflare 无感验证，已集成到统一 WebApp）：
 ```env
 TURNSTILE_ENABLED=true
+# Turnstile Site Key（可选）：用于随机验证可用性判断；留空则随机验证不会选中 Turnstile
+# （该值为公开信息，可与 WebApp 端的 TURNSTILE_SITE_KEY 保持一致）
+TURNSTILE_SITE_KEY=
 # ✅ 推荐：使用统一 CAPTCHA WebApp（与其他服务共用）
 # 配置 CAPTCHA_WEBAPP_URL 后会自动使用统一 WebApp
 ```
 
+> ✅ 说明：当前“随机验证”对 Turnstile 的可用性判断依赖 `TURNSTILE_SITE_KEY`（见 `src/services/verification.py:1051`）。
+> - **TURNSTILE_SECRET_KEY 不在 Bot 端配置**：它应配置在统一 WebApp（Cloudflare Pages/Functions）的环境变量 `TURNSTILE_SECRET_KEY` 中（见 `captcha-webapp/README.md`、`captcha-webapp/functions/api/verify.js`）。
+> - 如果你希望 Turnstile 可能被随机选中，请在 Bot 端同时配置 Turnstile Site Key；直接指定 Turnstile 验证不受影响。
+
 #### OCR 配置（可选）
 
 **混合 OCR 服务**（多提供者自动回退）：
+
+> 说明：当前代码实现的混合 OCR 优先级为 **OpenAI → 百度云 → PaddleOCR → EasyOCR**（见 `src/ml/hybrid_ocr.py`）。
 
 **OpenAI OCR**（第一优先级，云 API）：
 ```env
@@ -533,6 +565,7 @@ OCR_BAIDU_ENABLED=true
 OCR_BAIDU_API_KEY=...
 OCR_BAIDU_SECRET_KEY=...
 OCR_BAIDU_USE_ACCURATE=false
+OCR_BAIDU_TIMEOUT=10
 ```
 
 **PaddleOCR**（第三优先级，本地）：
@@ -554,10 +587,10 @@ OCR_EASY_ENABLED=true
 ## 🔒 安全建议
 
 1. **修改默认密码**：生产环境必须修改 `DB_PASSWORD` 和 `REDIS_PASSWORD`
-2. **限制端口暴露**：生产环境注释掉 `docker-compose.yml` 中的端口映射
+2. **限制端口暴露**：生产环境注释掉 `docker-compose.yml` 中的端口映射（或在防火墙层面限制访问）
 3. **启用防火墙**：使用 UFW 限制只允许必要的端口
 4. **使用 SSH 密钥**：禁用 SSH 密码登录
-5. **定期备份**：使用 `make db-backup` 或配置自动备份
+5. **定期备份**：使用 `make backup`（PostgreSQL + Redis）或配置自动备份
 6. **监控日志**：定期检查 `logs/error_*.log`
 
 ## 📈 性能指标
