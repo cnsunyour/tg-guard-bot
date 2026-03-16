@@ -141,6 +141,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
+    # ✅ 注册 CAS 黑名单检查中间件（在白名单和限流之后，handler 之前）
+    if settings.cas_enabled:
+        from src.bot.middlewares import CASCheckMiddleware
+
+        dp.message.middleware(CASCheckMiddleware())
+
     # ✅ 注册全局错误处理器（过滤网络临时性错误）
     from aiogram.types import ErrorEvent
 
@@ -285,6 +291,15 @@ async def on_shutdown() -> None:
         logger.info("✅ AI 检测器已关闭")
     except Exception as e:
         logger.warning(f"关闭 AI 检测器失败: {e}")
+
+    # ✅ 关闭 CAS 客户端
+    try:
+        from src.services.cas_service import get_cas_service
+
+        await get_cas_service().close()
+        logger.info("✅ CAS 客户端已关闭")
+    except Exception as e:
+        logger.warning(f"关闭 CAS 客户端失败: {e}")
 
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)
