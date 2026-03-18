@@ -130,10 +130,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
 
-    # ✅ 注册速率限制中间件（防止 DoS 攻击）
+    # ✅ 注册速率限制中间件
+    # 说明：
+    # - 消息不做速率限制，全部交由反垃圾系统处理，检测为垃圾后直接封禁/禁言，比简单限流更有效
+    # - 仅对 callback_query 启用速率限制，用于防止按钮刷点/恶意点击
     from src.bot.middlewares import ThrottleMiddleware
 
-    dp.message.middleware(ThrottleMiddleware(rate_limit=3, time_window=1))
     dp.callback_query.middleware(ThrottleMiddleware(rate_limit=5, time_window=1))
 
     # ✅ 注册自动删除中间件（在群组中自动删除命令消息和响应）
