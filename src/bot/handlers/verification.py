@@ -220,10 +220,11 @@ async def check_user_spam_info(
 
         # 使用反垃圾检测器检测
         detector = SpamDetector()
-        result = await detector.detect(
+        result = await detector.detect_with_ai(
             text=check_text,
             user_id=user_id,
             chat_id=chat_id,
+            skip_auto_train=True,
         )
 
         if result["is_spam"]:
