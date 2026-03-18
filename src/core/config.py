@@ -135,15 +135,8 @@ class Settings(BaseSettings):
 
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
-    # ⚠️ 已废弃：请使用 captcha_webapp_url 和 captcha_signature_key
-    turnstile_webapp_url: str = Field(
-        default="",
-        description="[已废弃] Turnstile WebApp URL，请改用 captcha_webapp_url",
-    )
-    turnstile_signature_key: str = Field(
-        default="",
-        description="[已废弃] Turnstile 签名密钥，请改用 captcha_signature_key",
-    )
+    turnstile_site_key: str = Field(default="", description="Turnstile Site Key")
+    turnstile_secret_key: str = Field(default="", description="Turnstile Secret Key")
 
     # ========== 统一 CAPTCHA 验证配置 ==========
     captcha_webapp_url: str = Field(
