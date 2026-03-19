@@ -83,14 +83,20 @@ class SpamDetector:
             # 阶段2: 规则引擎未检测到垃圾，检查文本长度
             min_length = settings.spam_min_text_length
             if min_length > 0:
-                text_length = len(text)
+                from src.core.utils import calculate_normalized_length
+
+                text_length = calculate_normalized_length(text)
                 if text_length < min_length:
                     logger.debug(
                         f"跳过过短消息检测 [群组:{chat_id}] [用户:{user_id}] "
-                        f"[长度:{text_length}] [阈值:{min_length}]"
+                        f"[标准化长度:{text_length}] [阈值:{min_length}] [原始长度:{len(text)}]"
                     )
                     result["stage"] = "skipped_short"
-                    result["details"] = {"text_length": text_length, "min_length": min_length}
+                    result["details"] = {
+                        "normalized_length": text_length,
+                        "original_length": len(text),
+                        "min_length": min_length,
+                    }
                     return result
 
         # Stage 1: 规则引擎（快速过滤）
@@ -105,8 +111,7 @@ class SpamDetector:
             result["details"] = rule_result["details"]
 
             logger.info(
-                f"Stage 1 检测到垃圾信息 [用户:{user_id}] "
-                f"原因: {', '.join(rule_result['reasons'])}"
+                f"Stage 1 检测到垃圾信息 [用户:{user_id}] 原因: {', '.join(rule_result['reasons'])}"
             )
 
             # 应用活跃度置信度调整
@@ -126,7 +131,7 @@ class SpamDetector:
                     result["reasons"].append(f"ML 分类器 (置信度: {confidence_ml:.2f})")
 
                     logger.info(
-                        f"Stage 2 检测到垃圾信息 [用户:{user_id}] " f"置信度: {confidence_ml:.2f}"
+                        f"Stage 2 检测到垃圾信息 [用户:{user_id}] 置信度: {confidence_ml:.2f}"
                     )
 
                     # 应用活跃度置信度调整
@@ -148,9 +153,7 @@ class SpamDetector:
                     result["stage"] = "embedding"
                     result["reasons"].append(f"语义相似度 ({similarity:.2f})")
 
-                    logger.info(
-                        f"Stage 3 检测到垃圾信息 [用户:{user_id}] " f"相似度: {similarity:.2f}"
-                    )
+                    logger.info(f"Stage 3 检测到垃圾信息 [用户:{user_id}] 相似度: {similarity:.2f}")
 
                     # 应用活跃度置信度调整
                     result = self._apply_activity_adjustment(result, activity, user_id)
@@ -189,8 +192,11 @@ class SpamDetector:
 
         # 对短文本保持与传统预过滤一致，避免无谓 AI 调用
         min_length = settings.spam_min_text_length
-        if min_length > 0 and len(text) < min_length:
-            return await self.detect(text, user_id, chat_id, activity)
+        if min_length > 0:
+            from src.core.utils import calculate_normalized_length
+
+            if calculate_normalized_length(text) < min_length:
+                return await self.detect(text, user_id, chat_id, activity)
 
         # 并行执行传统检测和 AI 检测
         try:
@@ -260,13 +266,16 @@ class SpamDetector:
 
         # 对短文本保持与传统预过滤一致，避免无谓 AI 调用
         min_length = settings.spam_min_text_length
-        if min_length > 0 and len(text) < min_length:
-            result = await self.detect(text, user_id, chat_id, activity)
-            if settings.context_consistency_enabled and context_messages:
-                result = await self._apply_context_adjustment(
-                    result, text, message, context_messages, user_id
-                )
-            return result
+        if min_length > 0:
+            from src.core.utils import calculate_normalized_length
+
+            if calculate_normalized_length(text) < min_length:
+                result = await self.detect(text, user_id, chat_id, activity)
+                if settings.context_consistency_enabled and context_messages:
+                    result = await self._apply_context_adjustment(
+                        result, text, message, context_messages, user_id
+                    )
+                return result
 
         # 并行执行传统检测和 AI 上下文检测
         try:
@@ -713,7 +722,7 @@ class SpamDetector:
                 logger.debug(f"图片中未提取到文字 [用户:{user_id}]")
                 return result
 
-            logger.info(f"从图片提取文字 [用户:{user_id}] " f"内容: {mask_text(extracted_text)}")
+            logger.info(f"从图片提取文字 [用户:{user_id}] 内容: {mask_text(extracted_text)}")
 
             # 使用文本检测管道检测提取的文字
             text_result = await self.detect(text=extracted_text, user_id=user_id, chat_id=chat_id)
@@ -760,7 +769,7 @@ class SpamDetector:
             )
 
             logger.info(
-                f"已添加反馈样本 [标注者:{labeled_by}] " f"类型: {'垃圾' if is_spam else '正常'}"
+                f"已添加反馈样本 [标注者:{labeled_by}] 类型: {'垃圾' if is_spam else '正常'}"
             )
             return True
 

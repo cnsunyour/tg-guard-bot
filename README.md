@@ -486,7 +486,7 @@ tg-guard-bot/
 | `SPAM_THRESHOLD_RULE` | 规则引擎阈值 | 0.8 | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
 | `SPAM_THRESHOLD_EMBEDDING` | Embedding 阈值 | 0.75 | ❌ |
-| `SPAM_MIN_TEXT_LENGTH` | 最小文本长度（低于此长度跳过检测） | 10 | ❌ |
+| `SPAM_MIN_TEXT_LENGTH` | 最小标准化文本长度（低于此长度跳过检测，1个汉字/全角字符=1标准长度，2个英文字符=1标准长度） | 10 | ❌ |
 | `REGEX_RULES_ENABLED` | 启用高级正则规则引擎 | true | ❌ |
 | `REGEX_RULES_CONFIG_PATH` | 自定义规则配置文件路径 | config/spam_rules.json | ❌ |
 | `REGEX_RULES_MAX_TEXT_LENGTH` | 正则规则检测的最大文本长度 | 500 | ❌ |

@@ -53,7 +53,9 @@ class Settings(BaseSettings):
         default=10,
         ge=0,
         le=1000,
-        description="垃圾检测的最小文本长度（字符数），低于此长度的消息跳过检测，设为0禁用",
+        description="垃圾检测的最小标准化文本长度，低于此长度的消息跳过检测，设为0禁用。"
+        "标准化长度计算：1个汉字/全角字符=1标准长度，2个英文字符=1标准长度。"
+        "推荐值：10（中文10个汉字，英文20个字符）",
     )
 
     # ========== 高级正则规则引擎配置 ==========
@@ -197,6 +199,7 @@ class Settings(BaseSettings):
         default=86400,
         description="检查结果缓存时间（秒），默认 24 小时",
     )
+    cas_max_retries: int = Field(default=2, description="API 请求最大重试次数")
 
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
@@ -313,9 +316,7 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if (
-                self.db_password == "postgres"
-            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
+            if self.db_password == "postgres":  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"
