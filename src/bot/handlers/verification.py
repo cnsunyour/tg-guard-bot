@@ -220,10 +220,11 @@ async def check_user_spam_info(
 
         # 使用反垃圾检测器检测
         detector = SpamDetector()
-        result = await detector.detect(
+        result = await detector.detect_with_ai(
             text=check_text,
             user_id=user_id,
             chat_id=chat_id,
+            skip_auto_train=True,
         )
 
         if result["is_spam"]:
@@ -551,48 +552,6 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             username=user.username,
         )
 
-    # ========== CAS 黑名单检查（优先级最高）==========
-    if settings.cas_enabled:
-        cas_service = get_cas_service()
-        cas_result = await cas_service.check_user(user_id)
-
-        if cas_result.is_banned:
-            # 直接封禁并踢出
-            try:
-                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            except Exception as e:
-                logger.warning(f"CAS 封禁用户失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
-
-            # 记录审计日志
-            with contextlib.suppress(Exception):
-                await AuditRepository.log_action(
-                    group_id=chat_id,
-                    operator_id=bot.id,
-                    action="cas_ban_on_join",
-                    target_user_id=user_id,
-                    details={"offenses": cas_result.offenses},
-                )
-
-            # 发送群内通知（30 秒后自动删除）
-            try:
-                notify_msg = await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"🚫 {format_user_mention(user)} 在 CAS 黑名单中，"
-                        f"已被自动封禁（违规 {cas_result.offenses} 次）。"
-                    ),
-                )
-                await auto_delete_message(notify_msg, delay=30)
-            except Exception as e:
-                logger.warning(f"发送 CAS 封禁通知失败: {e}")
-
-            logger.info(
-                f"CAS 黑名单用户加入被拒 [群组:{chat_id}] [用户:{user_id}] "
-                f"[违规次数:{cas_result.offenses}]"
-            )
-            return  # 结束处理，不继续后续流程
-    # ========== CAS 检查结束 ==========
-
     # ✅ 检查是否为管理员邀请（from_user 是邀请者）
     if event.from_user:
         inviter_id = event.from_user.id
@@ -653,6 +612,48 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     except Exception as e:
         logger.error(f"限制用户权限失败: {e}")
         # 权限限制失败，可能是 Bot 没有管理权限，记录日志但继续流程
+
+    # ========== CAS 黑名单检查 ==========
+    if settings.cas_enabled:
+        cas_service = get_cas_service()
+        cas_result = await cas_service.check_user(user_id)
+
+        if cas_result.is_banned:
+            # 直接封禁并踢出
+            try:
+                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            except Exception as e:
+                logger.warning(f"CAS 封禁用户失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+
+            # 记录审计日志
+            with contextlib.suppress(Exception):
+                await AuditRepository.log_action(
+                    group_id=chat_id,
+                    operator_id=bot.id,
+                    action="cas_ban_on_join",
+                    target_user_id=user_id,
+                    details={"offenses": cas_result.offenses},
+                )
+
+            # 发送群内通知（30 秒后自动删除）
+            try:
+                notify_msg = await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"🚫 {format_user_mention(user)} 在 CAS 黑名单中，"
+                        f"已被自动封禁（违规 {cas_result.offenses} 次）。"
+                    ),
+                )
+                await auto_delete_message(notify_msg, delay=30)
+            except Exception as e:
+                logger.warning(f"发送 CAS 封禁通知失败: {e}")
+
+            logger.info(
+                f"CAS 黑名单用户加入被拒 [群组:{chat_id}] [用户:{user_id}] "
+                f"[违规次数:{cas_result.offenses}]"
+            )
+            return  # 结束处理，不继续后续流程
+    # ========== CAS 检查结束 ==========
 
     # ==================== 用户信息反垃圾检测 ====================
     if await check_user_spam_info(bot, chat_id, user_id, username, mode="join"):

@@ -164,7 +164,12 @@ class SpamDetector:
         return result
 
     async def detect_with_ai(
-        self, text: str, user_id: int, chat_id: int, activity: int | None = None
+        self,
+        text: str,
+        user_id: int,
+        chat_id: int,
+        activity: int | None = None,
+        skip_auto_train: bool = False,
     ) -> DetectionResult:
         """并行检测入口 - 同时运行传统三阶段管道和 AI API 检测
 
@@ -173,12 +178,18 @@ class SpamDetector:
             user_id: 用户 ID
             chat_id: 群组 ID
             activity: 用户活跃度（可选）
+            skip_auto_train: 是否跳过 AI 自动入库（确认模式下使用）
 
         Returns:
             合并后的检测结果字典
         """
         # 如果 AI 检测未启用，直接使用传统三阶段
         if not self.ai_detector.enabled:
+            return await self.detect(text, user_id, chat_id, activity)
+
+        # 对短文本保持与传统预过滤一致，避免无谓 AI 调用
+        min_length = settings.spam_min_text_length
+        if min_length > 0 and len(text) < min_length:
             return await self.detect(text, user_id, chat_id, activity)
 
         # 并行执行传统检测和 AI 检测
@@ -203,7 +214,7 @@ class SpamDetector:
 
             # 合并结果
             return await self._merge_detection_results(
-                traditional_result, ai_result, text, user_id, activity
+                traditional_result, ai_result, text, user_id, activity, skip_auto_train
             )
 
         except Exception as e:
@@ -241,6 +252,16 @@ class SpamDetector:
         if not self.ai_detector.enabled:
             result = await self.detect(text, user_id, chat_id, activity)
             # 应用上下文调整（即使没有 AI 也可以用 Embedding）
+            if settings.context_consistency_enabled and context_messages:
+                result = await self._apply_context_adjustment(
+                    result, text, message, context_messages, user_id
+                )
+            return result
+
+        # 对短文本保持与传统预过滤一致，避免无谓 AI 调用
+        min_length = settings.spam_min_text_length
+        if min_length > 0 and len(text) < min_length:
+            result = await self.detect(text, user_id, chat_id, activity)
             if settings.context_consistency_enabled and context_messages:
                 result = await self._apply_context_adjustment(
                     result, text, message, context_messages, user_id

@@ -188,7 +188,7 @@ class ActivityService:
             return 0.01
 
         # log2(activity / 10)
-        reduction = 0.01 * math.log2(activity / 10)
+        reduction = 0.05 * math.log2(activity / 10.0)
 
         # 限制最大减少值
         max_reduction = settings.activity_max_confidence_reduction
