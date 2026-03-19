@@ -197,6 +197,7 @@ class Settings(BaseSettings):
         default=86400,
         description="检查结果缓存时间（秒），默认 24 小时",
     )
+    cas_max_retries: int = Field(default=2, description="API 请求最大重试次数")
 
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
@@ -313,9 +314,7 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if (
-                self.db_password == "postgres"
-            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
+            if self.db_password == "postgres":  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"

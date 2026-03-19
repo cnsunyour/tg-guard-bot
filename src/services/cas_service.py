@@ -104,36 +104,61 @@ class CASService:
             logger.debug(f"CAS Redis 不可用，直连 API [用户:{user_id}]")
 
         try:
-            # 3) 调用 CAS API
-            response = await self.client.get(
-                f"{self._base_url}/check",
-                params={"user_id": user_id},
-            )
-            response.raise_for_status()
-            data = response.json()
+            # 指数退避重试策略（参考 AI 检测器）
+            max_retries = settings.cas_max_retries
+            last_error: Exception | None = None
 
-            result = self._parse_response(user_id, data)
+            for attempt in range(max_retries + 1):
+                try:
+                    # 3) 调用 CAS API
+                    response = await self.client.get(
+                        f"{self._base_url}/check",
+                        params={"user_id": user_id},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
 
-            # 4) 写缓存
-            try:
-                await redis.setex(cache_key, settings.cas_cache_ttl, json.dumps(data))
-            except Exception as e:
-                logger.debug(f"CAS 缓存写入失败 [用户:{user_id}]: {e}")
+                    result = self._parse_response(user_id, data)
 
-            return result
+                    # 4) 写缓存
+                    try:
+                        await redis.setex(cache_key, settings.cas_cache_ttl, json.dumps(data))
+                    except Exception as e:
+                        logger.debug(f"CAS 缓存写入失败 [用户:{user_id}]: {e}")
 
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"CAS API HTTP 错误 [用户:{user_id}] [状态:{e.response.status_code}]"
-            )
-            return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
-        except httpx.RequestError as e:
-            logger.error(f"CAS API 请求失败 [用户:{user_id}]: {e}")
-            return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
-        except Exception as e:
-            logger.exception(f"CAS 检查异常 [用户:{user_id}]: {e}")
-            return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
+                    return result
+
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        # 指数退避重试
+                        wait_time = 0.5 * (2**attempt)
+                        logger.warning(
+                            f"CAS API 请求失败 [用户:{user_id}] "
+                            f"[attempt={attempt + 1}/{max_retries + 1}] "
+                            f"[wait={wait_time}s] [error={e!s}]"
+                        )
+                        await asyncio.sleep(wait_time)
+                    else:
+                        # 最后一次重试也失败，降级放行
+                        logger.error(
+                            f"CAS API 请求失败，已达最大重试次数 [用户:{user_id}] "
+                            f"[error={e!s}]，降级放行"
+                        )
+                        return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
+
+                except Exception as e:
+                    # 其他异常不重试，直接降级放行
+                    logger.exception(f"CAS 检查异常 [用户:{user_id}]: {e}")
+                    return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
+
+            # 理论上不会到达这里（所有重试都失败）
+            if last_error:
+                return CASCheckResult(is_banned=False, user_id=user_id, error=str(last_error))
+            return CASCheckResult(is_banned=False, user_id=user_id, error="unknown")
+
         finally:
+            # 确保锁被释放
             if lock_acquired:
                 with contextlib.suppress(Exception):
                     await redis.delete(lock_key)
