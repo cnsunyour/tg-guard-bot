@@ -488,3 +488,39 @@ async def get_chat_administrators_mention(
     except Exception as e:
         logger.error(f"获取管理员列表失败 [群组:{chat_id}]: {e}")
         return ""
+
+
+def calculate_normalized_length(text: str | None) -> int:
+    """计算标准化文本长度（中英文公平对待）
+
+    计算规则：
+    - 1个汉字/全角字符 = 1标准长度
+    - 2个英文字符 = 1标准长度（半角字符0.5，2个半角=1标准长度）
+
+    示例：
+    - "你好世界" → 4标准长度
+    - "Hello World" → 5.5标准长度（11字符 × 0.5）
+    - "加微信xxx" → 5标准长度
+    - "Add me: xxx" → 5.5标准长度（11字符 × 0.5）
+
+    Args:
+        text: 待计算的文本
+
+    Returns:
+        标准化长度（整数）
+    """
+    if not text:
+        return 0
+
+    normalized_length = 0.0
+
+    for char in text:
+        # 判断是否为汉字或全角字符
+        # 汉字Unicode范围：\u4e00-\u9fff
+        # 全角字符：ord > 127
+        if ("\u4e00" <= char <= "\u9fff") or ord(char) > 127:
+            normalized_length += 1.0
+        else:
+            normalized_length += 0.5
+
+    return int(normalized_length)
