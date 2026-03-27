@@ -186,6 +186,37 @@ class AIServiceProvider(ABC):
         self.name = name
         self.config = config
         self.client: httpx.AsyncClient | None = None
+        self._client_rebuild_pending = False
+        self._client_rebuild_reason = ""
+
+    def _create_client(self) -> httpx.AsyncClient:
+        """创建新的 HTTP 客户端
+
+        Returns:
+            HTTP 客户端实例
+        """
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(self.config.timeout, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+        )
+
+    def request_client_rebuild(self, reason: str) -> None:
+        """标记需要重建 HTTP 客户端
+
+        Args:
+            reason: 重建原因
+        """
+        # 如果已经标记为熔断触发，不允许用其他原因覆盖（熔断优先级最高）
+        if self._client_rebuild_pending and self._client_rebuild_reason == "circuit_breaker_tripped":
+            return
+
+        # 如果已经有标记且新原因不是熔断，则不更新（保持第一个原因）
+        if self._client_rebuild_pending and reason != "circuit_breaker_tripped":
+            return
+
+        self._client_rebuild_pending = True
+        self._client_rebuild_reason = reason
+        logger.debug(f"{self.name} HTTP 客户端已标记重建 [reason={reason}]")
 
     @property
     @abstractmethod
@@ -213,17 +244,43 @@ class AIServiceProvider(ABC):
         """
         pass
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         """确保 HTTP 客户端已创建（延迟初始化）
+
+        这是唯一的重建消费点，负责：
+        1. 如果没有待重建标记且 client 已存在，直接复用
+        2. 如果存在待重建标记，关闭旧 client 并创建新的
 
         Returns:
             HTTP 客户端实例
         """
+        # 没有待重建标记且 client 已存在，直接复用
+        if self.client is not None and not self._client_rebuild_pending:
+            return self.client
+
+        # 需要重建或首次创建
+        old_client = None
+        rebuild_reason = self._client_rebuild_reason
+
+        if self._client_rebuild_pending:
+            old_client = self.client
+            self.client = None
+            self._client_rebuild_pending = False
+            self._client_rebuild_reason = ""
+
+        # 关闭旧 client
+        if old_client is not None:
+            try:
+                await old_client.aclose()
+            except Exception as e:
+                logger.debug(f"关闭 {self.name} 待重建 HTTP 客户端时出现错误（已忽略）: {e}")
+
+        # 创建新 client
         if self.client is None:
-            self.client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.config.timeout, connect=5.0),
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-            )
+            self.client = self._create_client()
+            if rebuild_reason:
+                logger.debug(f"{self.name} HTTP 客户端已重建 [reason={rebuild_reason}]")
+
         return self.client
 
     async def _call_api(self, text: str, use_context_prompt: bool = False) -> dict[str, Any]:
@@ -258,7 +315,7 @@ class AIServiceProvider(ABC):
         }
 
         # 发送请求
-        client = self._ensure_client()
+        client = await self._ensure_client()
         response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
 
@@ -348,14 +405,17 @@ class AIServiceProvider(ABC):
 
     async def close(self):
         """关闭 HTTP 客户端"""
-        if self.client is not None:
+        client = self.client
+        self.client = None
+        # 注意：不清除 _client_rebuild_pending，因为 close() 可能是切换/熔断流程的一部分
+        # 真正的清除会在 _ensure_client() 创建新 client 时进行
+
+        if client is not None:
             try:
-                await self.client.aclose()
+                await client.aclose()
                 logger.debug(f"{self.name} HTTP 客户端已关闭")
             except Exception as e:
                 logger.debug(f"关闭 {self.name} HTTP 客户端时出现错误（已忽略）: {e}")
-            finally:
-                self.client = None
 
 
 # ============================================================================
@@ -564,6 +624,7 @@ class HybridAIDetector:
                 else:
                     # 冷却时间已过，重置熔断器
                     logger.debug(f"🔄 {provider.name} 熔断器冷却完成，重置")
+                    provider.request_client_rebuild("cooldown_ended")
                     stats.reset_circuit()
 
         return False
@@ -587,8 +648,12 @@ class HybridAIDetector:
         stats = self._stats[provider.name]
         stats.record_failure(error)
 
+        # 标记 provider 需要重建 client
+        provider.request_client_rebuild("provider_failure")
+
         # 检查是否触发熔断
         if stats.consecutive_failures >= self.circuit_breaker_threshold:
+            provider.request_client_rebuild("circuit_breaker_tripped")
             logger.warning(
                 f"⚠️ {provider.name} 触发熔断器 " f"（连续失败 {stats.consecutive_failures} 次）"
             )
@@ -649,6 +714,9 @@ class HybridAIDetector:
 
         # 尝试备份服务商
         if self.backup.is_available and not self._is_circuit_open(self.backup):
+            if self.primary.is_available:
+                self.primary.request_client_rebuild("switching_to_backup")
+                await self.primary.close()
             logger.info(f"🔄 切换到 {self.backup.name} 服务商...")
             try:
                 logger.debug(f"🔍 尝试使用 {self.backup.name} 服务商检测...")
@@ -752,6 +820,9 @@ class HybridAIDetector:
 
         # 尝试备份服务商
         if self.backup.is_available and not self._is_circuit_open(self.backup):
+            if self.primary.is_available:
+                self.primary.request_client_rebuild("switching_to_backup")
+                await self.primary.close()
             logger.info(f"🔄 切换到 {self.backup.name} 服务商...")
             try:
                 logger.debug(f"🔍 尝试使用 {self.backup.name} 服务商检测（带上下文）...")
@@ -806,6 +877,7 @@ class HybridAIDetector:
         Returns:
             {provider_name: stats} 字典
         """
+        providers = {"primary": self.primary, "backup": self.backup}
         return {
             name: {
                 "success_count": stats.success_count,
@@ -816,6 +888,9 @@ class HybridAIDetector:
                 ),
                 "last_error": stats.last_error,
                 "success_rate": self._get_success_rate(name),
+                "client_initialized": providers[name].client is not None,
+                "client_rebuild_pending": providers[name]._client_rebuild_pending,
+                "client_rebuild_reason": providers[name]._client_rebuild_reason,
             }
             for name, stats in self._stats.items()
         }
