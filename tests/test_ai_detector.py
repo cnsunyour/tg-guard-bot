@@ -3,7 +3,7 @@
 测试主备引擎的 client 重建、熔断、切换逻辑
 """
 
-import asyncio
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,9 +11,9 @@ import pytest
 from src.ml.ai_detector import (
     AIServiceConfig,
     AIServiceError,
+    BackupAIServiceProvider,
     HybridAIDetector,
     PrimaryAIServiceProvider,
-    BackupAIServiceProvider,
 )
 
 
@@ -164,11 +164,8 @@ class TestHybridAIDetector:
         # Mock primary 失败
         with patch.object(
             detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ):
-            try:
-                await detector.detect("test text")
-            except RuntimeError:
-                pass
+        ), suppress(RuntimeError):
+            await detector.detect("test text")
 
         assert detector.primary._client_rebuild_pending is True
         assert detector.primary._client_rebuild_reason == "provider_failure"
@@ -182,11 +179,8 @@ class TestHybridAIDetector:
                 detector.primary,
                 "detect",
                 side_effect=AIServiceError("primary", "test error"),
-            ):
-                try:
-                    await detector.detect("test text")
-                except RuntimeError:
-                    pass
+            ), suppress(RuntimeError):
+                await detector.detect("test text")
 
         # 最后一次会触发熔断
         assert detector.primary._client_rebuild_reason == "circuit_breaker_tripped"
@@ -357,20 +351,14 @@ class TestBackupProvider:
         # Mock primary 失败
         with patch.object(
             detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ):
-            try:
-                await detector.detect("test text")
-            except RuntimeError:
-                pass
+        ), suppress(RuntimeError):
+            await detector.detect("test text")
 
         # Mock backup 失败
         with patch.object(
             detector.backup, "detect", side_effect=AIServiceError("backup", "test error")
-        ):
-            try:
-                await detector.detect("test text")
-            except RuntimeError:
-                pass
+        ), suppress(RuntimeError):
+            await detector.detect("test text")
 
         # 验证 backup 也被标记重建
         assert detector.backup._client_rebuild_pending is True
