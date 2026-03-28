@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     ai_spam_threshold: float = Field(default=0.8, description="置信度阈值")
     ai_spam_timeout: int = Field(default=10, description="超时时间（秒）")
     ai_spam_max_retries: int = Field(default=2, description="最大重试次数")
+    ai_spam_client_idle_rebuild_minutes: int = Field(
+        default=60, ge=1, description="AI HTTP 客户端空闲重建阈值（分钟）"
+    )
+    ai_spam_client_max_lifetime_hours: int = Field(
+        default=24, ge=1, description="AI HTTP 客户端最大存活时间（小时）"
+    )
     ai_spam_auto_train: bool = Field(default=True, description="是否自动入库训练")
     ai_spam_auto_train_negatives: bool = Field(
         default=False, description="是否自动入库高置信度负样本（正常消息）"

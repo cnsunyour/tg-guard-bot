@@ -42,6 +42,8 @@ class AIServiceConfig:
     timeout: int = 10
     max_retries: int = 2
     max_length: int = 500
+    client_idle_rebuild_minutes: int = 60
+    client_max_lifetime_hours: int = 24
 
 
 @dataclass
@@ -188,6 +190,11 @@ class AIServiceProvider(ABC):
         self.client: httpx.AsyncClient | None = None
         self._client_rebuild_pending = False
         self._client_rebuild_reason = ""
+        self._client_created_at: datetime | None = None
+        self._client_last_used_at: datetime | None = None
+        self._client_rebuild_count = 0
+        self._last_client_rebuild_at: datetime | None = None
+        self._last_client_rebuild_reason = ""
 
     def _create_client(self) -> httpx.AsyncClient:
         """创建新的 HTTP 客户端
@@ -248,15 +255,34 @@ class AIServiceProvider(ABC):
         """确保 HTTP 客户端已创建（延迟初始化）
 
         这是唯一的重建消费点，负责：
-        1. 如果没有待重建标记且 client 已存在，直接复用
-        2. 如果存在待重建标记，关闭旧 client 并创建新的
+        1. 如果没有待重建标记且 client 已存在，检查是否需要因生命周期超时而重建
+        2. 如果没有待重建标记且无需重建，直接复用
+        3. 如果存在待重建标记，关闭旧 client 并创建新的
 
         Returns:
             HTTP 客户端实例
         """
-        # 没有待重建标记且 client 已存在，直接复用
+        now = datetime.now()
+
+        # 没有待重建标记且 client 已存在，先检查生命周期是否超时
         if self.client is not None and not self._client_rebuild_pending:
-            return self.client
+            client_age = (
+                now - self._client_created_at if self._client_created_at is not None else None
+            )
+            client_idle = (
+                now - self._client_last_used_at if self._client_last_used_at is not None else None
+            )
+
+            if client_age is not None and client_age >= timedelta(
+                hours=self.config.client_max_lifetime_hours
+            ):
+                self.request_client_rebuild("max_lifetime_exceeded")
+            elif client_idle is not None and client_idle >= timedelta(
+                minutes=self.config.client_idle_rebuild_minutes
+            ):
+                self.request_client_rebuild("idle_timeout")
+            else:
+                return self.client
 
         # 需要重建或首次创建
         old_client = None
@@ -267,6 +293,8 @@ class AIServiceProvider(ABC):
             self.client = None
             self._client_rebuild_pending = False
             self._client_rebuild_reason = ""
+            self._client_created_at = None
+            self._client_last_used_at = None
 
         # 关闭旧 client
         if old_client is not None:
@@ -278,7 +306,12 @@ class AIServiceProvider(ABC):
         # 创建新 client
         if self.client is None:
             self.client = self._create_client()
+            self._client_created_at = now
+            self._client_last_used_at = now
             if rebuild_reason:
+                self._client_rebuild_count += 1
+                self._last_client_rebuild_at = now
+                self._last_client_rebuild_reason = rebuild_reason
                 logger.debug(f"{self.name} HTTP 客户端已重建 [reason={rebuild_reason}]")
 
         return self.client
@@ -316,8 +349,11 @@ class AIServiceProvider(ABC):
 
         # 发送请求
         client = await self._ensure_client()
-        response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+        finally:
+            self._client_last_used_at = datetime.now()
 
         # 解析响应
         data = response.json()
@@ -407,6 +443,8 @@ class AIServiceProvider(ABC):
         """关闭 HTTP 客户端"""
         client = self.client
         self.client = None
+        self._client_created_at = None
+        self._client_last_used_at = None
         # 注意：不清除 _client_rebuild_pending，因为 close() 可能是切换/熔断流程的一部分
         # 真正的清除会在 _ensure_client() 创建新 client 时进行
 
@@ -437,6 +475,8 @@ class PrimaryAIServiceProvider(AIServiceProvider):
             timeout=settings.ai_spam_timeout,
             max_retries=settings.ai_spam_max_retries,
             max_length=settings.ai_spam_max_length,
+            client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
+            client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
         )
         super().__init__("primary", config)
 
@@ -499,6 +539,8 @@ class BackupAIServiceProvider(AIServiceProvider):
             timeout=settings.ai_spam_backup_timeout,
             max_retries=settings.ai_spam_backup_max_retries,
             max_length=settings.ai_spam_max_length,  # 共享最大长度配置
+            client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
+            client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
         )
         super().__init__("backup", config)
 
@@ -878,8 +920,25 @@ class HybridAIDetector:
             {provider_name: stats} 字典
         """
         providers = {"primary": self.primary, "backup": self.backup}
-        return {
-            name: {
+        result: dict[str, dict] = {}
+
+        for name, provider in providers.items():
+            if name not in self._stats:
+                if provider.client is None and not provider._client_rebuild_pending:
+                    continue
+                stats = AIServiceStats()
+            else:
+                stats = self._stats[name]
+
+            now = datetime.now()
+            client_age_seconds = None
+            client_idle_seconds = None
+            if provider._client_created_at is not None:
+                client_age_seconds = (now - provider._client_created_at).total_seconds()
+            if provider._client_last_used_at is not None:
+                client_idle_seconds = (now - provider._client_last_used_at).total_seconds()
+
+            result[name] = {
                 "success_count": stats.success_count,
                 "failure_count": stats.failure_count,
                 "consecutive_failures": stats.consecutive_failures,
@@ -888,12 +947,31 @@ class HybridAIDetector:
                 ),
                 "last_error": stats.last_error,
                 "success_rate": self._get_success_rate(name),
-                "client_initialized": providers[name].client is not None,
-                "client_rebuild_pending": providers[name]._client_rebuild_pending,
-                "client_rebuild_reason": providers[name]._client_rebuild_reason,
+                "client_initialized": provider.client is not None,
+                "client_rebuild_pending": provider._client_rebuild_pending,
+                "client_rebuild_reason": provider._client_rebuild_reason,
+                "client_created_at": (
+                    provider._client_created_at.isoformat()
+                    if provider._client_created_at is not None
+                    else None
+                ),
+                "client_last_used_at": (
+                    provider._client_last_used_at.isoformat()
+                    if provider._client_last_used_at is not None
+                    else None
+                ),
+                "client_age_seconds": client_age_seconds,
+                "client_idle_seconds": client_idle_seconds,
+                "client_rebuild_count": provider._client_rebuild_count,
+                "last_client_rebuild_at": (
+                    provider._last_client_rebuild_at.isoformat()
+                    if provider._last_client_rebuild_at is not None
+                    else None
+                ),
+                "last_client_rebuild_reason": provider._last_client_rebuild_reason,
             }
-            for name, stats in self._stats.items()
-        }
+
+        return result
 
     def reset_stats(self, provider_name: str | None = None) -> None:
         """重置统计信息

@@ -4,6 +4,7 @@
 """
 
 from contextlib import suppress
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,7 +41,7 @@ def mock_config():
 
 
 @pytest.fixture
-def primary_provider(mock_config):
+def primary_provider():
     """主服务商 fixture"""
     provider = PrimaryAIServiceProvider()
     # Mock _create_client 避免实际创建 httpx client
@@ -49,7 +50,7 @@ def primary_provider(mock_config):
 
 
 @pytest.fixture
-def backup_provider(mock_config):
+def backup_provider():
     """备份服务商 fixture"""
     provider = BackupAIServiceProvider()
     with patch.object(provider, "_create_client", return_value=MagicMock()):
@@ -113,6 +114,93 @@ class TestAIServiceProvider:
         mock_client1.aclose.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_ensure_client_rebuilds_after_idle_timeout(self, primary_provider):
+        """测试 client 空闲超时后会重建"""
+        old_client = MagicMock()
+        old_client.aclose = AsyncMock()
+        new_client = MagicMock()
+
+        with patch.object(primary_provider, "_create_client", return_value=old_client):
+            await primary_provider._ensure_client()
+
+        primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
+
+        with patch.object(primary_provider, "_create_client", return_value=new_client):
+            rebuilt = await primary_provider._ensure_client()
+
+        assert rebuilt is new_client
+        assert primary_provider.client is new_client
+        assert primary_provider._last_client_rebuild_reason == "idle_timeout"
+        old_client.aclose.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_client_rebuilds_after_max_lifetime(self, primary_provider):
+        """测试 client 超过最大存活时间后会重建"""
+        old_client = MagicMock()
+        old_client.aclose = AsyncMock()
+        new_client = MagicMock()
+
+        with patch.object(primary_provider, "_create_client", return_value=old_client):
+            await primary_provider._ensure_client()
+
+        primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
+        primary_provider._client_last_used_at = datetime.now() - timedelta(minutes=5)
+
+        with patch.object(primary_provider, "_create_client", return_value=new_client):
+            rebuilt = await primary_provider._ensure_client()
+
+        assert rebuilt is new_client
+        assert primary_provider.client is new_client
+        assert primary_provider._last_client_rebuild_reason == "max_lifetime_exceeded"
+        old_client.aclose.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_max_lifetime_exceeded_wins_over_idle_timeout(self, primary_provider):
+        """测试最大存活时间重建优先于空闲超时"""
+        old_client = MagicMock()
+        old_client.aclose = AsyncMock()
+
+        with patch.object(primary_provider, "_create_client", return_value=old_client):
+            await primary_provider._ensure_client()
+
+        primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
+        primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
+
+        with patch.object(
+            primary_provider,
+            "request_client_rebuild",
+            wraps=primary_provider.request_client_rebuild,
+        ) as request_rebuild, patch.object(primary_provider, "_create_client", return_value=MagicMock()):
+            await primary_provider._ensure_client()
+
+        request_rebuild.assert_called_once_with("max_lifetime_exceeded")
+
+    @pytest.mark.asyncio
+    async def test_auto_rebuild_does_not_override_existing_pending_reason(
+        self, primary_provider
+    ):
+        """测试自动重建不会覆盖已有待消费重建原因"""
+        old_client = MagicMock()
+        old_client.aclose = AsyncMock()
+
+        with patch.object(primary_provider, "_create_client", return_value=old_client):
+            await primary_provider._ensure_client()
+
+        primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
+        primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
+        primary_provider.request_client_rebuild("provider_failure")
+
+        with patch.object(
+            primary_provider,
+            "request_client_rebuild",
+            wraps=primary_provider.request_client_rebuild,
+        ) as request_rebuild, patch.object(primary_provider, "_create_client", return_value=MagicMock()):
+            await primary_provider._ensure_client()
+
+        request_rebuild.assert_not_called()
+        assert primary_provider._last_client_rebuild_reason == "provider_failure"
+
+    @pytest.mark.asyncio
     async def test_close_is_idempotent(self, primary_provider):
         """测试 close() 幂等"""
         mock_client = MagicMock()
@@ -125,14 +213,18 @@ class TestAIServiceProvider:
         await primary_provider.close()
         assert primary_provider.client is None
         assert primary_provider._client_rebuild_pending is False
+        assert primary_provider._client_created_at is None
+        assert primary_provider._client_last_used_at is None
 
         # 第二次关闭不应该报错
         await primary_provider.close()
         assert primary_provider.client is None
 
     @pytest.mark.asyncio
-    async def test_close_clears_rebuild_flags(self, primary_provider):
-        """测试 close() 不会清理重建标记（标记会在重建时清除）"""
+    async def test_close_clears_client_lifecycle_timestamps_but_keeps_rebuild_flags(
+        self, primary_provider
+    ):
+        """测试 close() 会清理生命周期时间戳但保留重建标记"""
         mock_client = MagicMock()
         mock_client.aclose = AsyncMock()
 
@@ -146,6 +238,8 @@ class TestAIServiceProvider:
         # close() 不再清除重建标记，保留给下次 _ensure_client() 使用
         assert primary_provider._client_rebuild_pending is True
         assert primary_provider._client_rebuild_reason == "test_reason"
+        assert primary_provider._client_created_at is None
+        assert primary_provider._client_last_used_at is None
 
 
 class TestHybridAIDetector:
@@ -189,8 +283,6 @@ class TestHybridAIDetector:
     async def test_cooldown_end_marks_for_rebuild(self, detector):
         """测试冷却结束后会标记待重建"""
         # 手工设置已过 cooldown 的状态
-        from datetime import datetime, timedelta
-
         stats = detector._stats[detector.primary.name]
         stats.consecutive_failures = detector.circuit_breaker_threshold
         stats.last_failure_time = datetime.now() - timedelta(minutes=10)
@@ -307,7 +399,7 @@ class TestHybridAIDetector:
         new_client = MagicMock()
 
         # 现在 mock _call_api 让 primary 成功（会触发 _ensure_client 重建）
-        async def mock_call_api(*args, **kwargs):
+        async def mock_call_api(_text, _use_context_prompt=False):
             # 这个函数会在 detect() 内部被调用
             return {"is_spam": False, "confidence": 0.1, "reason": "测试"}
 
@@ -323,19 +415,26 @@ class TestHybridAIDetector:
         assert detector.primary._client_rebuild_pending is False
 
     @pytest.mark.asyncio
-    async def test_get_stats_includes_client_info(self, detector):
-        """测试 get_stats() 包含 client 信息"""
-        # 确保 primary 有 client
+    async def test_get_stats_includes_client_lifecycle_fields(self, detector):
+        """测试 get_stats() 包含 client 生命周期信息"""
         detector.primary.client = MagicMock()
+        detector.primary._client_created_at = datetime(2026, 1, 1, 12, 0, 0)
+        detector.primary._client_last_used_at = datetime(2026, 1, 1, 12, 5, 0)
+        detector.primary._client_rebuild_count = 2
+        detector.primary._last_client_rebuild_at = datetime(2026, 1, 2, 12, 0, 0)
+        detector.primary._last_client_rebuild_reason = "idle_timeout"
 
         stats = detector.get_stats()
 
-        # 统计信息应该至少包含 primary（如果可用）
-        if detector.primary.is_available and "primary" in detector._stats:
-            assert "primary" in stats
-            assert stats["primary"]["client_initialized"] is True
-            assert "client_rebuild_pending" in stats["primary"]
-            assert "client_rebuild_reason" in stats["primary"]
+        assert "primary" in stats
+        assert stats["primary"]["client_initialized"] is True
+        assert stats["primary"]["client_created_at"] == "2026-01-01T12:00:00"
+        assert stats["primary"]["client_last_used_at"] == "2026-01-01T12:05:00"
+        assert stats["primary"]["client_rebuild_count"] == 2
+        assert stats["primary"]["last_client_rebuild_at"] == "2026-01-02T12:00:00"
+        assert stats["primary"]["last_client_rebuild_reason"] == "idle_timeout"
+        assert stats["primary"]["client_age_seconds"] is not None
+        assert stats["primary"]["client_idle_seconds"] is not None
 
 
 class TestBackupProvider:
