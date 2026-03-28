@@ -195,6 +195,7 @@ class AIServiceProvider(ABC):
         self._client_rebuild_count = 0
         self._last_client_rebuild_at: datetime | None = None
         self._last_client_rebuild_reason = ""
+        self._client_lock = asyncio.Lock()
 
     def _create_client(self) -> httpx.AsyncClient:
         """创建新的 HTTP 客户端
@@ -262,59 +263,60 @@ class AIServiceProvider(ABC):
         Returns:
             HTTP 客户端实例
         """
-        now = datetime.now()
+        async with self._client_lock:
+            now = datetime.now()
 
-        # 没有待重建标记且 client 已存在，先检查生命周期是否超时
-        if self.client is not None and not self._client_rebuild_pending:
-            client_age = (
-                now - self._client_created_at if self._client_created_at is not None else None
-            )
-            client_idle = (
-                now - self._client_last_used_at if self._client_last_used_at is not None else None
-            )
+            # 没有待重建标记且 client 已存在，先检查生命周期是否超时
+            if self.client is not None and not self._client_rebuild_pending:
+                client_age = (
+                    now - self._client_created_at if self._client_created_at is not None else None
+                )
+                client_idle = (
+                    now - self._client_last_used_at if self._client_last_used_at is not None else None
+                )
 
-            if client_age is not None and client_age >= timedelta(
-                hours=self.config.client_max_lifetime_hours
-            ):
-                self.request_client_rebuild("max_lifetime_exceeded")
-            elif client_idle is not None and client_idle >= timedelta(
-                minutes=self.config.client_idle_rebuild_minutes
-            ):
-                self.request_client_rebuild("idle_timeout")
-            else:
-                return self.client
+                if client_age is not None and client_age >= timedelta(
+                    hours=self.config.client_max_lifetime_hours
+                ):
+                    self.request_client_rebuild("max_lifetime_exceeded")
+                elif client_idle is not None and client_idle >= timedelta(
+                    minutes=self.config.client_idle_rebuild_minutes
+                ):
+                    self.request_client_rebuild("idle_timeout")
+                else:
+                    return self.client
 
-        # 需要重建或首次创建
-        old_client = None
-        rebuild_reason = self._client_rebuild_reason
+            # 需要重建或首次创建
+            old_client = None
+            rebuild_reason = self._client_rebuild_reason
 
-        if self._client_rebuild_pending:
-            old_client = self.client
-            self.client = None
-            self._client_rebuild_pending = False
-            self._client_rebuild_reason = ""
-            self._client_created_at = None
-            self._client_last_used_at = None
+            if self._client_rebuild_pending:
+                old_client = self.client
+                self.client = None
+                self._client_rebuild_pending = False
+                self._client_rebuild_reason = ""
+                self._client_created_at = None
+                self._client_last_used_at = None
 
-        # 关闭旧 client
-        if old_client is not None:
-            try:
-                await old_client.aclose()
-            except Exception as e:
-                logger.debug(f"关闭 {self.name} 待重建 HTTP 客户端时出现错误（已忽略）: {e}")
+            # 关闭旧 client
+            if old_client is not None:
+                try:
+                    await old_client.aclose()
+                except Exception as e:
+                    logger.debug(f"关闭 {self.name} 待重建 HTTP 客户端时出现错误（已忽略）: {e}")
 
-        # 创建新 client
-        if self.client is None:
-            self.client = self._create_client()
-            self._client_created_at = now
-            self._client_last_used_at = now
-            if rebuild_reason:
-                self._client_rebuild_count += 1
-                self._last_client_rebuild_at = now
-                self._last_client_rebuild_reason = rebuild_reason
-                logger.debug(f"{self.name} HTTP 客户端已重建 [reason={rebuild_reason}]")
+            # 创建新 client
+            if self.client is None:
+                self.client = self._create_client()
+                self._client_created_at = now
+                self._client_last_used_at = now
+                if rebuild_reason:
+                    self._client_rebuild_count += 1
+                    self._last_client_rebuild_at = now
+                    self._last_client_rebuild_reason = rebuild_reason
+                    logger.debug(f"{self.name} HTTP 客户端已重建 [reason={rebuild_reason}]")
 
-        return self.client
+            return self.client
 
     async def _call_api(self, text: str, use_context_prompt: bool = False) -> dict[str, Any]:
         """调用 OpenAI 兼容 API
@@ -441,19 +443,20 @@ class AIServiceProvider(ABC):
 
     async def close(self):
         """关闭 HTTP 客户端"""
-        client = self.client
-        self.client = None
-        self._client_created_at = None
-        self._client_last_used_at = None
-        # 注意：不清除 _client_rebuild_pending，因为 close() 可能是切换/熔断流程的一部分
-        # 真正的清除会在 _ensure_client() 创建新 client 时进行
+        async with self._client_lock:
+            client = self.client
+            self.client = None
+            self._client_created_at = None
+            self._client_last_used_at = None
+            # 注意：不清除 _client_rebuild_pending，因为 close() 可能是切换/熔断流程的一部分
+            # 真正的清除会在 _ensure_client() 创建新 client 时进行
 
-        if client is not None:
-            try:
-                await client.aclose()
-                logger.debug(f"{self.name} HTTP 客户端已关闭")
-            except Exception as e:
-                logger.debug(f"关闭 {self.name} HTTP 客户端时出现错误（已忽略）: {e}")
+            if client is not None:
+                try:
+                    await client.aclose()
+                    logger.debug(f"{self.name} HTTP 客户端已关闭")
+                except Exception as e:
+                    logger.debug(f"关闭 {self.name} HTTP 客户端时出现错误（已忽略）: {e}")
 
 
 # ============================================================================

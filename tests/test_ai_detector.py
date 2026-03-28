@@ -3,6 +3,7 @@
 测试主备引擎的 client 重建、熔断、切换逻辑
 """
 
+import asyncio
 from contextlib import suppress
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -112,6 +113,44 @@ class TestAIServiceProvider:
         assert client1 is not client2
         assert primary_provider._client_rebuild_pending is False
         mock_client1.aclose.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_client_waits_for_in_progress_rebuild_close(self, primary_provider):
+        """测试并发调用不会在旧 client 关闭期间绕过待重建状态"""
+        old_client = MagicMock()
+        close_started = asyncio.Event()
+        allow_close = asyncio.Event()
+
+        async def slow_close():
+            close_started.set()
+            await allow_close.wait()
+
+        old_client.aclose = AsyncMock(side_effect=slow_close)
+        new_client = MagicMock()
+
+        primary_provider.client = old_client
+        primary_provider._client_created_at = datetime.now()
+        primary_provider._client_last_used_at = datetime.now()
+        primary_provider.request_client_rebuild("test_rebuild")
+
+        with patch.object(primary_provider, "_create_client", return_value=new_client) as create_client:
+            task1 = asyncio.create_task(primary_provider._ensure_client())
+            await close_started.wait()
+
+            task2 = asyncio.create_task(primary_provider._ensure_client())
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task2), timeout=0.05)
+            assert create_client.call_count == 0
+
+            allow_close.set()
+            client1, client2 = await asyncio.gather(task1, task2)
+
+        assert client1 is new_client
+        assert client2 is new_client
+        assert primary_provider.client is new_client
+        assert create_client.call_count == 1
+        assert primary_provider._client_rebuild_pending is False
+        old_client.aclose.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ensure_client_rebuilds_after_idle_timeout(self, primary_provider):
