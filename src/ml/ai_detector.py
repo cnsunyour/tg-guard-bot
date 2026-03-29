@@ -318,6 +318,66 @@ class AIServiceProvider(ABC):
 
             return self.client
 
+    @staticmethod
+    def _format_error(e: Exception) -> str:
+        """格式化异常信息，避免日志只出现空错误。"""
+
+        def _truncate(message: str, limit: int = 200) -> str:
+            normalized = re.sub(r"\s+", " ", message).strip()
+            if len(normalized) > limit:
+                return normalized[: limit - 3] + "..."
+            return normalized
+
+        if isinstance(e, AIServiceError):
+            message = _truncate(e.message)
+            if message:
+                return (
+                    f"{e.__class__.__name__} [provider={e.provider}] "
+                    f"[message={message}]"
+                )
+            return f"{e.__class__.__name__} [provider={e.provider}]"
+
+        error_type = e.__class__.__name__
+
+        if isinstance(e, httpx.TimeoutException):
+            timeout_phase = None
+            if isinstance(e, httpx.ConnectTimeout):
+                timeout_phase = "connect"
+            elif isinstance(e, httpx.ReadTimeout):
+                timeout_phase = "read"
+            elif isinstance(e, httpx.WriteTimeout):
+                timeout_phase = "write"
+            elif isinstance(e, httpx.PoolTimeout):
+                timeout_phase = "pool"
+
+            parts = [error_type]
+            if timeout_phase:
+                parts.append(f"[phase={timeout_phase}]")
+
+            message = _truncate(str(e))
+            if message:
+                parts.append(f"[message={message}]")
+            return " ".join(parts)
+
+        if isinstance(e, httpx.HTTPStatusError):
+            parts = [error_type, f"[status_code={e.response.status_code}]"]
+            try:
+                response_text = _truncate(e.response.text)
+            except Exception:
+                response_text = ""
+            if response_text:
+                parts.append(f"[response={response_text}]")
+
+            message = _truncate(str(e))
+            if message:
+                parts.append(f"[message={message}]")
+            return " ".join(parts)
+
+        message = _truncate(str(e))
+        if message:
+            return f"{error_type} [message={message}]"
+        return error_type
+
     async def _call_api(self, text: str, use_context_prompt: bool = False) -> dict[str, Any]:
         """调用 OpenAI 兼容 API
 
@@ -354,6 +414,13 @@ class AIServiceProvider(ABC):
         try:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
+        except httpx.TimeoutException as e:
+            logger.warning(
+                f"⏱️ {self.name} API 请求超时 "
+                f"[timeout_seconds={self.config.timeout}] "
+                f"[error={self._format_error(e)}]"
+            )
+            raise
         finally:
             self._client_last_used_at = datetime.now()
 
@@ -505,19 +572,24 @@ class PrimaryAIServiceProvider(AIServiceProvider):
                 detection_result.attempt_count = attempt + 1
                 return detection_result
             except Exception as e:
+                formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
                     # 指数退避重试
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🔍 {self.name} 检测失败，重试中... "
                         f"[attempt={attempt+1}/{self.config.max_retries+1}] "
-                        f"[wait={wait_time}s] [error={e!s}]"
+                        f"[wait={wait_time}s] [timeout_seconds={self.config.timeout}] "
+                        f"[error={formatted_error}]"
                     )
                     await asyncio.sleep(wait_time)
                 else:
                     # 最后一次重试也失败
-                    logger.error(f"❌ {self.name} 检测失败，已达最大重试次数 [error={e!s}]")
-                    raise AIServiceError(self.name, f"所有重试失败: {e!s}") from e
+                    logger.error(
+                        f"❌ {self.name} 检测失败，已达最大重试次数 "
+                        f"[timeout_seconds={self.config.timeout}] [error={formatted_error}]"
+                    )
+                    raise AIServiceError(self.name, f"所有重试失败: {formatted_error}") from e
 
         # 不应该到这里（所有重试都失败）
         raise AIServiceError(self.name, "所有重试已耗尽")
@@ -573,19 +645,24 @@ class BackupAIServiceProvider(AIServiceProvider):
                 detection_result.attempt_count = attempt + 1
                 return detection_result
             except Exception as e:
+                formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
                     # 指数退避重试
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🔍 {self.name} 检测失败，重试中... "
                         f"[attempt={attempt+1}/{self.config.max_retries+1}] "
-                        f"[wait={wait_time}s] [error={e!s}]"
+                        f"[wait={wait_time}s] [timeout_seconds={self.config.timeout}] "
+                        f"[error={formatted_error}]"
                     )
                     await asyncio.sleep(wait_time)
                 else:
                     # 最后一次重试也失败
-                    logger.error(f"❌ {self.name} 检测失败，已达最大重试次数 [error={e!s}]")
-                    raise AIServiceError(self.name, f"所有重试失败: {e!s}") from e
+                    logger.error(
+                        f"❌ {self.name} 检测失败，已达最大重试次数 "
+                        f"[timeout_seconds={self.config.timeout}] [error={formatted_error}]"
+                    )
+                    raise AIServiceError(self.name, f"所有重试失败: {formatted_error}") from e
 
         # 不应该到这里（所有重试都失败）
         raise AIServiceError(self.name, "所有重试已耗尽")
@@ -751,11 +828,13 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.primary, str(e))
-                logger.warning(f"❌ {self.primary.name} 检测失败: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.warning(f"❌ {self.primary.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.primary, str(e))
-                logger.error(f"💥 {self.primary.name} 发生意外错误: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.error(f"💥 {self.primary.name} 发生意外错误: {formatted_error}")
 
         # 尝试备份服务商
         if self.backup.is_available and not self._is_circuit_open(self.backup):
@@ -785,11 +864,13 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.backup, str(e))
-                logger.warning(f"❌ {self.backup.name} 检测失败: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.warning(f"❌ {self.backup.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.backup, str(e))
-                logger.error(f"💥 {self.backup.name} 发生意外错误: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.error(f"💥 {self.backup.name} 发生意外错误: {formatted_error}")
 
         # 所有服务商都失败
         primary_error = (
@@ -799,9 +880,12 @@ class HybridAIDetector:
             self._stats[self.backup.name].last_error if self.backup.is_available else "未配置"
         )
         logger.error(
-            f"🚨 所有 AI 服务商都失败 " f"[primary: {primary_error}] [backup: {backup_error}]"
+            f"🚨 所有 AI 服务商都失败 "
+            f"[primary: {primary_error}] [backup: {backup_error}]"
         )
-        raise RuntimeError(f"AI 检测失败: primary={primary_error}, backup={backup_error}")
+        raise RuntimeError(
+            f"AI 检测失败: primary={primary_error}, backup={backup_error}"
+        )
 
     async def detect_with_context(
         self, text: str, context_text: str | None = None
@@ -857,11 +941,13 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.primary, str(e))
-                logger.warning(f"❌ {self.primary.name} 检测失败: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.warning(f"❌ {self.primary.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.primary, str(e))
-                logger.error(f"💥 {self.primary.name} 发生意外错误: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.error(f"💥 {self.primary.name} 发生意外错误: {formatted_error}")
 
         # 尝试备份服务商
         if self.backup.is_available and not self._is_circuit_open(self.backup):
@@ -891,11 +977,13 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.backup, str(e))
-                logger.warning(f"❌ {self.backup.name} 检测失败: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.warning(f"❌ {self.backup.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.backup, str(e))
-                logger.error(f"💥 {self.backup.name} 发生意外错误: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.error(f"💥 {self.backup.name} 发生意外错误: {formatted_error}")
 
         # 所有服务商都失败
         primary_error = (
@@ -907,7 +995,9 @@ class HybridAIDetector:
         logger.error(
             f"🚨 所有 AI 服务商都失败 " f"[primary: {primary_error}] [backup: {backup_error}]"
         )
-        raise RuntimeError(f"AI 上下文检测失败: primary={primary_error}, backup={backup_error}")
+        raise RuntimeError(
+            f"AI 上下文检测失败: primary={primary_error}, backup={backup_error}"
+        )
 
     async def close(self):
         """关闭所有服务商的 HTTP 客户端"""
