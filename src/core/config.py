@@ -322,7 +322,9 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if self.db_password == "postgres":  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
+            if (
+                self.db_password == "postgres"
+            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"

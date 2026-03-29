@@ -133,7 +133,9 @@ class TestAIServiceProvider:
         primary_provider._client_last_used_at = datetime.now()
         primary_provider.request_client_rebuild("test_rebuild")
 
-        with patch.object(primary_provider, "_create_client", return_value=new_client) as create_client:
+        with patch.object(
+            primary_provider, "_create_client", return_value=new_client
+        ) as create_client:
             task1 = asyncio.create_task(primary_provider._ensure_client())
             await close_started.wait()
 
@@ -205,19 +207,20 @@ class TestAIServiceProvider:
         primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
         primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
 
-        with patch.object(
-            primary_provider,
-            "request_client_rebuild",
-            wraps=primary_provider.request_client_rebuild,
-        ) as request_rebuild, patch.object(primary_provider, "_create_client", return_value=MagicMock()):
+        with (
+            patch.object(
+                primary_provider,
+                "request_client_rebuild",
+                wraps=primary_provider.request_client_rebuild,
+            ) as request_rebuild,
+            patch.object(primary_provider, "_create_client", return_value=MagicMock()),
+        ):
             await primary_provider._ensure_client()
 
         request_rebuild.assert_called_once_with("max_lifetime_exceeded")
 
     @pytest.mark.asyncio
-    async def test_auto_rebuild_does_not_override_existing_pending_reason(
-        self, primary_provider
-    ):
+    async def test_auto_rebuild_does_not_override_existing_pending_reason(self, primary_provider):
         """测试自动重建不会覆盖已有待消费重建原因"""
         old_client = MagicMock()
         old_client.aclose = AsyncMock()
@@ -229,11 +232,14 @@ class TestAIServiceProvider:
         primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
         primary_provider.request_client_rebuild("provider_failure")
 
-        with patch.object(
-            primary_provider,
-            "request_client_rebuild",
-            wraps=primary_provider.request_client_rebuild,
-        ) as request_rebuild, patch.object(primary_provider, "_create_client", return_value=MagicMock()):
+        with (
+            patch.object(
+                primary_provider,
+                "request_client_rebuild",
+                wraps=primary_provider.request_client_rebuild,
+            ) as request_rebuild,
+            patch.object(primary_provider, "_create_client", return_value=MagicMock()),
+        ):
             await primary_provider._ensure_client()
 
         request_rebuild.assert_not_called()
@@ -287,17 +293,18 @@ class TestHybridAIDetector:
     @pytest.fixture
     def detector(self):
         """创建 HybridAIDetector 实例"""
-        return HybridAIDetector(
-            circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5
-        )
+        return HybridAIDetector(circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5)
 
     @pytest.mark.asyncio
     async def test_primary_failure_marks_for_rebuild(self, detector):
         """测试 primary 失败后会标记待重建"""
         # Mock primary 失败
-        with patch.object(
-            detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ), suppress(RuntimeError):
+        with (
+            patch.object(
+                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+            ),
+            suppress(RuntimeError),
+        ):
             await detector.detect("test text")
 
         assert detector.primary._client_rebuild_pending is True
@@ -308,11 +315,14 @@ class TestHybridAIDetector:
         """测试达到熔断阈值时会标记重建"""
         # 连续失败直到触发熔断
         for _ in range(detector.circuit_breaker_threshold):
-            with patch.object(
-                detector.primary,
-                "detect",
-                side_effect=AIServiceError("primary", "test error"),
-            ), suppress(RuntimeError):
+            with (
+                patch.object(
+                    detector.primary,
+                    "detect",
+                    side_effect=AIServiceError("primary", "test error"),
+                ),
+                suppress(RuntimeError),
+            ):
                 await detector.detect("test text")
 
         # 最后一次会触发熔断
@@ -342,19 +352,22 @@ class TestHybridAIDetector:
         detector.primary.client = mock_client
 
         # Mock primary 失败、backup 成功
-        with patch.object(
-            detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ), patch.object(
-            detector.backup,
-            "detect",
-            return_value=MagicMock(
-                is_spam=False,
-                confidence=0.1,
-                stage="ai_api",
-                reasons=["测试"],
-                details={},
-                provider="backup",
-                attempt_count=1,
+        with (
+            patch.object(
+                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+            ),
+            patch.object(
+                detector.backup,
+                "detect",
+                return_value=MagicMock(
+                    is_spam=False,
+                    confidence=0.1,
+                    stage="ai_api",
+                    reasons=["测试"],
+                    details={},
+                    provider="backup",
+                    attempt_count=1,
+                ),
             ),
         ):
             result = await detector.detect("test text")
@@ -383,19 +396,22 @@ class TestHybridAIDetector:
         detector.backup.client = mock_client
 
         # Mock primary 失败、backup 成功
-        with patch.object(
-            detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ), patch.object(
-            detector.backup,
-            "detect",
-            return_value=MagicMock(
-                is_spam=False,
-                confidence=0.1,
-                stage="ai_api",
-                reasons=["测试"],
-                details={},
-                provider="backup",
-                attempt_count=1,
+        with (
+            patch.object(
+                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+            ),
+            patch.object(
+                detector.backup,
+                "detect",
+                return_value=MagicMock(
+                    is_spam=False,
+                    confidence=0.1,
+                    stage="ai_api",
+                    reasons=["测试"],
+                    details={},
+                    provider="backup",
+                    attempt_count=1,
+                ),
             ),
         ):
             await detector.detect("test text")
@@ -414,19 +430,22 @@ class TestHybridAIDetector:
         detector.primary.client = old_client
 
         # 模拟切换到 backup
-        with patch.object(
-            detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ), patch.object(
-            detector.backup,
-            "detect",
-            return_value=MagicMock(
-                is_spam=False,
-                confidence=0.1,
-                stage="ai_api",
-                reasons=["测试"],
-                details={},
-                provider="backup",
-                attempt_count=1,
+        with (
+            patch.object(
+                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+            ),
+            patch.object(
+                detector.backup,
+                "detect",
+                return_value=MagicMock(
+                    is_spam=False,
+                    confidence=0.1,
+                    stage="ai_api",
+                    reasons=["测试"],
+                    details={},
+                    provider="backup",
+                    attempt_count=1,
+                ),
             ),
         ):
             await detector.detect("test text")
@@ -442,10 +461,9 @@ class TestHybridAIDetector:
             # 这个函数会在 detect() 内部被调用
             return {"is_spam": False, "confidence": 0.1, "reason": "测试"}
 
-        with patch.object(
-            detector.primary, "_call_api", side_effect=mock_call_api
-        ), patch.object(
-            detector.primary, "_create_client", return_value=new_client
+        with (
+            patch.object(detector.primary, "_call_api", side_effect=mock_call_api),
+            patch.object(detector.primary, "_create_client", return_value=new_client),
         ):
             # 先调用 _ensure_client 来消费重建标记
             await detector.primary._ensure_client()
@@ -482,22 +500,25 @@ class TestBackupProvider:
     @pytest.mark.asyncio
     async def test_backup_failure_also_marks_for_rebuild(self):
         """测试 backup 失败也会标记待重建"""
-        detector = HybridAIDetector(
-            circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5
-        )
+        detector = HybridAIDetector(circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5)
 
         # Mock primary 失败
-        with patch.object(
-            detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
-        ), suppress(RuntimeError):
+        with (
+            patch.object(
+                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+            ),
+            suppress(RuntimeError),
+        ):
             await detector.detect("test text")
 
         # Mock backup 失败
-        with patch.object(
-            detector.backup, "detect", side_effect=AIServiceError("backup", "test error")
-        ), suppress(RuntimeError):
+        with (
+            patch.object(
+                detector.backup, "detect", side_effect=AIServiceError("backup", "test error")
+            ),
+            suppress(RuntimeError),
+        ):
             await detector.detect("test text")
 
         # 验证 backup 也被标记重建
         assert detector.backup._client_rebuild_pending is True
-

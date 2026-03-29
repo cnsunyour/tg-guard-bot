@@ -215,7 +215,10 @@ class AIServiceProvider(ABC):
             reason: 重建原因
         """
         # 如果已经标记为熔断触发，不允许用其他原因覆盖（熔断优先级最高）
-        if self._client_rebuild_pending and self._client_rebuild_reason == "circuit_breaker_tripped":
+        if (
+            self._client_rebuild_pending
+            and self._client_rebuild_reason == "circuit_breaker_tripped"
+        ):
             return
 
         # 如果已经有标记且新原因不是熔断，则不更新（保持第一个原因）
@@ -272,7 +275,9 @@ class AIServiceProvider(ABC):
                     now - self._client_created_at if self._client_created_at is not None else None
                 )
                 client_idle = (
-                    now - self._client_last_used_at if self._client_last_used_at is not None else None
+                    now - self._client_last_used_at
+                    if self._client_last_used_at is not None
+                    else None
                 )
 
                 if client_age is not None and client_age >= timedelta(
@@ -331,10 +336,7 @@ class AIServiceProvider(ABC):
         if isinstance(e, AIServiceError):
             message = _truncate(e.message)
             if message:
-                return (
-                    f"{e.__class__.__name__} [provider={e.provider}] "
-                    f"[message={message}]"
-                )
+                return f"{e.__class__.__name__} [provider={e.provider}] " f"[message={message}]"
             return f"{e.__class__.__name__} [provider={e.provider}]"
 
         error_type = e.__class__.__name__
@@ -880,12 +882,9 @@ class HybridAIDetector:
             self._stats[self.backup.name].last_error if self.backup.is_available else "未配置"
         )
         logger.error(
-            f"🚨 所有 AI 服务商都失败 "
-            f"[primary: {primary_error}] [backup: {backup_error}]"
+            f"🚨 所有 AI 服务商都失败 " f"[primary: {primary_error}] [backup: {backup_error}]"
         )
-        raise RuntimeError(
-            f"AI 检测失败: primary={primary_error}, backup={backup_error}"
-        )
+        raise RuntimeError(f"AI 检测失败: primary={primary_error}, backup={backup_error}")
 
     async def detect_with_context(
         self, text: str, context_text: str | None = None
@@ -995,9 +994,7 @@ class HybridAIDetector:
         logger.error(
             f"🚨 所有 AI 服务商都失败 " f"[primary: {primary_error}] [backup: {backup_error}]"
         )
-        raise RuntimeError(
-            f"AI 上下文检测失败: primary={primary_error}, backup={backup_error}"
-        )
+        raise RuntimeError(f"AI 上下文检测失败: primary={primary_error}, backup={backup_error}")
 
     async def close(self):
         """关闭所有服务商的 HTTP 客户端"""
