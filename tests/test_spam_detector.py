@@ -65,7 +65,7 @@ async def test_short_message_skip(mock_detector):
     result = await detector.detect("好的", 123, 456)
     assert not result["is_spam"]
     assert result["stage"] == "skipped_short"
-    assert result["details"]["text_length"] == 2
+    assert result["details"]["normalized_length"] == 2
     assert result["details"]["min_length"] == 10
 
 
@@ -183,7 +183,7 @@ async def test_whitespace_only_skip(mock_detector):
     result = await detector.detect("   ", 123, 456)
     assert not result["is_spam"]
     assert result["stage"] == "skipped_short"
-    assert result["details"]["text_length"] == 3
+    assert result["details"]["original_length"] == 3
 
 
 @pytest.mark.asyncio
@@ -222,7 +222,7 @@ async def test_exactly_threshold(mock_detector):
         }
     )
 
-    # 恰好 10 个字符（默认阈值）
-    result = await detector.detect("1234567890", 123, 456)
-    # 不应该跳过（长度 >= 阈值）
+    # 恰好达到 10 的标准化长度（20 个半角字符）
+    result = await detector.detect("12345678901234567890", 123, 456)
+    # 不应该跳过（标准化长度 >= 阈值）
     assert result["stage"] != "skipped_short"

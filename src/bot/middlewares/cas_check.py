@@ -100,7 +100,7 @@ class CASCheckMiddleware(BaseMiddleware):
             notify_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"🚫 <a href=\"tg://user?id={user_id}\">{user_id}</a> 在 CAS 黑名单中，"
+                    f'🚫 <a href="tg://user?id={user_id}">{user_id}</a> 在 CAS 黑名单中，'
                     f"已被自动封禁（违规 {cas_result.offenses} 次）。"
                 ),
                 parse_mode="HTML",

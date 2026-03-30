@@ -42,6 +42,8 @@ class AIServiceConfig:
     timeout: int = 10
     max_retries: int = 2
     max_length: int = 500
+    client_idle_rebuild_minutes: int = 60
+    client_max_lifetime_hours: int = 24
 
 
 @dataclass
@@ -186,6 +188,46 @@ class AIServiceProvider(ABC):
         self.name = name
         self.config = config
         self.client: httpx.AsyncClient | None = None
+        self._client_rebuild_pending = False
+        self._client_rebuild_reason = ""
+        self._client_created_at: datetime | None = None
+        self._client_last_used_at: datetime | None = None
+        self._client_rebuild_count = 0
+        self._last_client_rebuild_at: datetime | None = None
+        self._last_client_rebuild_reason = ""
+        self._client_lock = asyncio.Lock()
+
+    def _create_client(self) -> httpx.AsyncClient:
+        """创建新的 HTTP 客户端
+
+        Returns:
+            HTTP 客户端实例
+        """
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(self.config.timeout, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+        )
+
+    def request_client_rebuild(self, reason: str) -> None:
+        """标记需要重建 HTTP 客户端
+
+        Args:
+            reason: 重建原因
+        """
+        # 如果已经标记为熔断触发，不允许用其他原因覆盖（熔断优先级最高）
+        if (
+            self._client_rebuild_pending
+            and self._client_rebuild_reason == "circuit_breaker_tripped"
+        ):
+            return
+
+        # 如果已经有标记且新原因不是熔断，则不更新（保持第一个原因）
+        if self._client_rebuild_pending and reason != "circuit_breaker_tripped":
+            return
+
+        self._client_rebuild_pending = True
+        self._client_rebuild_reason = reason
+        logger.debug(f"{self.name} HTTP 客户端已标记重建 [reason={reason}]")
 
     @property
     @abstractmethod
@@ -213,18 +255,130 @@ class AIServiceProvider(ABC):
         """
         pass
 
-    def _ensure_client(self) -> httpx.AsyncClient:
+    async def _ensure_client(self) -> httpx.AsyncClient:
         """确保 HTTP 客户端已创建（延迟初始化）
+
+        这是唯一的重建消费点，负责：
+        1. 如果没有待重建标记且 client 已存在，检查是否需要因生命周期超时而重建
+        2. 如果没有待重建标记且无需重建，直接复用
+        3. 如果存在待重建标记，关闭旧 client 并创建新的
 
         Returns:
             HTTP 客户端实例
         """
-        if self.client is None:
-            self.client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.config.timeout, connect=5.0),
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-            )
-        return self.client
+        async with self._client_lock:
+            now = datetime.now()
+
+            # 没有待重建标记且 client 已存在，先检查生命周期是否超时
+            if self.client is not None and not self._client_rebuild_pending:
+                client_age = (
+                    now - self._client_created_at if self._client_created_at is not None else None
+                )
+                client_idle = (
+                    now - self._client_last_used_at
+                    if self._client_last_used_at is not None
+                    else None
+                )
+
+                if client_age is not None and client_age >= timedelta(
+                    hours=self.config.client_max_lifetime_hours
+                ):
+                    self.request_client_rebuild("max_lifetime_exceeded")
+                elif client_idle is not None and client_idle >= timedelta(
+                    minutes=self.config.client_idle_rebuild_minutes
+                ):
+                    self.request_client_rebuild("idle_timeout")
+                else:
+                    return self.client
+
+            # 需要重建或首次创建
+            old_client = None
+            rebuild_reason = self._client_rebuild_reason
+
+            if self._client_rebuild_pending:
+                old_client = self.client
+                self.client = None
+                self._client_rebuild_pending = False
+                self._client_rebuild_reason = ""
+                self._client_created_at = None
+                self._client_last_used_at = None
+
+            # 关闭旧 client
+            if old_client is not None:
+                try:
+                    await old_client.aclose()
+                except Exception as e:
+                    logger.debug(f"关闭 {self.name} 待重建 HTTP 客户端时出现错误（已忽略）: {e}")
+
+            # 创建新 client
+            if self.client is None:
+                self.client = self._create_client()
+                self._client_created_at = now
+                self._client_last_used_at = now
+                if rebuild_reason:
+                    self._client_rebuild_count += 1
+                    self._last_client_rebuild_at = now
+                    self._last_client_rebuild_reason = rebuild_reason
+                    logger.debug(f"{self.name} HTTP 客户端已重建 [reason={rebuild_reason}]")
+
+            return self.client
+
+    @staticmethod
+    def _format_error(e: Exception) -> str:
+        """格式化异常信息，避免日志只出现空错误。"""
+
+        def _truncate(message: str, limit: int = 200) -> str:
+            normalized = re.sub(r"\s+", " ", message).strip()
+            if len(normalized) > limit:
+                return normalized[: limit - 3] + "..."
+            return normalized
+
+        if isinstance(e, AIServiceError):
+            message = _truncate(e.message)
+            if message:
+                return f"{e.__class__.__name__} [provider={e.provider}] " f"[message={message}]"
+            return f"{e.__class__.__name__} [provider={e.provider}]"
+
+        error_type = e.__class__.__name__
+
+        if isinstance(e, httpx.TimeoutException):
+            timeout_phase = None
+            if isinstance(e, httpx.ConnectTimeout):
+                timeout_phase = "connect"
+            elif isinstance(e, httpx.ReadTimeout):
+                timeout_phase = "read"
+            elif isinstance(e, httpx.WriteTimeout):
+                timeout_phase = "write"
+            elif isinstance(e, httpx.PoolTimeout):
+                timeout_phase = "pool"
+
+            parts = [error_type]
+            if timeout_phase:
+                parts.append(f"[phase={timeout_phase}]")
+
+            message = _truncate(str(e))
+            if message:
+                parts.append(f"[message={message}]")
+            return " ".join(parts)
+
+        if isinstance(e, httpx.HTTPStatusError):
+            parts = [error_type, f"[status_code={e.response.status_code}]"]
+            try:
+                response_text = _truncate(e.response.text)
+            except Exception:
+                response_text = ""
+            if response_text:
+                parts.append(f"[response={response_text}]")
+
+            message = _truncate(str(e))
+            if message:
+                parts.append(f"[message={message}]")
+            return " ".join(parts)
+
+        message = _truncate(str(e))
+        if message:
+            return f"{error_type} [message={message}]"
+        return error_type
 
     async def _call_api(self, text: str, use_context_prompt: bool = False) -> dict[str, Any]:
         """调用 OpenAI 兼容 API
@@ -258,9 +412,19 @@ class AIServiceProvider(ABC):
         }
 
         # 发送请求
-        client = self._ensure_client()
-        response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
+        client = await self._ensure_client()
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            logger.warning(
+                f"⏱️ {self.name} API 请求超时 "
+                f"[timeout_seconds={self.config.timeout}] "
+                f"[error={self._format_error(e)}]"
+            )
+            raise
+        finally:
+            self._client_last_used_at = datetime.now()
 
         # 解析响应
         data = response.json()
@@ -348,14 +512,20 @@ class AIServiceProvider(ABC):
 
     async def close(self):
         """关闭 HTTP 客户端"""
-        if self.client is not None:
-            try:
-                await self.client.aclose()
-                logger.debug(f"{self.name} HTTP 客户端已关闭")
-            except Exception as e:
-                logger.debug(f"关闭 {self.name} HTTP 客户端时出现错误（已忽略）: {e}")
-            finally:
-                self.client = None
+        async with self._client_lock:
+            client = self.client
+            self.client = None
+            self._client_created_at = None
+            self._client_last_used_at = None
+            # 注意：不清除 _client_rebuild_pending，因为 close() 可能是切换/熔断流程的一部分
+            # 真正的清除会在 _ensure_client() 创建新 client 时进行
+
+            if client is not None:
+                try:
+                    await client.aclose()
+                    logger.debug(f"{self.name} HTTP 客户端已关闭")
+                except Exception as e:
+                    logger.debug(f"关闭 {self.name} HTTP 客户端时出现错误（已忽略）: {e}")
 
 
 # ============================================================================
@@ -377,6 +547,8 @@ class PrimaryAIServiceProvider(AIServiceProvider):
             timeout=settings.ai_spam_timeout,
             max_retries=settings.ai_spam_max_retries,
             max_length=settings.ai_spam_max_length,
+            client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
+            client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
         )
         super().__init__("primary", config)
 
@@ -402,19 +574,24 @@ class PrimaryAIServiceProvider(AIServiceProvider):
                 detection_result.attempt_count = attempt + 1
                 return detection_result
             except Exception as e:
+                formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
                     # 指数退避重试
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🔍 {self.name} 检测失败，重试中... "
                         f"[attempt={attempt+1}/{self.config.max_retries+1}] "
-                        f"[wait={wait_time}s] [error={e!s}]"
+                        f"[wait={wait_time}s] [timeout_seconds={self.config.timeout}] "
+                        f"[error={formatted_error}]"
                     )
                     await asyncio.sleep(wait_time)
                 else:
                     # 最后一次重试也失败
-                    logger.error(f"❌ {self.name} 检测失败，已达最大重试次数 [error={e!s}]")
-                    raise AIServiceError(self.name, f"所有重试失败: {e!s}") from e
+                    logger.error(
+                        f"❌ {self.name} 检测失败，已达最大重试次数 "
+                        f"[timeout_seconds={self.config.timeout}] [error={formatted_error}]"
+                    )
+                    raise AIServiceError(self.name, f"所有重试失败: {formatted_error}") from e
 
         # 不应该到这里（所有重试都失败）
         raise AIServiceError(self.name, "所有重试已耗尽")
@@ -439,6 +616,8 @@ class BackupAIServiceProvider(AIServiceProvider):
             timeout=settings.ai_spam_backup_timeout,
             max_retries=settings.ai_spam_backup_max_retries,
             max_length=settings.ai_spam_max_length,  # 共享最大长度配置
+            client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
+            client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
         )
         super().__init__("backup", config)
 
@@ -468,19 +647,24 @@ class BackupAIServiceProvider(AIServiceProvider):
                 detection_result.attempt_count = attempt + 1
                 return detection_result
             except Exception as e:
+                formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
                     # 指数退避重试
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🔍 {self.name} 检测失败，重试中... "
                         f"[attempt={attempt+1}/{self.config.max_retries+1}] "
-                        f"[wait={wait_time}s] [error={e!s}]"
+                        f"[wait={wait_time}s] [timeout_seconds={self.config.timeout}] "
+                        f"[error={formatted_error}]"
                     )
                     await asyncio.sleep(wait_time)
                 else:
                     # 最后一次重试也失败
-                    logger.error(f"❌ {self.name} 检测失败，已达最大重试次数 [error={e!s}]")
-                    raise AIServiceError(self.name, f"所有重试失败: {e!s}") from e
+                    logger.error(
+                        f"❌ {self.name} 检测失败，已达最大重试次数 "
+                        f"[timeout_seconds={self.config.timeout}] [error={formatted_error}]"
+                    )
+                    raise AIServiceError(self.name, f"所有重试失败: {formatted_error}") from e
 
         # 不应该到这里（所有重试都失败）
         raise AIServiceError(self.name, "所有重试已耗尽")
@@ -564,6 +748,7 @@ class HybridAIDetector:
                 else:
                     # 冷却时间已过，重置熔断器
                     logger.debug(f"🔄 {provider.name} 熔断器冷却完成，重置")
+                    provider.request_client_rebuild("cooldown_ended")
                     stats.reset_circuit()
 
         return False
@@ -587,8 +772,12 @@ class HybridAIDetector:
         stats = self._stats[provider.name]
         stats.record_failure(error)
 
+        # 标记 provider 需要重建 client
+        provider.request_client_rebuild("provider_failure")
+
         # 检查是否触发熔断
         if stats.consecutive_failures >= self.circuit_breaker_threshold:
+            provider.request_client_rebuild("circuit_breaker_tripped")
             logger.warning(
                 f"⚠️ {provider.name} 触发熔断器 " f"（连续失败 {stats.consecutive_failures} 次）"
             )
@@ -641,14 +830,19 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.primary, str(e))
-                logger.warning(f"❌ {self.primary.name} 检测失败: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.warning(f"❌ {self.primary.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.primary, str(e))
-                logger.error(f"💥 {self.primary.name} 发生意外错误: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.error(f"💥 {self.primary.name} 发生意外错误: {formatted_error}")
 
         # 尝试备份服务商
         if self.backup.is_available and not self._is_circuit_open(self.backup):
+            if self.primary.is_available:
+                self.primary.request_client_rebuild("switching_to_backup")
+                await self.primary.close()
             logger.info(f"🔄 切换到 {self.backup.name} 服务商...")
             try:
                 logger.debug(f"🔍 尝试使用 {self.backup.name} 服务商检测...")
@@ -672,11 +866,13 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.backup, str(e))
-                logger.warning(f"❌ {self.backup.name} 检测失败: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.warning(f"❌ {self.backup.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.backup, str(e))
-                logger.error(f"💥 {self.backup.name} 发生意外错误: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.error(f"💥 {self.backup.name} 发生意外错误: {formatted_error}")
 
         # 所有服务商都失败
         primary_error = (
@@ -744,14 +940,19 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.primary, str(e))
-                logger.warning(f"❌ {self.primary.name} 检测失败: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.warning(f"❌ {self.primary.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.primary, str(e))
-                logger.error(f"💥 {self.primary.name} 发生意外错误: {e}")
+                formatted_error = self.primary._format_error(e)
+                self._record_failure(self.primary, formatted_error)
+                logger.error(f"💥 {self.primary.name} 发生意外错误: {formatted_error}")
 
         # 尝试备份服务商
         if self.backup.is_available and not self._is_circuit_open(self.backup):
+            if self.primary.is_available:
+                self.primary.request_client_rebuild("switching_to_backup")
+                await self.primary.close()
             logger.info(f"🔄 切换到 {self.backup.name} 服务商...")
             try:
                 logger.debug(f"🔍 尝试使用 {self.backup.name} 服务商检测（带上下文）...")
@@ -775,11 +976,13 @@ class HybridAIDetector:
                     },
                 }
             except AIServiceError as e:
-                self._record_failure(self.backup, str(e))
-                logger.warning(f"❌ {self.backup.name} 检测失败: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.warning(f"❌ {self.backup.name} 检测失败: {formatted_error}")
             except Exception as e:
-                self._record_failure(self.backup, str(e))
-                logger.error(f"💥 {self.backup.name} 发生意外错误: {e}")
+                formatted_error = self.backup._format_error(e)
+                self._record_failure(self.backup, formatted_error)
+                logger.error(f"💥 {self.backup.name} 发生意外错误: {formatted_error}")
 
         # 所有服务商都失败
         primary_error = (
@@ -806,8 +1009,26 @@ class HybridAIDetector:
         Returns:
             {provider_name: stats} 字典
         """
-        return {
-            name: {
+        providers = {"primary": self.primary, "backup": self.backup}
+        result: dict[str, dict] = {}
+
+        for name, provider in providers.items():
+            if name not in self._stats:
+                if provider.client is None and not provider._client_rebuild_pending:
+                    continue
+                stats = AIServiceStats()
+            else:
+                stats = self._stats[name]
+
+            now = datetime.now()
+            client_age_seconds = None
+            client_idle_seconds = None
+            if provider._client_created_at is not None:
+                client_age_seconds = (now - provider._client_created_at).total_seconds()
+            if provider._client_last_used_at is not None:
+                client_idle_seconds = (now - provider._client_last_used_at).total_seconds()
+
+            result[name] = {
                 "success_count": stats.success_count,
                 "failure_count": stats.failure_count,
                 "consecutive_failures": stats.consecutive_failures,
@@ -816,9 +1037,31 @@ class HybridAIDetector:
                 ),
                 "last_error": stats.last_error,
                 "success_rate": self._get_success_rate(name),
+                "client_initialized": provider.client is not None,
+                "client_rebuild_pending": provider._client_rebuild_pending,
+                "client_rebuild_reason": provider._client_rebuild_reason,
+                "client_created_at": (
+                    provider._client_created_at.isoformat()
+                    if provider._client_created_at is not None
+                    else None
+                ),
+                "client_last_used_at": (
+                    provider._client_last_used_at.isoformat()
+                    if provider._client_last_used_at is not None
+                    else None
+                ),
+                "client_age_seconds": client_age_seconds,
+                "client_idle_seconds": client_idle_seconds,
+                "client_rebuild_count": provider._client_rebuild_count,
+                "last_client_rebuild_at": (
+                    provider._last_client_rebuild_at.isoformat()
+                    if provider._last_client_rebuild_at is not None
+                    else None
+                ),
+                "last_client_rebuild_reason": provider._last_client_rebuild_reason,
             }
-            for name, stats in self._stats.items()
-        }
+
+        return result
 
     def reset_stats(self, provider_name: str | None = None) -> None:
         """重置统计信息
