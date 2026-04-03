@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.2] - 2026-04-03
+
+### 新增功能
+- AI provider 长连接生命周期管理：支持空闲超时和最大存活时间自动重建 HTTP client
+- AI provider 超时重建机制：防止长期空闲的 HTTP client 导致请求失败
+
+### Bug 修复
+- 串行化 AI client 重建流程，避免并发重建导致资源竞争
+- 增强 AI API 错误日志，便于排查 API 调用失败原因
+
+### 测试
+- 修复 AI detector 测试 lint 告警
+- 修正短消息长度预过滤断言
+
+### 代码质量
+- 格式化 Python 代码
+
 ## [1.2.1] - 2026-03-22
 
 ### 新增功能
