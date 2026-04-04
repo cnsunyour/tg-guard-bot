@@ -479,9 +479,11 @@ tg-guard-bot/
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `CAS_ENABLED` | 启用 CAS 黑名单检查（入群 + 消息阶段） | false | ❌ |
-| `CAS_API_URL` | CAS API 基础 URL | https://api.cas.chat | ❌ |
-| `CAS_CHECK_TIMEOUT` | CAS 检查超时（秒） | 5 | ❌ |
-| `CAS_CACHE_TTL` | CAS 缓存 TTL（秒） | 86400 | ❌ |
+| `CAS_EXPORT_URL` | CAS 全量封禁列表 CSV 地址 | https://api.cas.chat/export.csv | ❌ |
+| `CAS_EXPORT_PATH` | CAS 本地快照文件路径 | data/cas/export.csv | ❌ |
+| `CAS_DOWNLOAD_TIMEOUT` | CAS 导出下载超时（秒） | 30 | ❌ |
+| `CAS_REFRESH_INTERVAL_SECONDS` | CAS 快照后台刷新间隔（秒） | 3600 | ❌ |
+| `CAS_STALE_AFTER_SECONDS` | CAS 快照过旧告警阈值（秒） | 86400 | ❌ |
 | `ENABLE_OCR` | 启用 OCR 功能 | false | ❌ |
 | `SPAM_THRESHOLD_RULE` | 规则引擎阈值 | 0.8 | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
@@ -491,7 +493,7 @@ tg-guard-bot/
 | `REGEX_RULES_CONFIG_PATH` | 自定义规则配置文件路径 | config/spam_rules.json | ❌ |
 | `REGEX_RULES_MAX_TEXT_LENGTH` | 正则规则检测的最大文本长度 | 500 | ❌ |
 
-> 说明：CAS 检查采用“失败放行”降级策略；Redis 不可用时会直连 API（仍失败放行），避免误伤正常用户。
+> 说明：CAS 检查采用“本地快照优先 + 后台定时刷新 + 失败放行”策略；没有可用本地快照时会降级放行，避免误伤正常用户。
 
 #### CAPTCHA 验证配置（可选）
 

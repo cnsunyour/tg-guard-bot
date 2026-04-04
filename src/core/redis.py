@@ -202,27 +202,6 @@ class RedisKeys:
         return f"username_map:{username.lower()}"
 
     @staticmethod
-    def cas_result(user_id: int) -> str:
-        """CAS 检查结果缓存键名
-
-        存储格式: JSON 字符串（原始 API 响应）
-        - 黑名单: {"ok": true, "result": {"offenses": 3, "time_added": 1234567890}}
-        - 正常: {"ok": false, "description": "Record not found."}
-        TTL: 可配置（默认 24 小时）
-        """
-        return f"cas:result:{user_id}"
-
-    @staticmethod
-    def cas_lock(user_id: int) -> str:
-        """CAS 检查分布式锁键名
-
-        用于防止同一个用户的并发 CAS API 请求
-        存储格式: "1" (表示正在检查)
-        TTL: 10 秒（防止死锁）
-        """
-        return f"cas:lock:{user_id}"
-
-    @staticmethod
     def chat_admins(chat_id: int) -> str:
         """群组管理员列表缓存键名
 
