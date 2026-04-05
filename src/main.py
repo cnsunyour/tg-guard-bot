@@ -278,14 +278,6 @@ async def on_startup(bot: Bot) -> None:
     logger.info("设置命令自动完成...")
     await setup_bot_commands(bot)
 
-    # 初始化 CAS 快照服务
-    if settings.cas_enabled:
-        logger.info("初始化 CAS 快照服务...")
-        from src.services.cas_service import get_cas_service
-
-        await get_cas_service().start()
-        logger.info("✅ CAS 快照服务已启动")
-
     logger.info("Bot 启动完成")
 
 
@@ -302,14 +294,14 @@ async def on_shutdown() -> None:
     except Exception as e:
         logger.warning(f"关闭 AI 检测器失败: {e}")
 
-    # ✅ 关闭 CAS 快照服务
+    # ✅ 关闭 CAS 客户端
     try:
         from src.services.cas_service import get_cas_service
 
         await get_cas_service().close()
-        logger.info("✅ CAS 快照服务已关闭")
+        logger.info("✅ CAS 客户端已关闭")
     except Exception as e:
-        logger.warning(f"关闭 CAS 快照服务失败: {e}")
+        logger.warning(f"关闭 CAS 客户端失败: {e}")
 
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)

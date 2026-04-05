@@ -194,28 +194,18 @@ class Settings(BaseSettings):
     warning_kick_threshold: int = Field(default=5, description="踢出群组阈值（次）")
     warning_ban_threshold: int = Field(default=7, description="封禁阈值（次，踢出+拉黑）")
 
-    # CAS (Combot Anti-Spam) 离线快照配置
+    # CAS (Combot Anti-Spam) API 配置
     cas_enabled: bool = Field(
         default=False,
         description="是否启用 CAS 黑名单检查（启用后自动拦截入群和消息）",
     )
-    cas_export_url: str = Field(
-        default="https://api.cas.chat/export.csv",
-        description="CAS 全量导出 CSV 地址",
-    )
-    cas_export_path: str = Field(
-        default="data/cas/export.csv",
-        description="CAS 本地快照文件路径",
-    )
-    cas_download_timeout: int = Field(default=30, description="CAS 导出下载超时时间（秒）")
-    cas_refresh_interval_seconds: int = Field(
-        default=3600,
-        description="CAS 快照后台刷新间隔（秒）",
-    )
-    cas_stale_after_seconds: int = Field(
+    cas_api_url: str = Field(default="https://api.cas.chat", description="CAS API 基础 URL")
+    cas_check_timeout: int = Field(default=5, description="API 请求超时时间（秒）")
+    cas_cache_ttl: int = Field(
         default=86400,
-        description="CAS 快照过旧告警阈值（秒）",
+        description="检查结果缓存时间（秒），默认 24 小时",
     )
+    cas_max_retries: int = Field(default=2, description="API 请求最大重试次数")
 
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")

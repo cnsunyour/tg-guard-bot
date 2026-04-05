@@ -1,18 +1,17 @@
-"""CAS (Combot Anti-Spam) 本地快照服务"""
+"""CAS (Combot Anti-Spam) API 服务"""
 
 import asyncio
 import contextlib
-import csv
-import os
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import Any
 
 import httpx
 from loguru import logger
 
 from src.core.config import settings
-from src.core.executor import run_in_executor
+from src.core.redis import RedisKeys, get_redis
 
 
 @dataclass
@@ -28,309 +27,168 @@ class CASCheckResult:
 
 
 class CASService:
-    """CAS (Combot Anti-Spam) 本地快照服务"""
+    """CAS (Combot Anti-Spam) API 服务"""
 
     def __init__(self) -> None:
-        self._snapshot_path = Path(settings.cas_export_path)
-        self._snapshot: dict[int, tuple[int, int | None]] | None = None
-        self._refresh_task: asyncio.Task[None] | None = None
-        self._last_success_at: datetime | None = None
-        self._record_count = 0
+        self._client: httpx.AsyncClient | None = None
+        self._base_url = settings.cas_api_url.rstrip("/")
 
-    async def start(self) -> None:
-        """启动 CAS 快照服务"""
-        if self._refresh_task is not None and not self._refresh_task.done():
-            return
-
-        loaded = await self._load_snapshot()
-        refreshed = False
-        if not loaded:
-            logger.warning("未找到可用的 CAS 本地快照，尝试立即下载")
-            refreshed = await self._refresh_once(reason="bootstrap")
-            if not refreshed:
-                logger.warning("CAS 快照初始化失败，当前将降级放行")
-
-        self._refresh_task = asyncio.create_task(
-            self._refresh_loop(run_immediately=loaded and not refreshed),
-            name="cas_refresh_loop",
-        )
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """获取 HTTP 客户端（延迟初始化）"""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(settings.cas_check_timeout, connect=3.0),
+                limits=httpx.Limits(max_keepalive_connections=2, max_connections=5),
+            )
+        return self._client
 
     async def close(self) -> None:
-        """关闭后台刷新任务"""
-        if self._refresh_task is None:
-            return
-
-        self._refresh_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._refresh_task
-        self._refresh_task = None
+        """关闭 HTTP 客户端"""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     async def check_user(self, user_id: int) -> CASCheckResult:
-        """使用本地快照检查用户是否在 CAS 黑名单中"""
-        result = self._lookup_local(user_id)
-        if result is not None:
-            return result
+        """检查用户是否在 CAS 黑名单中
 
-        return CASCheckResult(
-            is_banned=False,
-            user_id=user_id,
-            error="snapshot_unavailable",
-            cached=False,
-        )
+        降级策略：
+        - API/网络/解析失败：放行（is_banned=False），避免误伤正常用户
+        """
 
-    async def _refresh_loop(self, *, run_immediately: bool) -> None:
-        """后台周期刷新 CAS 快照"""
-        if run_immediately:
-            await self._refresh_once(reason="startup")
+        redis = get_redis()
+        cache_key = RedisKeys.cas_result(user_id)
 
-        while True:
+        # 1) 缓存
+        try:
+            cached = await redis.get(cache_key)
+        except Exception as e:
+            logger.debug(f"CAS 缓存读取失败 [用户:{user_id}]: {e}")
+            cached = None
+
+        if cached is not None:
             try:
-                sleep_seconds = settings.cas_refresh_interval_seconds
-                if self._snapshot is None:
-                    sleep_seconds = min(60, sleep_seconds)
+                data = json.loads(cached)
+                result = self._parse_response(user_id, data)
+                result.cached = True
+                return result
+            except (json.JSONDecodeError, TypeError, KeyError) as e:
+                logger.warning(f"CAS 缓存解析失败 [用户:{user_id}]: {e}")
 
-                await asyncio.sleep(sleep_seconds)
-                await self._refresh_once(reason="scheduled")
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"CAS 快照后台刷新失败: {e}")
+        # 2) 分布式锁：防止并发请求
+        lock_key = RedisKeys.cas_lock(user_id)
+        lock_error = False
+        try:
+            lock_acquired = await redis.set(lock_key, "1", nx=True, ex=10)
+        except Exception as e:
+            logger.debug(f"CAS 锁获取失败 [用户:{user_id}]: {e}")
+            lock_acquired = False
+            lock_error = True
 
-    async def _load_snapshot(self) -> bool:
-        """加载本地快照文件"""
-        if not self._snapshot_path.is_file():
-            return False
+        if not lock_acquired and not lock_error:
+            # 有其他协程在查，稍等后读缓存
+            await asyncio.sleep(0.5)
+            try:
+                cached = await redis.get(cache_key)
+                if cached is not None:
+                    data = json.loads(cached)
+                    result = self._parse_response(user_id, data)
+                    result.cached = True
+                    return result
+            except Exception:
+                pass
+
+            return CASCheckResult(is_banned=False, user_id=user_id, error="concurrent")
+
+        if lock_error:
+            logger.debug(f"CAS Redis 不可用，直连 API [用户:{user_id}]")
 
         try:
-            snapshot = await run_in_executor(self._parse_snapshot_file, self._snapshot_path)
-        except Exception as e:
-            logger.warning(f"CAS 本地快照加载失败 [path:{self._snapshot_path}]: {e}")
-            return False
+            # 指数退避重试策略（参考 AI 检测器）
+            max_retries = settings.cas_max_retries
+            last_error: Exception | None = None
 
-        self._snapshot = snapshot
-        self._record_count = len(snapshot)
+            for attempt in range(max_retries + 1):
+                try:
+                    # 3) 调用 CAS API
+                    response = await self.client.get(
+                        f"{self._base_url}/check",
+                        params={"user_id": user_id},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
 
-        with contextlib.suppress(OSError):
-            self._last_success_at = datetime.fromtimestamp(
-                self._snapshot_path.stat().st_mtime, tz=UTC
-            )
+                    result = self._parse_response(user_id, data)
 
-        logger.info(
-            f"CAS 本地快照加载成功 [path:{self._snapshot_path}] [records:{self._record_count}]"
-        )
-        self._warn_if_snapshot_stale()
-        return True
+                    # 4) 写缓存
+                    try:
+                        await redis.setex(cache_key, settings.cas_cache_ttl, json.dumps(data))
+                    except Exception as e:
+                        logger.debug(f"CAS 缓存写入失败 [用户:{user_id}]: {e}")
 
-    async def _refresh_once(self, *, reason: str) -> bool:
-        """下载并原子刷新 CAS 快照"""
-        self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._snapshot_path.with_suffix(f"{self._snapshot_path.suffix}.tmp")
+                    return result
 
-        try:
-            content = await self._download_snapshot_bytes()
-            await run_in_executor(tmp_path.write_bytes, content)
-            snapshot = await run_in_executor(self._parse_snapshot_file, tmp_path)
-            await run_in_executor(os.replace, tmp_path, self._snapshot_path)
+                except (httpx.HTTPStatusError, httpx.RequestError) as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        # 指数退避重试
+                        wait_time = 0.5 * (2**attempt)
+                        logger.warning(
+                            f"CAS API 请求失败 [用户:{user_id}] "
+                            f"[attempt={attempt + 1}/{max_retries + 1}] "
+                            f"[wait={wait_time}s] [error={e!s}]"
+                        )
+                        await asyncio.sleep(wait_time)
+                    else:
+                        # 最后一次重试也失败，降级放行
+                        logger.error(
+                            f"CAS API 请求失败，已达最大重试次数 [用户:{user_id}] "
+                            f"[error={e!s}]，降级放行"
+                        )
+                        return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
 
-            self._snapshot = snapshot
-            self._record_count = len(snapshot)
-            self._last_success_at = datetime.now(UTC)
+                except Exception as e:
+                    # 其他异常不重试，直接降级放行
+                    logger.exception(f"CAS 检查异常 [用户:{user_id}]: {e}")
+                    return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
 
-            logger.info(
-                f"CAS 快照刷新成功 [reason:{reason}] [path:{self._snapshot_path}] "
-                f"[records:{self._record_count}]"
-            )
-            return True
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"CAS 快照刷新失败 [reason:{reason}]: {e}")
-            self._warn_if_snapshot_stale()
-            return False
+            # 理论上不会到达这里（所有重试都失败）
+            if last_error:
+                return CASCheckResult(is_banned=False, user_id=user_id, error=str(last_error))
+            return CASCheckResult(is_banned=False, user_id=user_id, error="unknown")
+
         finally:
-            with contextlib.suppress(FileNotFoundError):
-                tmp_path.unlink()
+            # 确保锁被释放
+            if lock_acquired:
+                with contextlib.suppress(Exception):
+                    await redis.delete(lock_key)
 
-    async def _download_snapshot_bytes(self) -> bytes:
-        """下载 CAS 导出文件"""
-        timeout = httpx.Timeout(
-            settings.cas_download_timeout,
-            connect=min(10.0, float(settings.cas_download_timeout)),
-        )
+    @staticmethod
+    def _parse_response(user_id: int, data: dict[str, Any]) -> CASCheckResult:
+        """解析 CAS API 响应
 
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            follow_redirects=True,
-            limits=httpx.Limits(max_keepalive_connections=1, max_connections=2),
-        ) as client:
-            response = await client.get(settings.cas_export_url)
-            response.raise_for_status()
-            content = response.content
+        CAS API 响应格式：
+        - 黑名单: {"ok": true, "result": {"offenses": 3, "time_added": 1234567890}}
+        - 正常:   {"ok": false, "description": "Record not found."}
+        """
 
-        if not content:
-            raise ValueError("CAS 导出文件为空")
+        if not data.get("ok", False):
+            return CASCheckResult(is_banned=False, user_id=user_id)
 
-        return content
+        result = data.get("result", {})
+        offenses = int(result.get("offenses", 0) or 0)
 
-    def _lookup_local(self, user_id: int) -> CASCheckResult | None:
-        """从内存快照中查询用户"""
-        if self._snapshot is None:
-            return None
-
-        record = self._snapshot.get(user_id)
-        if record is None:
-            return CASCheckResult(is_banned=False, user_id=user_id, cached=True)
-
-        offenses, time_added_epoch = record
         time_added = None
-        if time_added_epoch is not None:
+        if ts := result.get("time_added"):
             with contextlib.suppress(Exception):
-                time_added = datetime.fromtimestamp(time_added_epoch, tz=UTC)
+                time_added = datetime.fromtimestamp(int(ts), tz=UTC)
 
         return CASCheckResult(
             is_banned=True,
             user_id=user_id,
             offenses=offenses,
             time_added=time_added,
-            cached=True,
         )
-
-    def _warn_if_snapshot_stale(self) -> None:
-        """当快照过旧时输出告警日志"""
-        if self._last_success_at is None:
-            return
-
-        age_seconds = int((datetime.now(UTC) - self._last_success_at).total_seconds())
-        if age_seconds <= settings.cas_stale_after_seconds:
-            return
-
-        logger.warning(
-            f"CAS 本地快照已过旧 [age:{age_seconds}s] "
-            f"[last_success_at:{self._last_success_at.isoformat()}]"
-        )
-
-    @staticmethod
-    def _parse_snapshot_file(path: Path) -> dict[int, tuple[int, int | None]]:
-        """解析 CAS 导出 CSV，返回 user_id -> (offenses, time_added_epoch)"""
-        snapshot: dict[int, tuple[int, int | None]] = {}
-
-        with path.open("r", encoding="utf-8", newline="") as file:
-            reader = csv.reader(file)
-            first_row = next(reader, None)
-            if first_row is None:
-                raise ValueError("CAS 快照为空")
-
-            if CASService._parse_int(first_row[0] if first_row else None) is None:
-                header = [CASService._normalize_header(value) for value in first_row]
-                user_id_index = CASService._find_column_index(header, "user_id", "userid", "id")
-                if user_id_index is None:
-                    raise ValueError("CAS 快照缺少 user_id 列")
-                offenses_index = CASService._find_column_index(
-                    header, "offenses", "messages", "count"
-                )
-                time_added_index = CASService._find_column_index(
-                    header,
-                    "time_added",
-                    "added_at",
-                    "created_at",
-                    "timestamp",
-                )
-            else:
-                user_id_index = 0
-                offenses_index = 1 if len(first_row) > 1 else None
-                time_added_index = 2 if len(first_row) > 2 else None
-                CASService._append_snapshot_row(
-                    snapshot,
-                    first_row,
-                    user_id_index=user_id_index,
-                    offenses_index=offenses_index,
-                    time_added_index=time_added_index,
-                )
-
-            for row in reader:
-                CASService._append_snapshot_row(
-                    snapshot,
-                    row,
-                    user_id_index=user_id_index,
-                    offenses_index=offenses_index,
-                    time_added_index=time_added_index,
-                )
-
-        if not snapshot:
-            raise ValueError("CAS 快照中没有有效用户")
-
-        return snapshot
-
-    @staticmethod
-    def _append_snapshot_row(
-        snapshot: dict[int, tuple[int, int | None]],
-        row: list[str],
-        *,
-        user_id_index: int,
-        offenses_index: int | None,
-        time_added_index: int | None,
-    ) -> None:
-        if not row or user_id_index >= len(row):
-            return
-
-        user_id = CASService._parse_int(row[user_id_index])
-        if user_id is None:
-            return
-
-        offenses = 0
-        if offenses_index is not None and offenses_index < len(row):
-            offenses = CASService._parse_int(row[offenses_index]) or 0
-
-        time_added_epoch = None
-        if time_added_index is not None and time_added_index < len(row):
-            time_added_epoch = CASService._parse_time_added_epoch(row[time_added_index])
-
-        snapshot[user_id] = (offenses, time_added_epoch)
-
-    @staticmethod
-    def _find_column_index(header: list[str], *aliases: str) -> int | None:
-        for alias in aliases:
-            with contextlib.suppress(ValueError):
-                return header.index(alias)
-        return None
-
-    @staticmethod
-    def _normalize_header(value: str) -> str:
-        return value.lstrip("\ufeff").strip().lower()
-
-    @staticmethod
-    def _parse_int(value: str | None) -> int | None:
-        if value is None:
-            return None
-
-        text = str(value).lstrip("\ufeff").strip()
-        if not text:
-            return None
-
-        with contextlib.suppress(ValueError):
-            return int(float(text))
-        return None
-
-    @staticmethod
-    def _parse_time_added_epoch(value: str | None) -> int | None:
-        if value is None:
-            return None
-
-        text = str(value).strip()
-        if not text:
-            return None
-
-        parsed_int = CASService._parse_int(text)
-        if parsed_int is not None:
-            return parsed_int
-
-        with contextlib.suppress(ValueError):
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=UTC)
-            return int(parsed.timestamp())
-
-        return None
 
 
 _cas_service: CASService | None = None
