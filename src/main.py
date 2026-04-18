@@ -274,6 +274,12 @@ async def on_startup(bot: Bot) -> None:
     logger.info("初始化 Telethon 客户端...")
     await init_telethon_client()
 
+    # 初始化健康检查器（记录启动时间）
+    from src.core.health import get_health_checker
+
+    get_health_checker()
+    logger.info("健康检查器已初始化")
+
     # 设置命令自动完成
     logger.info("设置命令自动完成...")
     await setup_bot_commands(bot)
