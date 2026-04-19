@@ -86,8 +86,8 @@ class CurfewScheduler:
                         f"(UTC{group.curfew_timezone_offset:+d})\n\n"
                         f"📋 <b>限制规则:</b>\n"
                         f"• 活跃度 = 0: 无法发送任何消息\n"
-                        f"• 活跃度 < 10: 无法发送非文本消息（图片、视频、贴纸等）\n"
-                        f"• 活跃度 ≥ 10: 可正常发送消息\n\n"
+                        f"• 活跃度 &lt; 10: 无法发送非文本消息（图片、视频、贴纸等）\n"
+                        f"• 活跃度 &gt;= 10: 可正常发送消息\n\n"
                         f"💡 发送文本消息可增加活跃度（每条+1）"
                     ),
                     parse_mode="HTML",

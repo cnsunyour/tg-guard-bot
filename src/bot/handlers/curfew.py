@@ -74,8 +74,8 @@ async def cmd_curfew(message: Message, bot: Bot) -> None:
                 f"当前: {status_emoji} {status_text}\n\n"
                 f"📋 <b>限制规则:</b>\n"
                 f"• 活跃度 = 0: 无法发送任何消息\n"
-                f"• 活跃度 < 10: 无法发送非文本消息\n"
-                f"• 活跃度 ≥ 10: 可正常发送消息",
+                f"• 活跃度 &lt; 10: 无法发送非文本消息\n"
+                f"• 活跃度 &gt;= 10: 可正常发送消息",
                 parse_mode="HTML",
             )
         await auto_delete_message(reply)
@@ -161,8 +161,8 @@ async def cmd_curfew(message: Message, bot: Bot) -> None:
         f"{status_text}\n\n"
         f"📋 <b>限制规则:</b>\n"
         f"• 活跃度 = 0: 无法发送任何消息\n"
-        f"• 活跃度 < 10: 无法发送非文本消息\n"
-        f"• 活跃度 ≥ 10: 可正常发送消息",
+        f"• 活跃度 &lt; 10: 无法发送非文本消息\n"
+        f"• 活跃度 &gt;= 10: 可正常发送消息",
         parse_mode="HTML",
     )
     await auto_delete_message(reply)
