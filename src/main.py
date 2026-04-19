@@ -225,6 +225,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="antichannel", description="反频道马甲配置"),
         BotCommand(command="activity", description="活跃度系统开关"),
         BotCommand(command="activityskip", description="活跃度跳过阈值"),
+        BotCommand(command="curfew", description="宵禁模式配置"),
         # 群成员管理
         BotCommand(command="kick", description="踢出成员"),
         BotCommand(command="mute", description="禁言成员"),
