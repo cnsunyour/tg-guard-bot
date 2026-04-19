@@ -373,7 +373,7 @@ async def main() -> None:
                 )
             ],
             # 发布版本（使用项目版本）
-            release="tg-guard-bot@0.1.0",
+            release="tg-guard-bot@1.3.0",
             # 附加上下文
             attach_stacktrace=True,
             # 过滤敏感数据
