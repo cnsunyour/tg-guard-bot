@@ -153,3 +153,47 @@ class GroupRepository:
                 select(Group).where(Group.is_whitelisted).order_by(Group.id)
             )
             return list(result.scalars().all())
+
+    @staticmethod
+    async def update_curfew_settings(
+        chat_id: int,
+        enabled: bool,
+        start_hour: int | None = None,
+        start_minute: int | None = None,
+        end_hour: int | None = None,
+        end_minute: int | None = None,
+        timezone_offset: int | None = None,
+    ) -> bool:
+        """更新宵禁设置
+
+        Args:
+            chat_id: 群组 ID
+            enabled: 是否启用宵禁
+            start_hour: 开始小时 (0-23)
+            start_minute: 开始分钟 (0-59)
+            end_hour: 结束小时 (0-23)
+            end_minute: 结束分钟 (0-59)
+            timezone_offset: 时区偏移（相对UTC小时数）
+
+        Returns:
+            是否更新成功
+        """
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.curfew_enabled = enabled
+                if start_hour is not None:
+                    group.curfew_start_hour = start_hour
+                if start_minute is not None:
+                    group.curfew_start_minute = start_minute
+                if end_hour is not None:
+                    group.curfew_end_hour = end_hour
+                if end_minute is not None:
+                    group.curfew_end_minute = end_minute
+                if timezone_offset is not None:
+                    group.curfew_timezone_offset = timezone_offset
+                await session.commit()
+                return True
+            return False

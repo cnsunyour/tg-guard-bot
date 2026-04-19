@@ -231,3 +231,13 @@ class RedisKeys:
         TTL: 300 秒（5分钟）
         """
         return f"chat_admins:{chat_id}"
+
+    @staticmethod
+    def curfew_state(chat_id: int) -> str:
+        """宵禁状态键名
+
+        用于跟踪群组当前是否处于宵禁期，检测进入/退出转换
+        存储格式: "in" (宵禁中) 或 "out" (非宵禁)
+        TTL: 25 小时（覆盖每日周期）
+        """
+        return f"curfew_state:{chat_id}"
