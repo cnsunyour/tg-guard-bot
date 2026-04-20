@@ -50,6 +50,24 @@ class Group(Base):
         comment="活跃度跳过垃圾检测阈值（0=禁用，>0=启用并使用此阈值）",
     )
 
+    # 宵禁模式配置
+    curfew_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否启用宵禁模式")
+    curfew_start_hour: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="宵禁开始小时 (0-23)"
+    )
+    curfew_start_minute: Mapped[int] = mapped_column(
+        Integer, default=0, comment="宵禁开始分钟 (0-59)"
+    )
+    curfew_end_hour: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="宵禁结束小时 (0-23)"
+    )
+    curfew_end_minute: Mapped[int] = mapped_column(
+        Integer, default=0, comment="宵禁结束分钟 (0-59)"
+    )
+    curfew_timezone_offset: Mapped[int] = mapped_column(
+        Integer, default=8, comment="时区偏移（相对UTC小时数）"
+    )
+
     # 白名单配置
     is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否在白名单中")
 

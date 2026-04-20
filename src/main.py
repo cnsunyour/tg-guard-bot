@@ -91,13 +91,23 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     # 注册路由器
-    from src.bot.handlers import admin, antispam, cleanup, events, moderation, start, verification
+    from src.bot.handlers import (
+        admin,
+        antispam,
+        cleanup,
+        curfew,
+        events,
+        moderation,
+        start,
+        verification,
+    )
 
     dp.include_router(events.router)  # 系统事件（最高优先级）
     dp.include_router(start.router)  # 启动命令
     dp.include_router(admin.router)  # 管理命令
     dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
+    dp.include_router(curfew.router)  # 宵禁模式
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
 
@@ -137,6 +147,11 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     from src.bot.middlewares import ThrottleMiddleware
 
     dp.callback_query.middleware(ThrottleMiddleware(rate_limit=5, time_window=1))
+
+    # ✅ 注册宵禁中间件（在白名单之后，自动删除之前）
+    from src.bot.middlewares import CurfewMiddleware
+
+    dp.message.middleware(CurfewMiddleware())
 
     # ✅ 注册自动删除中间件（在群组中自动删除命令消息和响应）
     from src.bot.middlewares import AutoDeleteMiddleware
@@ -210,6 +225,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="antichannel", description="反频道马甲配置"),
         BotCommand(command="activity", description="活跃度系统开关"),
         BotCommand(command="activityskip", description="活跃度跳过阈值"),
+        BotCommand(command="curfew", description="宵禁模式配置"),
         # 群成员管理
         BotCommand(command="kick", description="踢出成员"),
         BotCommand(command="mute", description="禁言成员"),
@@ -274,9 +290,22 @@ async def on_startup(bot: Bot) -> None:
     logger.info("初始化 Telethon 客户端...")
     await init_telethon_client()
 
+    # 初始化健康检查器（记录启动时间）
+    from src.core.health import get_health_checker
+
+    get_health_checker()
+    logger.info("健康检查器已初始化")
+
     # 设置命令自动完成
     logger.info("设置命令自动完成...")
     await setup_bot_commands(bot)
+
+    # 启动宵禁调度器
+    from src.services.curfew_scheduler import get_curfew_scheduler
+
+    scheduler = get_curfew_scheduler(bot)
+    await scheduler.start()
+    logger.info("宵禁调度器已启动")
 
     logger.info("Bot 启动完成")
 
@@ -302,6 +331,16 @@ async def on_shutdown() -> None:
         logger.info("✅ CAS 客户端已关闭")
     except Exception as e:
         logger.warning(f"关闭 CAS 客户端失败: {e}")
+
+    # ✅ 关闭宵禁调度器
+    try:
+        from src.services.curfew_scheduler import get_curfew_scheduler
+
+        scheduler = get_curfew_scheduler(None)  # type: ignore[arg-type]
+        await scheduler.stop()
+        logger.info("✅ 宵禁调度器已关闭")
+    except Exception as e:
+        logger.warning(f"关闭宵禁调度器失败: {e}")
 
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)
@@ -334,7 +373,7 @@ async def main() -> None:
                 )
             ],
             # 发布版本（使用项目版本）
-            release="tg-guard-bot@0.1.0",
+            release="tg-guard-bot@1.3.0",
             # 附加上下文
             attach_stacktrace=True,
             # 过滤敏感数据
