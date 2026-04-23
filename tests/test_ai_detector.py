@@ -16,6 +16,8 @@ from src.ml.ai_detector import (
     BackupAIServiceProvider,
     HybridAIDetector,
     PrimaryAIServiceProvider,
+    _is_vision_model,
+    _read_image_as_base64,
 )
 
 
@@ -522,3 +524,134 @@ class TestBackupProvider:
 
         # 验证 backup 也被标记重建
         assert detector.backup._client_rebuild_pending is True
+
+
+class TestVisionHelpers:
+    """测试 Vision 基础工具：模型判定、读图、支持性检查"""
+
+    def test_is_vision_model_openai(self):
+        assert _is_vision_model("gpt-4o-mini")
+        assert _is_vision_model("gpt-4o")
+        assert _is_vision_model("GPT-4o-mini")  # 大小写不敏感
+        assert _is_vision_model("gpt-4-turbo-2024-04-09")
+
+    def test_is_vision_model_other_providers(self):
+        assert _is_vision_model("gemini-1.5-pro")
+        assert _is_vision_model("claude-3-5-sonnet-latest")
+        assert _is_vision_model("qwen2-vl-72b-instruct")
+        assert _is_vision_model("pixtral-12b")
+
+    def test_is_vision_model_non_vision(self):
+        assert not _is_vision_model("gpt-3.5-turbo")
+        assert not _is_vision_model("deepseek-chat")
+        assert not _is_vision_model("")
+
+    def test_is_vision_model_strips_provider_prefix(self):
+        """兼容 OpenRouter 等网关的 provider 前缀"""
+        # 单级前缀（OpenRouter 标准格式）
+        assert _is_vision_model("openai/gpt-4o-mini")
+        assert _is_vision_model("anthropic/claude-3-5-sonnet-latest")
+        assert _is_vision_model("google/gemini-1.5-pro")
+        # 多级前缀
+        assert _is_vision_model("openrouter/openai/gpt-4o")
+        # 前缀带路径，模型本身不支持
+        assert not _is_vision_model("openai/gpt-3.5-turbo")
+        assert not _is_vision_model("deepseek/deepseek-chat")
+        # 边界：尾部斜杠
+        assert not _is_vision_model("openai/")
+
+    def test_read_image_as_base64_png(self, tmp_path):
+        img_path = tmp_path / "test.png"
+        content = b"\x89PNG\r\n\x1a\nfakecontent"
+        img_path.write_bytes(content)
+
+        b64, mime, size = _read_image_as_base64(str(img_path))
+
+        import base64 as b64mod
+
+        assert b64mod.b64decode(b64) == content
+        assert mime == "image/png"
+        assert size == len(content)
+
+    def test_read_image_as_base64_unknown_suffix_fallback_jpeg(self, tmp_path):
+        img_path = tmp_path / "test.dat"
+        img_path.write_bytes(b"anything")
+        _, mime, _ = _read_image_as_base64(str(img_path))
+        assert mime == "image/jpeg"
+
+    def test_read_image_as_base64_missing_file(self, tmp_path):
+        import pytest
+
+        with pytest.raises(FileNotFoundError):
+            _read_image_as_base64(str(tmp_path / "nope.jpg"))
+
+
+class TestAIServiceProviderVision:
+    """测试 AIServiceProvider 的 Vision 能力判定"""
+
+    def test_supports_vision_gpt4o(self, monkeypatch):
+        cfg = AIServiceConfig(
+            enabled=True, api_key="k", api_base="https://x.test/v1", model="gpt-4o-mini"
+        )
+        p = PrimaryAIServiceProvider.__new__(PrimaryAIServiceProvider)
+        # 复用父类初始化但绕过 settings 依赖
+        from src.ml.ai_detector import AIServiceProvider
+
+        AIServiceProvider.__init__(p, "primary", cfg)
+        assert p.supports_vision is True
+
+    def test_supports_vision_text_only_model(self):
+        cfg = AIServiceConfig(
+            enabled=True, api_key="k", api_base="https://x.test/v1", model="deepseek-chat"
+        )
+        p = PrimaryAIServiceProvider.__new__(PrimaryAIServiceProvider)
+        from src.ml.ai_detector import AIServiceProvider
+
+        AIServiceProvider.__init__(p, "primary", cfg)
+        assert p.supports_vision is False
+
+    def test_process_vision_result_parses_extracted_text(self):
+        cfg = AIServiceConfig(
+            enabled=True,
+            api_key="k",
+            api_base="https://x.test/v1",
+            model="gpt-4o-mini",
+            threshold=0.8,
+        )
+        from src.ml.ai_detector import AIServiceProvider
+
+        p = PrimaryAIServiceProvider.__new__(PrimaryAIServiceProvider)
+        AIServiceProvider.__init__(p, "primary", cfg)
+
+        raw = {
+            "is_spam": True,
+            "confidence": 0.95,
+            "reason": "赌博广告",
+            "extracted_text": "稳赚不赔 加微信 abc123",
+        }
+        detection = p._process_vision_result(raw)
+        assert detection.is_spam is True
+        assert detection.confidence == 0.95
+        assert detection.stage == "ai_vision"
+        assert detection.details["extracted_text"] == "稳赚不赔 加微信 abc123"
+        assert detection.reasons == ["赌博广告"]
+
+    def test_process_vision_result_below_threshold(self):
+        cfg = AIServiceConfig(
+            enabled=True,
+            api_key="k",
+            api_base="https://x.test/v1",
+            model="gpt-4o-mini",
+            threshold=0.8,
+        )
+        from src.ml.ai_detector import AIServiceProvider
+
+        p = PrimaryAIServiceProvider.__new__(PrimaryAIServiceProvider)
+        AIServiceProvider.__init__(p, "primary", cfg)
+
+        raw = {"is_spam": True, "confidence": 0.5, "reason": "轻微可疑"}
+        detection = p._process_vision_result(raw)
+        # 置信度低于阈值 → is_spam 最终为 False
+        assert detection.is_spam is False
+        assert detection.confidence == 0.5
+        assert detection.details["extracted_text"] == ""

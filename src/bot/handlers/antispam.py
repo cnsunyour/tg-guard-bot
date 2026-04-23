@@ -1506,7 +1506,8 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         if await check_non_text_message(message, bot, "photo", activity_enabled=True):
             return  # 活跃度不足，消息已被删除
 
-    # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任（activity 变量后续也用于 Vision 置信度调整）
+    activity: int | None = None
     if activity_system_enabled:
         activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
         global_threshold = settings.activity_skip_spam_check_threshold
@@ -1542,17 +1543,41 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         logger.warning("图片消息缺少 photo 数据")
         return
 
+    # ✅ 构建 Vision 直判需要的上下文：caption + 群组对话上下文
+    caption = (message.caption or "").strip() or None
+    context_text: str | None = None
+    if settings.context_enabled and settings.ai_spam_enabled:
+        try:
+            context = await ContextService.get_conversation_context(message)
+            context_text = ContextService.format_context_for_ai(
+                context,
+                caption or "[图片消息]",
+                message.message_id,
+                chat_title=message.chat.title,
+                chat_description=message.chat.description,
+            )
+        except Exception as e:
+            logger.warning(f"获取图片消息上下文失败，使用无上下文检测: {e}")
+            context_text = None
+
+    # 确认模式下跳过自动训练入库，避免管理员审批前先落库
+    skip_auto_train = bool(group and group.spam_confirm_enabled)
+
     with managed_temp_file(suffix=".jpg") as temp_file_path:
         photo = message.photo[-1]  # 获取最大尺寸的图片
         logger.debug(f"开始下载图片 [file_id:{photo.file_id}]")
         await bot.download(photo, destination=temp_file_path)
         logger.debug(f"图片已下载到临时文件: {temp_file_path}")
 
-        # 检测图片
+        # 检测图片（Vision 直判优先，失败降级 OCR）
         result = await detector.detect_image(
             image_path=temp_file_path,
             user_id=message.from_user.id,
             chat_id=message.chat.id,
+            caption=caption,
+            context_text=context_text,
+            activity=activity,
+            skip_auto_train=skip_auto_train,
         )
     # 注意：临时文件在退出 with 块时自动删除
 
@@ -1715,6 +1740,8 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         return  # 消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
+    # activity 变量在后续 detect_image 也会用到，提升作用域
+    activity: int | None = None
     if activity_system_enabled:
         activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
         global_threshold = settings.activity_skip_spam_check_threshold
@@ -1746,10 +1773,41 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
     # 获取检测器
     detector = get_detector()
 
-    # 检查 OCR 是否可用
-    if not detector.ocr_extractor.is_available:
-        logger.debug("OCR 不可用，跳过贴纸检测")
+    # 检查 OCR 或 Vision 是否可用（Vision 启用时不强制要求本地 OCR）
+    vision_available = (
+        settings.ai_spam_vision_enabled
+        and detector.ai_detector.enabled
+        and detector.ai_detector.any_vision_provider_available
+    )
+    if not detector.ocr_extractor.is_available and not vision_available:
+        logger.debug("OCR 与 AI Vision 都不可用，跳过贴纸检测")
         return
+
+    # ✅ 构建贴纸 caption（emoji + 贴纸包名）和群组对话上下文
+    sticker_meta_parts: list[str] = ["Telegram 贴纸"]
+    if message.sticker:
+        if message.sticker.emoji:
+            sticker_meta_parts.append(f"Emoji: {message.sticker.emoji}")
+        if message.sticker.set_name:
+            sticker_meta_parts.append(f"贴纸包: {message.sticker.set_name}")
+    sticker_caption = "\n".join(sticker_meta_parts)
+
+    sticker_context_text: str | None = None
+    if settings.context_enabled and settings.ai_spam_enabled:
+        try:
+            sticker_context = await ContextService.get_conversation_context(message)
+            sticker_context_text = ContextService.format_context_for_ai(
+                sticker_context,
+                sticker_caption,
+                message.message_id,
+                chat_title=message.chat.title,
+                chat_description=message.chat.description,
+            )
+        except Exception as e:
+            logger.warning(f"获取贴纸消息上下文失败，使用无上下文检测: {e}")
+            sticker_context_text = None
+
+    sticker_skip_auto_train = bool(group and group.spam_confirm_enabled)
 
     # 使用 context manager 确保临时文件清理
     try:
@@ -1899,11 +1957,15 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                                     # 其他模式直接转 RGB
                                     img.convert("RGB").save(png_file_path, "PNG")
 
-                            # 检测当前帧中的文字
+                            # 检测当前帧（Vision 直判优先，失败降级 OCR）
                             result = await detector.detect_image(
                                 image_path=png_file_path,
                                 user_id=message.from_user.id,
                                 chat_id=message.chat.id,
+                                caption=sticker_caption,
+                                context_text=sticker_context_text,
+                                activity=activity,
+                                skip_auto_train=sticker_skip_auto_train,
                             )
 
                             # 如果检测到垃圾，立即停止检测
@@ -1957,11 +2019,15 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         logger.error(f"贴纸格式转换失败: {e}")
                         return
 
-                    # 检测贴纸图片中的文字
+                    # 检测贴纸图片（Vision 直判优先，失败降级 OCR）
                     result = await detector.detect_image(
                         image_path=png_file_path,
                         user_id=message.from_user.id,
                         chat_id=message.chat.id,
+                        caption=sticker_caption,
+                        context_text=sticker_context_text,
+                        activity=activity,
+                        skip_auto_train=sticker_skip_auto_train,
                     )
 
         # 处理视频 WebM 贴纸
@@ -2015,11 +2081,15 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             img.save(png_file_path, "PNG")
                             logger.debug(f"第 {frame_idx} 帧已保存为 PNG: {png_file_path}")
 
-                            # 检测当前帧中的文字
+                            # 检测当前帧（Vision 直判优先，失败降级 OCR）
                             result = await detector.detect_image(
                                 image_path=png_file_path,
                                 user_id=message.from_user.id,
                                 chat_id=message.chat.id,
+                                caption=sticker_caption,
+                                context_text=sticker_context_text,
+                                activity=activity,
+                                skip_auto_train=sticker_skip_auto_train,
                             )
 
                             # 如果检测到垃圾，立即停止检测
