@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from src.core.config import settings
+
 
 class AnalysisResult(TypedDict):
     """规则引擎分析结果类型"""
@@ -394,7 +396,6 @@ class RuleEngine:
         # 检查 URL
         has_suspicious_url, urls, url_reason = self.check_urls(text)
         if has_suspicious_url:
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.8)
             result["reasons"].append(url_reason)
             result["details"]["urls"] = urls
@@ -402,13 +403,11 @@ class RuleEngine:
         # 检查联系方式
         has_contact, contact_type = self.check_contact_info(text)
         if has_contact:
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.8)
             result["reasons"].append(f"包含联系方式: {contact_type}")
 
         # 检查重复字符
         if self.check_repeated_chars(text):
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.7)
             result["reasons"].append("重复字符刷屏")
 
@@ -419,9 +418,11 @@ class RuleEngine:
 
         # 检查 Emoji 刷屏
         if self.check_emoji_flood(text):
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.65)
             result["reasons"].append("Emoji 刷屏")
+
+        if result["confidence"] >= settings.spam_threshold_rule:
+            result["is_spam"] = True
 
         return result
 
