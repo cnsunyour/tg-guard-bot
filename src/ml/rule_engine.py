@@ -372,10 +372,9 @@ class RuleEngine:
         if not text:
             return result
 
-        # ✅ 新增：正则规则检测（替代原有的 check_keywords）
+        # 正则规则检测（替代原有的 check_keywords）
         is_match, rule, matched_text = self.regex_engine.check(text)
         if is_match and rule:
-            result["is_spam"] = True
             result["confidence"] = rule.confidence
             result["reasons"].append(f"规则匹配: {rule.description}")
             result["details"].update(
@@ -389,6 +388,7 @@ class RuleEngine:
 
             # 🔴 极高危险等级直接返回，跳过后续检测
             if rule.risk_level == SpamRiskLevel.CRITICAL:
+                result["is_spam"] = True
                 return result
 
         # 原有检测逻辑：URL + 联系方式 + 其他特征
