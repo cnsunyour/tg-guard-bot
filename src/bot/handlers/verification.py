@@ -396,7 +396,14 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
 
     logger.info(f"收到加入请求: 用户 {username} ({user_id}) 请求加入群组 {chat_id}")
 
-    # ✅ 新增：记录 username 映射
+    # 加入请求去重：1分钟内同一用户同一群组只处理一次
+    redis = get_redis()
+    dedup_key = RedisKeys.join_request_dedup(chat_id, user_id)
+    if not await redis.set(dedup_key, "1", nx=True, ex=60):
+        logger.debug(f"用户 {user_id} 在群组 {chat_id} 的加入请求已被处理，跳过重复请求")
+        return
+
+    # 记录 username 映射
     if user.username:
         from src.services.username_mapping import UsernameMappingService
 

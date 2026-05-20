@@ -241,3 +241,12 @@ class RedisKeys:
         TTL: 25 小时（覆盖每日周期）
         """
         return f"curfew_state:{chat_id}"
+
+    @staticmethod
+    def join_request_dedup(chat_id: int, user_id: int) -> str:
+        """加入请求去重键名
+
+        防止用户连续多次点击申请加入触发重复处理
+        TTL: 60 秒
+        """
+        return f"join_request_dedup:{chat_id}:{user_id}"

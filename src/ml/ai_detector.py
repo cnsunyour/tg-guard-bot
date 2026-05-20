@@ -11,18 +11,98 @@
 """
 
 import asyncio
+import base64
 import json
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
 from loguru import logger
 
 from src.core.config import settings
+
+# ============================================================================
+# Vision 支持工具（模型判定 + 图片编码）
+# ============================================================================
+
+# 多模态模型白名单（按 model 名正则判断）
+_VISION_MODEL_PATTERNS = [
+    re.compile(r"^gpt-4o", re.IGNORECASE),
+    re.compile(r"^chatgpt-4o", re.IGNORECASE),
+    re.compile(r"^gpt-4-turbo", re.IGNORECASE),
+    re.compile(r"^gpt-4-vision", re.IGNORECASE),
+    re.compile(r"^gpt-5", re.IGNORECASE),
+    re.compile(r"^o1", re.IGNORECASE),
+    re.compile(r"^claude-.*(sonnet|opus|haiku)", re.IGNORECASE),
+    re.compile(r"^gemini-", re.IGNORECASE),
+    re.compile(r"^qwen.*vl", re.IGNORECASE),
+    re.compile(r"^qwen.*-omni", re.IGNORECASE),
+    re.compile(r"^glm-.*v", re.IGNORECASE),
+    re.compile(r"^step-.*v", re.IGNORECASE),
+    re.compile(r"^yi-vl", re.IGNORECASE),
+    re.compile(r"^internvl", re.IGNORECASE),
+    re.compile(r"^llama-3\.2-.*vision", re.IGNORECASE),
+    re.compile(r"^llama-4", re.IGNORECASE),
+    re.compile(r"^pixtral", re.IGNORECASE),
+    re.compile(r"^deepseek.*vl", re.IGNORECASE),
+    re.compile(r"^grok-.*vision", re.IGNORECASE),
+    re.compile(r"^kimi-k2\.", re.IGNORECASE),
+    re.compile(r"^doubao-seed-2", re.IGNORECASE),
+]
+
+
+def _is_vision_model(model: str) -> bool:
+    """判断模型名是否支持多模态视觉
+
+    兼容带 provider 前缀的模型名（OpenRouter 等网关常见）：
+    - ``openai/gpt-4o-mini`` → 取 ``gpt-4o-mini``
+    - ``openrouter/anthropic/claude-3-5-sonnet`` → 取 ``claude-3-5-sonnet``
+    判定忽略大小写。
+    """
+    if not model:
+        return False
+    # 只取最后一个 "/" 之后的模型名进行判定
+    base_name = model.rsplit("/", 1)[-1].strip()
+    if not base_name:
+        return False
+    return any(p.search(base_name) for p in _VISION_MODEL_PATTERNS)
+
+
+_VISION_MIME_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".webp": "image/webp",
+}
+
+
+def _read_image_as_base64(image_path: str) -> tuple[str, str, int]:
+    """读取图片并 base64 编码（同步，调用方需用 run_in_executor 包裹）
+
+    Args:
+        image_path: 图片文件路径
+
+    Returns:
+        (base64 字符串, MIME 类型, 原始字节数)
+
+    Raises:
+        FileNotFoundError: 文件不存在或不是文件
+    """
+    path_obj = Path(image_path).resolve()
+    if not path_obj.exists() or not path_obj.is_file():
+        raise FileNotFoundError(f"图片文件不存在: {image_path}")
+    mime = _VISION_MIME_MAP.get(path_obj.suffix.lower(), "image/jpeg")
+    with open(path_obj, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode("ascii"), mime, len(data)
+
 
 # ============================================================================
 # 数据结构
@@ -101,6 +181,24 @@ class AIServiceError(Exception):
         super().__init__(f"[{provider}] {message}")
 
 
+class VisionUnsupportedError(Exception):
+    """没有启用且支持 Vision 的 provider（模型名判定不支持、或都未启用）"""
+
+    pass
+
+
+class VisionAllFailedError(Exception):
+    """所有支持 Vision 的 provider 调用都失败"""
+
+    def __init__(self, primary_error: str = "", backup_error: str = ""):
+        self.primary_error = primary_error
+        self.backup_error = backup_error
+        super().__init__(
+            f"Vision 所有服务商都失败: primary={primary_error or '未参与'}, "
+            f"backup={backup_error or '未参与'}"
+        )
+
+
 # ============================================================================
 # System Prompts
 # ============================================================================
@@ -163,6 +261,61 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
 - 诈骗欺诈：刷单、兼职、贷款、投资理财等
 - 引流推广：加群、关注公众号、下载 APP 等
 - 正常消息：日常聊天、技术讨论、咨询问题、回答他人问题等
+
+重要：只返回 JSON，不要返回其他任何内容。"""
+
+# System Prompt - Vision 垃圾检测（图片 + 可选 caption + 可选上下文）
+SYSTEM_PROMPT_VISION = """你是垃圾信息检测助手。请识别图片内容（含文字、二维码、logo、版式），结合可选的图片文字说明（caption）判断该图片是否为垃圾信息。
+
+严格按照以下 JSON 格式返回结果，不要返回任何其他内容：
+{
+  "is_spam": true 或 false,
+  "confidence": 0.00-1.00 之间的数字（保留两位小数，"是垃圾"的概率）,
+  "reason": "简短说明判断理由（一句话）",
+  "extracted_text": "图片中全部可读文字的完整提取（含二维码解码、水印联系方式；无则空串）"
+}
+
+**confidence 语义**：始终表示"是垃圾"的置信度
+- 判定为垃圾（is_spam=true）→ confidence 较高，如 0.90
+- 判定为正常（is_spam=false）→ confidence 较低，如 0.10
+
+重点识别信号：
+- 二维码 + 文案（加群/加好友/领红包/扫码关注）
+- 博彩网站截图、色情图片、成人服务广告
+- 推广海报版式（大字号促销、联系方式水印、带链接的引流图）
+- 品牌 logo 冒充（钓鱼截图）
+- 诈骗引流（刷单、兼职、贷款、投资理财截图）
+
+正常图片示例：日常分享、技术截图、表情包、宠物照片、风景照、UI 讨论截图等。
+
+重要：只返回 JSON，不要返回其他任何内容。"""
+
+# System Prompt - Vision + 群组对话上下文
+SYSTEM_PROMPT_VISION_WITH_CONTEXT = """你是垃圾信息检测助手。结合图片内容、可选的图片文字说明（caption）和群组对话上下文，判断该图片是否为垃圾信息。
+
+严格按照以下 JSON 格式返回结果，不要返回任何其他内容：
+{
+  "is_spam": true 或 false,
+  "confidence": 0.00-1.00 之间的数字（保留两位小数，"是垃圾"的概率）,
+  "reason": "简短说明判断理由（一句话）",
+  "extracted_text": "图片中全部可读文字的完整提取（含二维码解码、水印联系方式；无则空串）"
+}
+
+**重要：请结合对话上下文进行判断**
+- 如果提供了【对话回复链】，优先参考回复链判断图片是否为正常对话的一部分
+- 如果提供了【群组最近对话】，参考群组讨论主题判断图片是否相关
+- 示例：群里问"这个手机壳哪里买" → 回复淘宝截图 → 判断为正常回答而非垃圾
+
+**confidence 语义**：始终表示"是垃圾"的置信度
+- 判定为垃圾（is_spam=true）→ confidence 较高，如 0.90
+- 判定为正常（is_spam=false）→ confidence 较低，如 0.10
+
+重点识别信号：
+- 二维码 + 文案（加群/加好友/领红包/扫码关注）
+- 博彩网站截图、色情图片、成人服务广告
+- 推广海报版式（大字号促销、联系方式水印、带链接的引流图）
+- 品牌 logo 冒充（钓鱼截图）
+- 诈骗引流（刷单、兼职、贷款、投资理财截图）
 
 重要：只返回 JSON，不要返回其他任何内容。"""
 
@@ -506,6 +659,188 @@ class AIServiceProvider(ABC):
                 "raw_confidence": confidence,
                 "threshold": self.config.threshold,
                 "model": self.config.model,
+            },
+            provider=self.name,
+        )
+
+    # ------------------------------------------------------------------
+    # Vision 直判图片（多模态）
+    # ------------------------------------------------------------------
+
+    @property
+    def supports_vision(self) -> bool:
+        """该 provider 配置的模型是否支持多模态视觉"""
+        return _is_vision_model(self.config.model)
+
+    async def detect_image(
+        self,
+        image_b64: str,
+        mime: str,
+        *,
+        caption: str | None = None,
+        context_text: str | None = None,
+    ) -> AIDetectionResult:
+        """Vision 直判图片是否为垃圾（带重试）
+
+        Args:
+            image_b64: base64 编码的图片内容
+            mime: 图片 MIME 类型（如 image/jpeg）
+            caption: 图片自带的文字说明（可选）
+            context_text: 格式化后的群组对话上下文（可选）
+
+        Returns:
+            AIDetectionResult，details 含 extracted_text
+
+        Raises:
+            AIServiceError: 所有重试失败
+        """
+        use_context = bool(context_text and context_text.strip())
+        system_prompt = SYSTEM_PROMPT_VISION_WITH_CONTEXT if use_context else SYSTEM_PROMPT_VISION
+
+        text_parts: list[str] = []
+        if use_context:
+            text_parts.append(f"【群组对话上下文】\n{context_text}")
+        if caption:
+            text_parts.append(f"【图片说明 / caption】\n{caption}")
+        text_parts.append("请按约定的 JSON 格式返回对该图片的垃圾判定结果。")
+
+        user_content = [
+            {"type": "text", "text": "\n\n".join(text_parts)},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime};base64,{image_b64}",
+                    "detail": settings.ai_spam_vision_detail,
+                },
+            },
+        ]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                raw = await self._call_api_vision(messages)
+                detection = self._process_vision_result(raw)
+                detection.attempt_count = attempt + 1
+                return detection
+            except Exception as e:
+                formatted_error = self._format_error(e)
+                if attempt < self.config.max_retries:
+                    wait_time = 0.5 * (2**attempt)
+                    logger.warning(
+                        f"🖼️ {self.name} Vision 检测失败，重试中... "
+                        f"[attempt={attempt+1}/{self.config.max_retries+1}] "
+                        f"[wait={wait_time}s] [error={formatted_error}]"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"❌ {self.name} Vision 检测失败，已达最大重试次数 "
+                        f"[error={formatted_error}]"
+                    )
+                    raise AIServiceError(
+                        self.name, f"Vision 所有重试失败: {formatted_error}"
+                    ) from e
+
+        raise AIServiceError(self.name, "Vision 所有重试已耗尽")
+
+    async def _call_api_vision(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        """发起 Vision HTTP 请求，返回解析后的 JSON dict"""
+        url = f"{self.config.api_base.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "temperature": self.config.temperature,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        }
+
+        # Vision 请求超时独立配置（图片 payload 大，通常比文本检测长）
+        vision_timeout = max(settings.ai_spam_vision_timeout, self.config.timeout)
+
+        client = await self._ensure_client()
+        try:
+            response = await client.post(url, json=payload, headers=headers, timeout=vision_timeout)
+            response.raise_for_status()
+        except httpx.TimeoutException as e:
+            logger.warning(
+                f"⏱️ {self.name} Vision API 请求超时 "
+                f"[timeout_seconds={vision_timeout}] "
+                f"[error={self._format_error(e)}]"
+            )
+            raise
+        finally:
+            self._client_last_used_at = datetime.now()
+
+        data = response.json()
+        if "choices" not in data or len(data["choices"]) == 0:
+            raise ValueError("Vision API 响应格式错误：缺少 choices")
+
+        content = data["choices"][0].get("message", {}).get("content", "")
+        if not content:
+            raise ValueError("Vision API 响应内容为空")
+
+        try:
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+            else:
+                raise ValueError(f"无法解析 Vision 响应为 JSON: {content[:200]}")
+
+        if not isinstance(result, dict):
+            raise ValueError(f"Vision 响应不是字典: {type(result)}")
+        if "is_spam" not in result or "confidence" not in result:
+            raise ValueError(f"Vision 响应缺少必需字段: {result}")
+
+        return result
+
+    def _process_vision_result(self, result: dict[str, Any]) -> AIDetectionResult:
+        """将 Vision 响应转为 AIDetectionResult（含 extracted_text）"""
+        import math
+
+        raw_is_spam = result.get("is_spam", False)
+        if isinstance(raw_is_spam, bool):
+            is_spam = raw_is_spam
+        elif isinstance(raw_is_spam, str):
+            is_spam = raw_is_spam.lower() in ("true", "1", "yes")
+        else:
+            is_spam = bool(raw_is_spam)
+
+        raw_confidence = result.get("confidence", 0.0)
+        try:
+            confidence = float(raw_confidence)
+            if not math.isfinite(confidence):
+                logger.warning(f"Vision 返回非法 confidence: {raw_confidence}，使用 0.0")
+                confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Vision 无效 confidence: {raw_confidence} ({e})，使用 0.0")
+            confidence = 0.0
+
+        raw_reason = result.get("reason", "无理由")
+        reason = str(raw_reason) if raw_reason else "无理由"
+        extracted_text = str(result.get("extracted_text", "") or "")
+
+        final_is_spam = is_spam and confidence >= self.config.threshold
+
+        return AIDetectionResult(
+            is_spam=final_is_spam,
+            confidence=confidence,
+            stage="ai_vision",
+            reasons=[reason] if reason else [],
+            details={
+                "raw_is_spam": is_spam,
+                "raw_confidence": confidence,
+                "threshold": self.config.threshold,
+                "model": self.config.model,
+                "extracted_text": extracted_text,
             },
             provider=self.name,
         )
@@ -996,6 +1331,100 @@ class HybridAIDetector:
         )
         raise RuntimeError(f"AI 上下文检测失败: primary={primary_error}, backup={backup_error}")
 
+    async def detect_image_with_context(
+        self,
+        image_b64: str,
+        mime: str,
+        *,
+        caption: str | None = None,
+        context_text: str | None = None,
+    ) -> dict[str, Any]:
+        """带上下文的 Vision 直判图片（主备回退）
+
+        Args:
+            image_b64: base64 编码的图片
+            mime: 图片 MIME 类型
+            caption: 图片说明（可选）
+            context_text: 格式化后的群组对话上下文（可选）
+
+        Returns:
+            检测结果 dict（字段对齐 detect_with_context）
+
+        Raises:
+            VisionUnsupportedError: 所有启用的 provider 都不支持 vision
+            VisionAllFailedError: 所有支持 vision 的 provider 调用都失败
+        """
+        candidates: list[AIServiceProvider] = []
+        if self.primary.is_available and self.primary.supports_vision:
+            candidates.append(self.primary)
+        if self.backup.is_available and self.backup.supports_vision:
+            candidates.append(self.backup)
+
+        if not candidates:
+            raise VisionUnsupportedError(
+                "没有支持 Vision 的 AI provider（检查 ai_spam_model / ai_spam_backup_model 是否多模态）"
+            )
+
+        primary_error = ""
+        backup_error = ""
+
+        for provider in candidates:
+            if self._is_circuit_open(provider):
+                logger.debug(f"🔌 {provider.name} 熔断中，跳过 Vision 调用")
+                continue
+
+            # 切换到备份时主动关闭主的连接（对齐现有 detect_with_context 行为）
+            if provider is self.backup and self.primary.is_available:
+                self.primary.request_client_rebuild("switching_to_backup")
+                await self.primary.close()
+                logger.info(f"🔄 Vision 切换到 {provider.name}...")
+
+            try:
+                logger.debug(f"🖼️ 尝试使用 {provider.name} Vision 检测...")
+                result = await provider.detect_image(
+                    image_b64,
+                    mime,
+                    caption=caption,
+                    context_text=context_text,
+                )
+                self._record_success(provider)
+                logger.info(
+                    f"✅ {provider.name} Vision 检测成功 [is_spam={result.is_spam}] "
+                    f"[confidence={result.confidence:.2f}] "
+                    f"[成功率:{self._get_success_rate(provider.name):.1%}] "
+                    f"[{result.reasons[0] if result.reasons else '无原因'}]"
+                )
+                return {
+                    "is_spam": result.is_spam,
+                    "confidence": result.confidence,
+                    "stage": result.stage,
+                    "reasons": result.reasons,
+                    "details": {
+                        **result.details,
+                        "provider": result.provider,
+                        "attempt_count": result.attempt_count,
+                    },
+                }
+            except AIServiceError as e:
+                formatted_error = provider._format_error(e)
+                self._record_failure(provider, formatted_error)
+                logger.warning(f"❌ {provider.name} Vision 检测失败: {formatted_error}")
+                if provider is self.primary:
+                    primary_error = formatted_error
+                else:
+                    backup_error = formatted_error
+            except Exception as e:
+                formatted_error = provider._format_error(e)
+                self._record_failure(provider, formatted_error)
+                logger.error(f"💥 {provider.name} Vision 意外错误: {formatted_error}")
+                if provider is self.primary:
+                    primary_error = formatted_error
+                else:
+                    backup_error = formatted_error
+
+        # 所有支持 vision 的 provider 都失败或都熔断
+        raise VisionAllFailedError(primary_error, backup_error)
+
     async def close(self):
         """关闭所有服务商的 HTTP 客户端"""
         if self.primary.is_available:
@@ -1138,6 +1567,33 @@ class AISpamDetector:
             }
 
         return await self._detector.detect_with_context(text, context_text)
+
+    @property
+    def any_vision_provider_available(self) -> bool:
+        """是否至少有一家启用且支持 vision 的 provider"""
+        return (self._detector.primary.is_available and self._detector.primary.supports_vision) or (
+            self._detector.backup.is_available and self._detector.backup.supports_vision
+        )
+
+    async def detect_image_with_context(
+        self,
+        image_b64: str,
+        mime: str,
+        *,
+        caption: str | None = None,
+        context_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Vision 直判图片（带上下文 + 主备回退）
+
+        Raises:
+            VisionUnsupportedError: AI 未启用或没有支持 vision 的 provider
+            VisionAllFailedError: 所有 vision provider 都失败
+        """
+        if not self.enabled:
+            raise VisionUnsupportedError("AI 检测未启用")
+        return await self._detector.detect_image_with_context(
+            image_b64, mime, caption=caption, context_text=context_text
+        )
 
     async def close(self):
         """关闭 HTTP 客户端"""

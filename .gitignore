@@ -39,6 +39,7 @@ ENV/
 # 工具配置
 .serena/
 .tool-versions
+.zed/
 
 # 环境变量
 .env
@@ -109,3 +110,6 @@ dmypy.json
 # Alembic
 alembic/versions/*.pyc
 coverage.xml
+
+# cloudflare pages 部署
+.wrangler/

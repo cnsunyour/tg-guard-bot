@@ -109,6 +109,27 @@ class Settings(BaseSettings):
     ai_spam_backup_timeout: int = Field(default=10, description="备份超时时间（秒）")
     ai_spam_backup_max_retries: int = Field(default=2, description="备份最大重试次数")
 
+    # ========== AI Vision 直判图片配置 ==========
+    # Vision 直判：图片直接送 AI 判垃圾（省一次 OCR 调用，保留视觉信息）
+    ai_spam_vision_enabled: bool = Field(
+        default=True,
+        description="AI 启用时是否优先用 Vision 直判图片（需 ai_spam_enabled=true 且模型支持多模态）",
+    )
+    ai_spam_vision_detail: str = Field(
+        default="low",
+        description="OpenAI image_url.detail: low(~85 tokens/图) / high(1000+) / auto",
+    )
+    ai_spam_vision_max_image_bytes: int = Field(
+        default=5_242_880,  # 5MB
+        ge=1,
+        description="Vision 接受的最大图片字节数，超限降级到传统 OCR 管道",
+    )
+    ai_spam_vision_timeout: int = Field(
+        default=30,
+        ge=1,
+        description="Vision 请求超时时间（秒），通常比文本检测更长",
+    )
+
     # 上下文检测配置
     context_enabled: bool = Field(default=False, description="是否启用上下文检测（需要 AI 检测）")
     context_message_count: int = Field(default=10, ge=1, description="群组上下文消息数量")
@@ -297,6 +318,15 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return v
 
+    @field_validator("ai_spam_vision_detail", mode="after")
+    @classmethod
+    def validate_vision_detail(cls, v: str) -> str:
+        """校验 Vision 的 detail 取值"""
+        allowed = {"low", "high", "auto"}
+        if v not in allowed:
+            raise ValueError(f"ai_spam_vision_detail 必须是 {allowed} 之一，当前: {v}")
+        return v
+
     @field_validator("friendly_keys", mode="before")
     @classmethod
     def parse_friendly_keys(cls, v: str | list[dict]) -> list[dict]:
@@ -338,6 +368,16 @@ class Settings(BaseSettings):
                     "请在 .env 文件中设置 REDIS_PASSWORD\n"
                     "建议：使用至少 16 位的随机密码"
                 )
+
+        # Vision 依赖 AI 检测启用；不一致则自动关闭并记录
+        if self.ai_spam_vision_enabled and not self.ai_spam_enabled:
+            import warnings
+
+            warnings.warn(
+                "ai_spam_vision_enabled=true 但 ai_spam_enabled=false，已自动关闭 Vision 直判",
+                stacklevel=2,
+            )
+            object.__setattr__(self, "ai_spam_vision_enabled", False)
 
     @property
     def database_url(self) -> str:

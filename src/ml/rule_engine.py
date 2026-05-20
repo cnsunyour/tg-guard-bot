@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from src.core.config import settings
+
 
 class AnalysisResult(TypedDict):
     """规则引擎分析结果类型"""
@@ -370,10 +372,9 @@ class RuleEngine:
         if not text:
             return result
 
-        # ✅ 新增：正则规则检测（替代原有的 check_keywords）
+        # 正则规则检测（替代原有的 check_keywords）
         is_match, rule, matched_text = self.regex_engine.check(text)
         if is_match and rule:
-            result["is_spam"] = True
             result["confidence"] = rule.confidence
             result["reasons"].append(f"规则匹配: {rule.description}")
             result["details"].update(
@@ -387,6 +388,7 @@ class RuleEngine:
 
             # 🔴 极高危险等级直接返回，跳过后续检测
             if rule.risk_level == SpamRiskLevel.CRITICAL:
+                result["is_spam"] = True
                 return result
 
         # 原有检测逻辑：URL + 联系方式 + 其他特征
@@ -394,7 +396,6 @@ class RuleEngine:
         # 检查 URL
         has_suspicious_url, urls, url_reason = self.check_urls(text)
         if has_suspicious_url:
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.8)
             result["reasons"].append(url_reason)
             result["details"]["urls"] = urls
@@ -402,13 +403,11 @@ class RuleEngine:
         # 检查联系方式
         has_contact, contact_type = self.check_contact_info(text)
         if has_contact:
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.8)
             result["reasons"].append(f"包含联系方式: {contact_type}")
 
         # 检查重复字符
         if self.check_repeated_chars(text):
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.7)
             result["reasons"].append("重复字符刷屏")
 
@@ -419,9 +418,11 @@ class RuleEngine:
 
         # 检查 Emoji 刷屏
         if self.check_emoji_flood(text):
-            result["is_spam"] = True
             result["confidence"] = max(result["confidence"], 0.65)
             result["reasons"].append("Emoji 刷屏")
+
+        if result["confidence"] >= settings.spam_threshold_rule:
+            result["is_spam"] = True
 
         return result
 

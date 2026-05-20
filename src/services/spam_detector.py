@@ -11,7 +11,12 @@ from loguru import logger
 from src.core.config import settings
 from src.core.executor import run_in_executor  # ✅ P1-11: 导入线程池执行器
 from src.core.utils import mask_text
-from src.ml.ai_detector import get_ai_detector
+from src.ml.ai_detector import (
+    VisionAllFailedError,
+    VisionUnsupportedError,
+    _read_image_as_base64,
+    get_ai_detector,
+)
 from src.ml.classifier import get_classifier
 from src.ml.embedder import get_embedder
 from src.ml.ocr import get_ocr_extractor
@@ -687,17 +692,64 @@ class SpamDetector:
 
         return result
 
-    async def detect_image(self, image_path: str, user_id: int, chat_id: int) -> DetectionResult:
-        """检测图片是否为垃圾信息（通过 OCR 提取文字）
+    async def detect_image(
+        self,
+        image_path: str,
+        user_id: int,
+        chat_id: int,
+        *,
+        caption: str | None = None,
+        context_text: str | None = None,
+        activity: int | None = None,
+        skip_auto_train: bool = False,
+    ) -> DetectionResult:
+        """检测图片是否为垃圾信息（分支入口）
+
+        优先走 AI Vision 直判（省一次 OCR 调用 + 保留视觉信息）。
+        Vision 不可用或失败时降级到 OCR → 文本管道。
 
         Args:
             image_path: 图片文件路径
             user_id: 用户 ID
             chat_id: 群组 ID
+            caption: 图片文字说明（可选，Vision 会一起送 AI 判断）
+            context_text: 格式化后的群组对话上下文（可选，仅 Vision 使用）
+            activity: 用户活跃度（用于 Vision 路径的置信度调整）
+            skip_auto_train: 确认模式下跳过自动入库训练样本
 
         Returns:
             检测结果字典
         """
+        # Vision 直判路径
+        if (
+            settings.ai_spam_vision_enabled
+            and self.ai_detector.enabled
+            and self.ai_detector.any_vision_provider_available
+        ):
+            try:
+                return await self._detect_image_via_vision(
+                    image_path=image_path,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    caption=caption,
+                    context_text=context_text,
+                    activity=activity,
+                    skip_auto_train=skip_auto_train,
+                )
+            except VisionUnsupportedError as e:
+                logger.info(f"Vision 不支持，降级 OCR [用户:{user_id}]: {e}")
+            except VisionAllFailedError as e:
+                logger.warning(f"Vision 全部失败，降级 OCR [用户:{user_id}]: {e}")
+            except Exception as e:
+                logger.warning(f"Vision 异常，降级 OCR [用户:{user_id}]: {e}")
+
+        # 降级路径：现有 OCR → 文本管道
+        return await self._detect_image_via_ocr(image_path, user_id, chat_id)
+
+    async def _detect_image_via_ocr(
+        self, image_path: str, user_id: int, chat_id: int
+    ) -> DetectionResult:
+        """OCR 提取文字 + 文本检测管道（原 detect_image 实现，降级路径）"""
         result: DetectionResult = {
             "is_spam": False,
             "confidence": 0.0,
@@ -708,12 +760,10 @@ class SpamDetector:
             "details": {},
         }
 
-        # 检查 OCR 是否可用
         if not self.ocr_extractor.is_available:
             logger.warning("OCR 不可用，跳过图片检测")
             return result
 
-        # 提取图片中的文字
         try:
             # ✅ P1-11: OCR 是 CPU 密集型操作，在线程池中运行
             extracted_text = await run_in_executor(self.ocr_extractor.extract_text, image_path)
@@ -724,15 +774,12 @@ class SpamDetector:
 
             logger.info(f"从图片提取文字 [用户:{user_id}] 内容: {mask_text(extracted_text)}")
 
-            # 使用文本检测管道检测提取的文字
             text_result = await self.detect(text=extracted_text, user_id=user_id, chat_id=chat_id)
 
             if text_result["is_spam"]:
-                # 标记为图片垃圾
                 text_result["reasons"].insert(0, "图片 OCR")
-                # ✅ 保存完整文本用于训练，脱敏文本用于日志
-                text_result["details"]["ocr_text"] = extracted_text  # 仅用于训练，不记录到日志
-                text_result["details"]["ocr_text_masked"] = mask_text(extracted_text)  # 用于日志
+                text_result["details"]["ocr_text"] = extracted_text
+                text_result["details"]["ocr_text_masked"] = mask_text(extracted_text)
 
                 logger.info(
                     f"检测到图片垃圾信息 [用户:{user_id}] "
@@ -745,6 +792,79 @@ class SpamDetector:
         except Exception as e:
             logger.error(f"图片检测失败 [用户:{user_id}]: {e}")
             return result
+
+    async def _detect_image_via_vision(
+        self,
+        *,
+        image_path: str,
+        user_id: int,
+        chat_id: int,
+        caption: str | None,
+        context_text: str | None,
+        activity: int | None,
+        skip_auto_train: bool,
+    ) -> DetectionResult:
+        """AI Vision 直判图片（新路径，省一次 OCR 调用）"""
+        # 读图 + 大小检查（线程池执行，避免阻塞事件循环）
+        image_b64, mime, image_size = await run_in_executor(_read_image_as_base64, image_path)
+
+        if image_size > settings.ai_spam_vision_max_image_bytes:
+            raise VisionUnsupportedError(
+                f"图片超过 Vision 大小上限 {settings.ai_spam_vision_max_image_bytes} bytes "
+                f"(实际 {image_size} bytes)"
+            )
+
+        ai_result = await self.ai_detector.detect_image_with_context(
+            image_b64,
+            mime,
+            caption=caption,
+            context_text=context_text,
+        )
+
+        extracted_text = str(ai_result.get("details", {}).get("extracted_text", "") or "")
+        ai_reason = ai_result["reasons"][0] if ai_result.get("reasons") else "AI Vision 判定"
+
+        # 训练样本入库用的文本兜底：Vision 识别不出文字时，用占位符避免写空串
+        sample_text = extracted_text or f"[图片]{caption or ''}".strip() or "[图片]"
+
+        result: DetectionResult = {
+            "is_spam": bool(ai_result["is_spam"]),
+            "confidence": float(ai_result["confidence"]),
+            "original_confidence": float(ai_result["confidence"]),
+            "activity_reduction": 0.0,
+            "stage": "ai_vision",
+            "reasons": ["图片 AI 视觉", ai_reason],
+            "details": {
+                **ai_result.get("details", {}),
+                "ocr_text": sample_text,
+                "ocr_text_masked": mask_text(extracted_text) if extracted_text else "[无文字]",
+                "has_caption": bool(caption),
+            },
+        }
+
+        # 活跃度调整（与 AI 文本分支保持一致；Vision 已消费 context，跳过上下文一致性调整）
+        if result["is_spam"]:
+            result = self._apply_activity_adjustment(result, activity, user_id)
+
+        # 样本入库（正样本 / 高置信度负样本），确认模式下跳过避免重复
+        if not skip_auto_train:
+            if result["is_spam"]:
+                await self._handle_ai_spam_detection(sample_text, ai_result, user_id)
+            else:
+                await self._handle_ai_negative_detection(sample_text, ai_result, user_id)
+
+        if result["is_spam"]:
+            logger.info(
+                f"检测到图片垃圾信息（Vision）[用户:{user_id}] "
+                f"[置信度:{result['confidence']:.2f}] "
+                f"[原因:{ai_reason}]"
+            )
+        else:
+            logger.debug(
+                f"Vision 判定为正常图片 [用户:{user_id}] " f"[置信度:{result['confidence']:.2f}]"
+            )
+
+        return result
 
     async def add_feedback(
         self, text: str, is_spam: bool, labeled_by: int, confidence: float | None = None
