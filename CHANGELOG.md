@@ -5,6 +5,46 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.1] - 2026-05-20
+
+### 新增功能
+
+#### AI Vision 直判图片 / 贴纸垃圾 ⭐
+- **多模态视觉检测**：图片与贴纸消息启用 AI Vision 直判路径
+  - 图片 + caption + 群组对话上下文一次性送入多模态 AI
+  - 返回 `is_spam` / `confidence` / `reason` / `extracted_text`
+  - 节省一次 OCR 调用，提升整体效率
+- **保留完整视觉信息**：二维码、logo、版式、水印不再因 OCR 仅提取文字而丢失
+- **自动降级机制**：主备 provider 任一失败或模型不支持 Vision 时，自动回退到原 OCR → 文本管道，零功能退化
+- **Provider 能力检测**：`AIServiceProvider` 新增 `supports_vision` 属性与 `detect_image` 方法，模型名判定兼容 OpenRouter 等带前缀的 provider（如 `openai/gpt-4o-mini`）
+- **熔断复用**：`HybridAIDetector.detect_image_with_context` 主备回退 + 熔断状态共享
+- **贴纸处理增强**：`on_sticker_message` 传入 emoji + `set_name` 组装 caption；放宽本地 OCR 门闩，Vision 可用时即允许进入贴纸检测流程
+- **新增配置项**：
+  - `AI_SPAM_VISION_ENABLED` - 是否启用 Vision 直判
+  - `AI_SPAM_VISION_DETAIL` - 图像细节级别（low/high/auto）
+  - `AI_SPAM_VISION_MAX_IMAGE_BYTES` - 单张图片最大字节数
+  - `AI_SPAM_VISION_TIMEOUT` - Vision 请求超时
+
+#### 规则引擎阈值化判断
+- **配置驱动判定**：移除硬编码的垃圾标记逻辑，改为根据 `spam_threshold_rule` 动态判断
+- **CRITICAL 级别例外**：仅 CRITICAL 级别规则直接标记为垃圾，其余规则走阈值判断
+- **正则规则纳入阈值**：正则匹配命中后同样按阈值判定，统一行为，便于调优
+
+### Bug 修复
+- **加入请求 Redis 去重**：防止 Telegram 短时间内重复推送加入请求时触发重复的用户检测
+- **修复帮助信息 HTML 转义**：
+  - `activityskip` 帮助文本中的 `>=`、`>`、`<` 符号正确转义，避免 HTML 解析错误
+  - `activity` 帮助文本更新为当前实际规则（非文本不扣分，需活跃度才能发送）
+
+### 文档与配置
+- README 版本徽章改为动态获取最新 tag，无需每次发布手动更新
+- `.gitignore` 新增 `.wrangler/`（Cloudflare Pages 本地缓存）与 Zed 编辑器配置
+
+### 验证通过
+- ✅ Ruff: 代码风格检查通过
+- ✅ Mypy: 类型检查通过
+- ✅ AI Vision 主备回退、熔断复用、自动降级 OCR 测试通过
+
 ## [1.3.0] - 2026-04-19
 
 ### 新增功能
