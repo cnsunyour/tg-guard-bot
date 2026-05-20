@@ -110,3 +110,6 @@ dmypy.json
 # Alembic
 alembic/versions/*.pyc
 coverage.xml
+
+# cloudflare pages 部署
+.wrangler/
