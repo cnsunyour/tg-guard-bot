@@ -481,7 +481,7 @@ class RuleEngine:
         return False, urls, ""
 
     def check_repeated_chars(
-        self, text: str, length_threshold: int = 10, ratio_threshold: float = 0.7
+        self, text: str, length_threshold: int = 20, ratio_threshold: float = 0.7
     ) -> bool:
         """检查重复字符（如：哈哈哈哈）
 
