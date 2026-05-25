@@ -101,6 +101,18 @@ def test_rule_engine_contact_info_detection():
         result = engine.analyze(text)
         assert result["confidence"] > 0.4, f"应该检测到联系方式: {text}"
 
+    # 长数字串不应被识别为手机号（前/后有数字）
+    non_phone_texts = [
+        "订单号138001380001234",  # 后面跟数字
+        "流水号01380013800012",  # 前面有数字
+        "6225881234567890",  # 银行卡号片段
+    ]
+    for text in non_phone_texts:
+        has_contact, contact_type = engine.check_contact_info(text)
+        assert not (
+            has_contact and contact_type == "电话号码"
+        ), f"不应将长数字串识别为电话号码: {text}"
+
 
 @pytest.mark.unit
 def test_rule_engine_combined_score():

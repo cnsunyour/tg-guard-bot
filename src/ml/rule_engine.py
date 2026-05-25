@@ -547,8 +547,8 @@ class RuleEngine:
             logger.debug("检测到 QQ 号")
             return True, "QQ号"
 
-        # 电话号码模式（中国大陆）
-        phone_pattern = r"1[3-9]\d{9}"
+        # 电话号码模式（中国大陆）：限定前后无数字，避免误匹配长数字串中的片段
+        phone_pattern = r"(?<!\d)1[3-9]\d{9}(?!\d)"
         if re.search(phone_pattern, text):
             logger.debug("检测到电话号码")
             return True, "电话号码"
