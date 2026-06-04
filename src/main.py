@@ -235,7 +235,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="warn", description="警告成员"),
         BotCommand(command="warnings", description="查看警告记录"),
         BotCommand(command="clearwarnings", description="清除警告"),
-        BotCommand(command="cleanup", description="清理不活跃用户"),
+        BotCommand(command="cleanup", description="清理异常用户"),
         # 消息管理
         BotCommand(command="delbefore", description="删除往前的消息"),
         BotCommand(command="delafter", description="删除往后的消息"),

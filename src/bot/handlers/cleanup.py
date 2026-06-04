@@ -26,16 +26,20 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
     """群组用户清理命令
 
     用法：
-      /cleanup                    - 预览清理（显示待清理用户数量）
-      /cleanup run                - 执行清理（已删除 + 很久不上线）
+      /cleanup                    - 预览清理（显示异常用户数量）
+      /cleanup run                - 执行清理（所有异常用户）
       /cleanup deleted            - 仅清理已删除用户
-      /cleanup inactive           - 仅清理很久不上线的用户（安全模式）
+      /cleanup restricted         - 仅清理受限用户（Telegram 官方限制）
+      /cleanup scam               - 仅清理诈骗标记用户
+      /cleanup fake               - 仅清理虚假标记用户
       /cleanup refresh            - 强制刷新成员缓存
       /cleanup cache              - 查看缓存状态
 
     注意：
-      - inactive 子命令已简化为安全模式，只清理确实应该被清理的用户
-      - 避免误删暂时不活跃但仍正常的群组成员
+      - restricted: Telegram 官方限制的垃圾/违规账号
+      - scam: 被标记为诈骗的账号
+      - fake: 被标记为虚假身份的账号
+      - deleted: 已删除的账号
     """
     if not message.from_user or not message.chat:
         return None
@@ -88,18 +92,28 @@ async def cmd_cleanup(message: Message, bot: Bot) -> Message | None:
         if subcommand == "deleted":
             return await _handle_deleted(message, bot, member_query)
 
-        # 清理不活跃用户（只清理很久不上线的用户）
-        if subcommand == "inactive":
-            return await _handle_inactive(message, bot, member_query, "long_time_ago")
+        # 仅清理受限用户
+        if subcommand == "restricted":
+            return await _handle_restricted(message, bot, member_query)
+
+        # 仅清理诈骗标记用户
+        if subcommand == "scam":
+            return await _handle_scam(message, bot, member_query)
+
+        # 仅清理虚假标记用户
+        if subcommand == "fake":
+            return await _handle_fake(message, bot, member_query)
 
         # 未知子命令
         await message.answer(
             "❌ 未知子命令\n\n"
             "<b>用法</b>:\n"
             "• /cleanup - 预览清理\n"
-            "• /cleanup run - 执行清理（已删除 + 很久不上线）\n"
+            "• /cleanup run - 执行清理（所有异常用户）\n"
             "• /cleanup deleted - 仅清理已删除用户\n"
-            "• /cleanup inactive - 仅清理很久不上线的用户（安全模式）\n"
+            "• /cleanup restricted - 仅清理受限用户\n"
+            "• /cleanup scam - 仅清理诈骗标记用户\n"
+            "• /cleanup fake - 仅清理虚假标记用户\n"
             "• /cleanup refresh - 刷新缓存\n"
             "• /cleanup cache - 查看缓存状态"
         )
@@ -160,30 +174,33 @@ async def _handle_preview(message: Message, member_query: MemberQueryService) ->
     status_msg = await message.answer("🔍 正在扫描群组成员...")
 
     try:
-        result = await CleanupService.preview_cleanup(
-            member_query, message.chat.id, cleanup_deleted=True, cleanup_inactive=True
-        )
+        result = await CleanupService.preview_cleanup(member_query, message.chat.id)
 
+        restricted_count = len(result["restricted"])
+        scam_count = len(result["scam"])
+        fake_count = len(result["fake"])
         deleted_count = len(result["deleted"])
-        inactive_count = len(result["inactive"])
-        total = deleted_count + inactive_count
+        total = restricted_count + scam_count + fake_count + deleted_count
 
         if total == 0:
-            await status_msg.edit_text("✅ 没有需要清理的用户")
-            return status_msg  # 返回消息对象以便中间件自动删除
+            await status_msg.edit_text("✅ 没有需要清理的异常用户")
+            return status_msg
 
         await status_msg.edit_text(
             f"📊 <b>清理预览</b>\n\n"
-            f"已删除用户: {deleted_count} 人\n"
-            f"很久不上线: {inactive_count} 人\n"
+            f"🚫 受限用户 (restricted): {restricted_count} 人\n"
+            f"⚠️ 诈骗标记 (scam): {scam_count} 人\n"
+            f"🤖 虚假标记 (fake): {fake_count} 人\n"
+            f"❌ 已删除账号 (deleted): {deleted_count} 人\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
             f"总计: {total} 人\n\n"
             f"执行清理请使用: /cleanup run"
         )
-        return status_msg  # 返回消息对象以便中间件自动删除
+        return status_msg
     except Exception as e:
         logger.error(f"预览清理失败: {e}")
         await status_msg.edit_text(f"❌ 预览失败: {escape_html(str(e))}")
-        return status_msg  # 返回消息对象以便中间件自动删除
+        return status_msg
 
 
 async def _handle_run(
@@ -197,57 +214,73 @@ async def _handle_run(
 
     try:
         # 获取待清理用户
-        result = await CleanupService.preview_cleanup(
-            member_query, message.chat.id, cleanup_deleted=True, cleanup_inactive=True
-        )
+        result = await CleanupService.preview_cleanup(member_query, message.chat.id)
 
+        restricted_users = result["restricted"]
+        scam_users = result["scam"]
+        fake_users = result["fake"]
         deleted_users = result["deleted"]
-        inactive_users = result["inactive"]
-        total = len(deleted_users) + len(inactive_users)
+        total = len(restricted_users) + len(scam_users) + len(fake_users) + len(deleted_users)
 
         if total == 0:
-            await status_msg.edit_text("✅ 没有需要清理的用户")
-            return status_msg  # 返回消息对象以便中间件自动删除
+            await status_msg.edit_text("✅ 没有需要清理的异常用户")
+            return status_msg
 
         await status_msg.edit_text(
-            f"🚀 开始清理 {total} 个用户...\n\n"
-            f"已删除用户: {len(deleted_users)} 人\n"
-            f"很久不上线: {len(inactive_users)} 人"
+            f"🚀 开始清理 {total} 个异常用户...\n\n"
+            f"🚫 受限用户: {len(restricted_users)} 人\n"
+            f"⚠️ 诈骗标记: {len(scam_users)} 人\n"
+            f"🤖 虚假标记: {len(fake_users)} 人\n"
+            f"❌ 已删除账号: {len(deleted_users)} 人"
         )
 
         # 执行清理
         cleanup_result = CleanupResult()
 
+        # 清理受限用户
+        if restricted_users:
+            restricted_result = await CleanupService.execute_cleanup(
+                bot, message.chat.id, restricted_users, message.from_user.id, "restricted"
+            )
+            cleanup_result.restricted_kicked = restricted_result.restricted_kicked
+            cleanup_result.restricted_failed = restricted_result.restricted_failed
+            cleanup_result.errors.extend(restricted_result.errors)
+
+        # 清理诈骗用户
+        if scam_users:
+            scam_result = await CleanupService.execute_cleanup(
+                bot, message.chat.id, scam_users, message.from_user.id, "scam"
+            )
+            cleanup_result.scam_kicked = scam_result.scam_kicked
+            cleanup_result.scam_failed = scam_result.scam_failed
+            cleanup_result.errors.extend(scam_result.errors)
+
+        # 清理虚假用户
+        if fake_users:
+            fake_result = await CleanupService.execute_cleanup(
+                bot, message.chat.id, fake_users, message.from_user.id, "fake"
+            )
+            cleanup_result.fake_kicked = fake_result.fake_kicked
+            cleanup_result.fake_failed = fake_result.fake_failed
+            cleanup_result.errors.extend(fake_result.errors)
+
         # 清理已删除用户
         if deleted_users:
             deleted_result = await CleanupService.execute_cleanup(
-                bot, message.chat.id, deleted_users, message.from_user.id, "已删除用户"
+                bot, message.chat.id, deleted_users, message.from_user.id, "deleted"
             )
             cleanup_result.deleted_kicked = deleted_result.deleted_kicked
             cleanup_result.deleted_failed = deleted_result.deleted_failed
             cleanup_result.errors.extend(deleted_result.errors)
 
-        # 清理不活跃用户
-        if inactive_users:
-            inactive_result = await CleanupService.execute_cleanup(
-                bot,
-                message.chat.id,
-                inactive_users,
-                message.from_user.id,
-                "很久不上线",
-            )
-            cleanup_result.inactive_kicked = inactive_result.inactive_kicked
-            cleanup_result.inactive_failed = inactive_result.inactive_failed
-            cleanup_result.errors.extend(inactive_result.errors)
-
         # 显示结果
         await _show_cleanup_result(status_msg, cleanup_result)
-        return status_msg  # 返回消息对象以便中间件自动删除
+        return status_msg
 
     except Exception as e:
         logger.error(f"执行清理失败: {e}")
         await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
-        return status_msg  # 返回消息对象以便中间件自动删除
+        return status_msg
 
 
 async def _handle_deleted(
@@ -260,75 +293,144 @@ async def _handle_deleted(
     status_msg = await message.answer("🔍 正在扫描已删除用户...")
 
     try:
-        deleted_users = await member_query.get_deleted_users(message.chat.id)
+        result = await CleanupService.preview_cleanup(member_query, message.chat.id)
+        deleted_users = result["deleted"]
 
         if not deleted_users:
             await status_msg.edit_text("✅ 没有已删除用户")
-            return status_msg  # 返回消息对象以便中间件自动删除
+            return status_msg
 
         await status_msg.edit_text(f"🚀 开始清理 {len(deleted_users)} 个已删除用户...")
 
-        result = await CleanupService.execute_cleanup(
-            bot, message.chat.id, deleted_users, message.from_user.id, "已删除用户"
+        cleanup_result = await CleanupService.execute_cleanup(
+            bot, message.chat.id, deleted_users, message.from_user.id, "deleted"
         )
 
-        await _show_cleanup_result(status_msg, result)
-        return status_msg  # 返回消息对象以便中间件自动删除
+        await _show_cleanup_result(status_msg, cleanup_result)
+        return status_msg
 
     except Exception as e:
         logger.error(f"清理已删除用户失败: {e}")
         await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
-        return status_msg  # 返回消息对象以便中间件自动删除
+        return status_msg
 
 
-async def _handle_inactive(
-    message: Message,
-    bot: Bot,
-    member_query: MemberQueryService,
-    inactive_status: str,
+async def _handle_restricted(
+    message: Message, bot: Bot, member_query: MemberQueryService
 ) -> Message | None:
-    """处理清理不活跃用户"""
+    """处理仅清理受限用户"""
     if not message.chat or not message.from_user:
         return None
 
-    status_name = {
-        "long_time_ago": "很久不上线",
-        "last_month": "一个月以上不上线",
-        "last_week": "一周以上不上线",
-    }.get(inactive_status, inactive_status)
-
-    status_msg = await message.answer(f"🔍 正在扫描{status_name}的用户...")
+    status_msg = await message.answer("🔍 正在扫描受限用户...")
 
     try:
-        inactive_users = await member_query.get_inactive_users(message.chat.id, inactive_status)
+        result = await CleanupService.preview_cleanup(member_query, message.chat.id)
+        restricted_users = result["restricted"]
 
-        if not inactive_users:
-            await status_msg.edit_text(f"✅ 没有{status_name}的用户")
-            return status_msg  # 返回消息对象以便中间件自动删除
+        if not restricted_users:
+            await status_msg.edit_text("✅ 没有受限用户")
+            return status_msg
 
-        await status_msg.edit_text(f"🚀 开始清理 {len(inactive_users)} 个{status_name}的用户...")
+        await status_msg.edit_text(f"🚀 开始清理 {len(restricted_users)} 个受限用户...")
 
-        result = await CleanupService.execute_cleanup(
-            bot, message.chat.id, inactive_users, message.from_user.id, status_name
+        cleanup_result = await CleanupService.execute_cleanup(
+            bot, message.chat.id, restricted_users, message.from_user.id, "restricted"
         )
 
-        await _show_cleanup_result(status_msg, result)
-        return status_msg  # 返回消息对象以便中间件自动删除
+        await _show_cleanup_result(status_msg, cleanup_result)
+        return status_msg
 
     except Exception as e:
-        logger.error(f"清理不活跃用户失败: {e}")
+        logger.error(f"清理受限用户失败: {e}")
         await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
-        return status_msg  # 返回消息对象以便中间件自动删除
+        return status_msg
+
+
+async def _handle_scam(
+    message: Message, bot: Bot, member_query: MemberQueryService
+) -> Message | None:
+    """处理仅清理诈骗标记用户"""
+    if not message.chat or not message.from_user:
+        return None
+
+    status_msg = await message.answer("🔍 正在扫描诈骗标记用户...")
+
+    try:
+        result = await CleanupService.preview_cleanup(member_query, message.chat.id)
+        scam_users = result["scam"]
+
+        if not scam_users:
+            await status_msg.edit_text("✅ 没有诈骗标记用户")
+            return status_msg
+
+        await status_msg.edit_text(f"🚀 开始清理 {len(scam_users)} 个诈骗标记用户...")
+
+        cleanup_result = await CleanupService.execute_cleanup(
+            bot, message.chat.id, scam_users, message.from_user.id, "scam"
+        )
+
+        await _show_cleanup_result(status_msg, cleanup_result)
+        return status_msg
+
+    except Exception as e:
+        logger.error(f"清理诈骗标记用户失败: {e}")
+        await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
+        return status_msg
+
+
+async def _handle_fake(
+    message: Message, bot: Bot, member_query: MemberQueryService
+) -> Message | None:
+    """处理仅清理虚假标记用户"""
+    if not message.chat or not message.from_user:
+        return None
+
+    status_msg = await message.answer("🔍 正在扫描虚假标记用户...")
+
+    try:
+        result = await CleanupService.preview_cleanup(member_query, message.chat.id)
+        fake_users = result["fake"]
+
+        if not fake_users:
+            await status_msg.edit_text("✅ 没有虚假标记用户")
+            return status_msg
+
+        await status_msg.edit_text(f"🚀 开始清理 {len(fake_users)} 个虚假标记用户...")
+
+        cleanup_result = await CleanupService.execute_cleanup(
+            bot, message.chat.id, fake_users, message.from_user.id, "fake"
+        )
+
+        await _show_cleanup_result(status_msg, cleanup_result)
+        return status_msg
+
+    except Exception as e:
+        logger.error(f"清理虚假标记用户失败: {e}")
+        await status_msg.edit_text(f"❌ 执行失败: {escape_html(str(e))}")
+        return status_msg
 
 
 async def _show_cleanup_result(message: Message, result) -> None:
     """显示清理结果"""
-    total_kicked = result.deleted_kicked + result.inactive_kicked
-    total_failed = result.deleted_failed + result.inactive_failed
+    total_kicked = (
+        result.restricted_kicked
+        + result.scam_kicked
+        + result.fake_kicked
+        + result.deleted_kicked
+    )
+    total_failed = (
+        result.restricted_failed
+        + result.scam_failed
+        + result.fake_failed
+        + result.deleted_failed
+    )
 
     text = "✅ <b>清理完成</b>\n\n"
-    text += f"已删除用户: {result.deleted_kicked} 踢出, {result.deleted_failed} 失败\n"
-    text += f"不活跃用户: {result.inactive_kicked} 踢出, {result.inactive_failed} 失败\n"
+    text += f"🚫 受限用户: {result.restricted_kicked} 踢出, {result.restricted_failed} 失败\n"
+    text += f"⚠️ 诈骗标记: {result.scam_kicked} 踢出, {result.scam_failed} 失败\n"
+    text += f"🤖 虚假标记: {result.fake_kicked} 踢出, {result.fake_failed} 失败\n"
+    text += f"❌ 已删除账号: {result.deleted_kicked} 踢出, {result.deleted_failed} 失败\n"
     text += f"\n总计: {total_kicked} 踢出, {total_failed} 失败"
 
     if result.errors:

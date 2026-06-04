@@ -67,15 +67,19 @@ class MemberQueryService:
 
         try:
             # 使用 iter_participants 分批获取，避免一次性加载所有成员
-            # limit=None 表示获取所有成员，aggressive=False 避免触发速率限制
+            # aggressive=False 避免触发速率限制
             async for participant in self.client.iter_participants(
-                chat_id, limit=None, aggressive=False
+                chat_id, aggressive=False
             ):
                 members.append(
                     {
                         "user_id": participant.id,
                         "deleted": participant.deleted,
                         "status": self._get_status_name(participant.status),
+                        # ⭐ 新增：异常用户状态检测
+                        "restricted": getattr(participant, "restricted", False),
+                        "scam": getattr(participant, "scam", False),
+                        "fake": getattr(participant, "fake", False),
                     }
                 )
 
@@ -137,6 +141,53 @@ class MemberQueryService:
         deleted = [m["user_id"] for m in members if m["deleted"]]
         logger.info(f"群组 {chat_id} 有 {len(deleted)} 个已删除用户")
         return deleted
+
+    async def get_problematic_users(self, chat_id: int) -> dict[str, list[int]]:
+        """获取所有异常状态用户（restricted/scam/fake/deleted）
+
+        Args:
+            chat_id: 群组 ID
+
+        Returns:
+            {
+                "restricted": [user_id1, user_id2, ...],
+                "scam": [user_id3, ...],
+                "fake": [user_id4, ...],
+                "deleted": [user_id5, ...]
+            }
+        """
+        members = await self.get_members(chat_id)
+
+        result = {
+            "restricted": [],
+            "scam": [],
+            "fake": [],
+            "deleted": [],
+        }
+
+        for member in members:
+            user_id = member["user_id"]
+
+            # 优先级：restricted > scam > fake > deleted
+            # 如果用户同时有多个标记，只归入优先级最高的类别
+            if member.get("restricted", False):
+                result["restricted"].append(user_id)
+            elif member.get("scam", False):
+                result["scam"].append(user_id)
+            elif member.get("fake", False):
+                result["fake"].append(user_id)
+            elif member.get("deleted", False):
+                result["deleted"].append(user_id)
+
+        logger.info(
+            f"群组 {chat_id} 异常用户统计: "
+            f"restricted={len(result['restricted'])}, "
+            f"scam={len(result['scam'])}, "
+            f"fake={len(result['fake'])}, "
+            f"deleted={len(result['deleted'])}"
+        )
+
+        return result
 
     async def get_inactive_users(self, chat_id: int, status: str) -> list[int]:
         """获取指定不活跃状态的用户
