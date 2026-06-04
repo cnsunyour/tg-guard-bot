@@ -128,20 +128,6 @@ class MemberQueryService:
             logger.error(f"获取群组成员失败: {e}")
             raise
 
-    async def get_deleted_users(self, chat_id: int) -> list[int]:
-        """获取已删除用户 ID 列表
-
-        Args:
-            chat_id: 群组 ID
-
-        Returns:
-            已删除用户 ID 列表
-        """
-        members = await self.get_members(chat_id)
-        deleted = [m["user_id"] for m in members if m["deleted"]]
-        logger.info(f"群组 {chat_id} 有 {len(deleted)} 个已删除用户")
-        return deleted
-
     async def get_problematic_users(self, chat_id: int) -> dict[str, list[int]]:
         """获取所有异常状态用户（restricted/scam/fake/deleted）
 
@@ -188,21 +174,6 @@ class MemberQueryService:
         )
 
         return result
-
-    async def get_inactive_users(self, chat_id: int, status: str) -> list[int]:
-        """获取指定不活跃状态的用户
-
-        Args:
-            chat_id: 群组 ID
-            status: 不活跃状态 ("long_time_ago" | "last_month" | "last_week")
-
-        Returns:
-            不活跃用户 ID 列表
-        """
-        members = await self.get_members(chat_id)
-        inactive = [m["user_id"] for m in members if self._should_cleanup(m["status"], status)]
-        logger.info(f"群组 {chat_id} 有 {len(inactive)} 个 {status} 状态的用户")
-        return inactive
 
     async def refresh_cache(self, chat_id: int) -> int:
         """强制刷新缓存，返回成员数量
@@ -264,26 +235,3 @@ class MemberQueryService:
         elif isinstance(status, UserStatusEmpty):
             return "long_time_ago"
         return "unknown"
-
-    def _should_cleanup(self, user_status: str, target: str) -> bool:
-        """判断是否应该清理
-
-        Args:
-            user_status: 用户状态
-            target: 目标状态阈值
-
-        Returns:
-            是否应该清理
-        """
-        # 状态严重程度排序
-        severity = {
-            "online": 0,
-            "offline": 1,
-            "recently": 2,
-            "last_week": 3,
-            "last_month": 4,
-            "long_time_ago": 5,
-        }
-        target_severity = severity.get(target, 5)
-        user_severity = severity.get(user_status, -1)
-        return user_severity >= target_severity
