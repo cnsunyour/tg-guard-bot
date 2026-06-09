@@ -30,6 +30,7 @@ from src.repositories.group_repo import GroupRepository
 from src.services.cas_service import get_cas_service
 from src.services.spam_detector import SpamDetector
 from src.services.username_mapping import UsernameMappingService
+from src.services.user_status_service import get_user_status_service
 from src.services.verification import VerificationService
 
 router = Router(name="verification")
@@ -447,6 +448,41 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
             return  # 结束处理
     # ========== CAS 检查结束 ==========
 
+    # ========== 用户状态检查（Telethon）==========
+    if settings.user_status_check_enabled:
+        status_service = get_user_status_service()
+        status_result = await status_service.check_user(user_id, chat_id)
+
+        if status_result.is_problematic:
+            # 拒绝加入请求
+            try:
+                await decline_join_request(bot, chat_id, user_id)
+            except Exception as e:
+                logger.warning(f"拒绝异常用户加入请求失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+
+            # 封禁用户（防止再次请求加入）
+            try:
+                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            except Exception as e:
+                logger.warning(f"封禁异常用户失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+
+            # 记录审计日志
+            with contextlib.suppress(Exception):
+                await AuditRepository.log_action(
+                    group_id=chat_id,
+                    operator_id=bot.id,
+                    action=f"user_status_ban_on_join_request_{status_result.reason}",
+                    target_user_id=user_id,
+                    details={"status": status_result.reason},
+                )
+
+            logger.info(
+                f"异常用户加入请求被拒 [群组:{chat_id}] [用户:{user_id}] "
+                f"[状态:{status_result.reason}]"
+            )
+            return  # 结束处理
+    # ========== 用户状态检查结束 ==========
+
     # ==================== 用户信息反垃圾检测 ====================
     if await check_user_spam_info(bot, chat_id, user_id, username, mode="join_request"):
         return  # 检测到垃圾信息，已处理，直接返回
@@ -661,6 +697,52 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             )
             return  # 结束处理，不继续后续流程
     # ========== CAS 检查结束 ==========
+
+    # ========== 用户状态检查（Telethon）==========
+    if settings.user_status_check_enabled:
+        status_service = get_user_status_service()
+        status_result = await status_service.check_user(user_id, chat_id)
+
+        if status_result.is_problematic:
+            # 直接封禁并踢出
+            try:
+                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            except Exception as e:
+                logger.warning(f"封禁异常用户失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+
+            # 记录审计日志
+            with contextlib.suppress(Exception):
+                await AuditRepository.log_action(
+                    group_id=chat_id,
+                    operator_id=bot.id,
+                    action=f"user_status_ban_on_join_{status_result.reason}",
+                    target_user_id=user_id,
+                    details={"status": status_result.reason},
+                )
+
+            # 发送群内通知（30 秒后自动删除）
+            try:
+                status_map = {
+                    "restricted": "被 Telegram 限制",
+                    "scam": "被标记为诈骗账号",
+                    "fake": "被标记为虚假账号",
+                    "deleted": "已删除账号",
+                }
+                status_text = status_map.get(status_result.reason, status_result.reason)
+                notify_msg = await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🚫 {format_user_mention(user)} {status_text}，已被自动封禁。",
+                )
+                await auto_delete_message(notify_msg, delay=30)
+            except Exception as e:
+                logger.warning(f"发送封禁通知失败: {e}")
+
+            logger.info(
+                f"异常用户加入被拒 [群组:{chat_id}] [用户:{user_id}] "
+                f"[状态:{status_result.reason}]"
+            )
+            return  # 结束处理，不继续后续流程
+    # ========== 用户状态检查结束 ==========
 
     # ==================== 用户信息反垃圾检测 ====================
     if await check_user_spam_info(bot, chat_id, user_id, username, mode="join"):

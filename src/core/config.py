@@ -228,6 +228,17 @@ class Settings(BaseSettings):
     )
     cas_max_retries: int = Field(default=2, description="API 请求最大重试次数")
 
+    # 用户状态检测配置（基于 Telethon）
+    user_status_check_enabled: bool = Field(
+        default=False,
+        description="是否启用用户状态检测（需要启用 Telethon，检测 restricted/scam/fake/deleted 用户）",
+    )
+    user_status_cache_ttl: int = Field(
+        default=3600,
+        description="用户状态检查结果缓存时间（秒），默认 1 小时",
+    )
+    user_status_max_retries: int = Field(default=2, description="用户状态检查最大重试次数")
+
     # 活跃度系统配置
     activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
     activity_max_confidence_reduction: float = Field(
@@ -352,9 +363,7 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if (
-                self.db_password == "postgres"
-            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
+            if self.db_password == "postgres":  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"
