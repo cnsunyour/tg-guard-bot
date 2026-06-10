@@ -68,9 +68,7 @@ class MemberQueryService:
         try:
             # 使用 iter_participants 分批获取，避免一次性加载所有成员
             # aggressive=False 避免触发速率限制
-            async for participant in self.client.iter_participants(
-                chat_id, aggressive=False
-            ):
+            async for participant in self.client.iter_participants(chat_id, aggressive=False):
                 members.append(
                     {
                         "user_id": participant.id,
