@@ -414,16 +414,10 @@ async def _handle_fake(
 async def _show_cleanup_result(message: Message, result) -> None:
     """显示清理结果"""
     total_kicked = (
-        result.restricted_kicked
-        + result.scam_kicked
-        + result.fake_kicked
-        + result.deleted_kicked
+        result.restricted_kicked + result.scam_kicked + result.fake_kicked + result.deleted_kicked
     )
     total_failed = (
-        result.restricted_failed
-        + result.scam_failed
-        + result.fake_failed
-        + result.deleted_failed
+        result.restricted_failed + result.scam_failed + result.fake_failed + result.deleted_failed
     )
 
     text = "✅ <b>清理完成</b>\n\n"

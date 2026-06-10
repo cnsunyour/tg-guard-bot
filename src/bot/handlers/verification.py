@@ -29,8 +29,8 @@ from src.repositories.audit_repo import AuditRepository
 from src.repositories.group_repo import GroupRepository
 from src.services.cas_service import get_cas_service
 from src.services.spam_detector import SpamDetector
-from src.services.username_mapping import UsernameMappingService
 from src.services.user_status_service import get_user_status_service
+from src.services.username_mapping import UsernameMappingService
 from src.services.verification import VerificationService
 
 router = Router(name="verification")
