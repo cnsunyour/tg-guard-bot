@@ -621,7 +621,7 @@ async def _handle_spam_confirm_ban(
 
     操作：
     1. 删除原消息
-    2. 踢出并封禁用户（1小时）
+    2. 踢出并永久封禁用户
     3. 入库正样本
     4. 更新提示消息
     5. 记录审计日志
@@ -638,13 +638,12 @@ async def _handle_spam_confirm_ban(
     with contextlib.suppress(Exception):
         await original_message.delete()
 
-    # 2. 踢出并封禁用户
-    success, error_msg = await ModerationService.ban_user_temporarily(
+    # 2. 踢出并永久封禁用户
+    success, error_msg = await ModerationService.ban_user(
         bot=bot,
         chat_id=message.chat.id,
         user_id=user_id,
         operator_id=callback.from_user.id,
-        duration=60,  # 1小时
         reason="垃圾信息（管理员确认）",
     )
 
@@ -667,7 +666,7 @@ async def _handle_spam_confirm_ban(
         f"{message.text}\n\n"
         f"✅ 已确认为垃圾消息并处理\n"
         f"👮 操作者: {operator_mention}\n"
-        f"⚖️ 处罚: 踢出并封禁 1 小时"
+        f"⚖️ 处罚: 踢出并永久封禁"
     )
 
     await message.edit_text(updated_text)
@@ -1008,7 +1007,7 @@ async def on_antispam_confirm_menu(callback: CallbackQuery) -> None:
         f"• 降低误判对用户的影响\n\n"
         f"<b>注意:</b>\n"
         f"• 确认模式下原消息会保留，让管理员查看完整内容\n"
-        f"• 管理员确认为垃圾后，统一踢出并封禁1小时\n"
+        f"• 管理员确认为垃圾后，统一踢出并永久封禁\n"
         f"• 确认为误判后，消息保留并入库负样本",
         reply_markup=keyboard,
     )
@@ -1085,7 +1084,7 @@ async def on_antispam_confirm_toggle(callback: CallbackQuery) -> None:
             f"• 降低误判对用户的影响\n\n"
             f"<b>注意:</b>\n"
             f"• 确认模式下原消息会保留，让管理员查看完整内容\n"
-            f"• 管理员确认为垃圾后，统一踢出并封禁1小时\n"
+            f"• 管理员确认为垃圾后，统一踢出并永久封禁\n"
             f"• 确认为误判后，消息保留并入库负样本",
             reply_markup=keyboard,
         )
