@@ -1,4 +1,4 @@
-"""CAS 黑名单检查中间件 - 检查消息发送者是否在 CAS 黑名单中"""
+"""CAS 黑名单检查中间件 - 检查消息发送者是否在 CAS 黑名单中或为异常用户"""
 
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -13,13 +13,14 @@ from src.core.config import settings
 from src.core.utils import auto_delete_message
 from src.repositories.audit_repo import AuditRepository
 from src.services.cas_service import get_cas_service
+from src.services.user_status_service import get_user_status_service
 
 
 class CASCheckMiddleware(BaseMiddleware):
     """CAS 黑名单检查中间件
 
-    在所有消息处理之前检查发送者是否在 CAS 黑名单中。
-    如果在黑名单中：删除消息 + 封禁用户 + 发送群内通知。
+    在所有消息处理之前检查发送者是否在 CAS 黑名单中或为异常用户。
+    如果在黑名单中或为异常用户：删除消息 + 封禁用户 + 发送群内通知。
 
     仅处理群组消息，跳过私聊、超级管理员和群组管理员。
     """
@@ -35,7 +36,7 @@ class CASCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # 未启用直接放行
-        if not settings.cas_enabled:
+        if not settings.cas_enabled and not settings.user_status_check_enabled:
             return await handler(event, data)
 
         # 跳过私聊
@@ -60,58 +61,136 @@ class CASCheckMiddleware(BaseMiddleware):
         if await PermissionCache.is_admin(bot, event.chat.id, event.from_user.id):
             return await handler(event, data)
 
-        # 执行 CAS 检查
-        cas_service = get_cas_service()
-        cas_result = await cas_service.check_user(event.from_user.id)
-
-        if not cas_result.is_banned:
-            return await handler(event, data)
-
-        # === 黑名单用户处理 ===
         chat_id = event.chat.id
         user_id = event.from_user.id
+        message_id = event.message_id
 
+        # 1. 执行 CAS 检查
+        if settings.cas_enabled:
+            cas_service = get_cas_service()
+            cas_result = await cas_service.check_user(user_id)
+
+            if cas_result.is_banned:
+                await self._handle_problematic_user(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    reason="cas_blacklist",
+                    details={"offenses": cas_result.offenses},
+                    cached=cas_result.cached,
+                    message_id=message_id,
+                )
+                return None  # 阻止事件继续传播
+
+        # 2. 执行用户状态检查
+        if settings.user_status_check_enabled:
+            status_service = get_user_status_service()
+            status_result = await status_service.check_user(user_id, chat_id)
+
+            if status_result.is_problematic:
+                await self._handle_problematic_user(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    reason=f"user_status_{status_result.reason}",
+                    details={"status": status_result.reason},
+                    cached=status_result.cached,
+                    message_id=message_id,
+                )
+                return None  # 阻止事件继续传播
+
+        return await handler(event, data)
+
+    async def _handle_problematic_user(
+        self,
+        bot: Bot,
+        chat_id: int,
+        user_id: int,
+        reason: str,
+        details: dict[str, Any],
+        cached: bool,
+        message_id: int | None = None,
+    ) -> None:
+        """处理异常用户（统一处理逻辑）
+
+        Args:
+            bot: Bot 实例
+            chat_id: 群组 ID
+            user_id: 用户 ID
+            reason: 原因（cas_blacklist/user_status_restricted/user_status_scam 等）
+            details: 详细信息
+            cached: 是否来自缓存
+            message_id: 消息 ID（可选，用于删除消息）
+        """
         # 删除消息
-        try:
-            await event.delete()
-        except Exception as e:
-            logger.debug(f"CAS 删除消息失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+        if message_id:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+            except Exception as e:
+                logger.debug(f"删除消息失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
 
         # 封禁用户
         try:
             await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
         except Exception as e:
-            logger.warning(f"CAS 封禁用户失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+            logger.warning(f"封禁用户失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
 
         # 记录审计日志
         try:
+            action = f"ban_on_message_{reason}"
             await AuditRepository.log_action(
                 group_id=chat_id,
                 operator_id=bot.id,
-                action="cas_ban_on_message",
+                action=action,
                 target_user_id=user_id,
-                details={"offenses": cas_result.offenses},
+                details=details,
             )
         except Exception as e:
-            logger.warning(f"CAS 审计日志写入失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+            logger.warning(f"审计日志写入失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
 
         # 发送群内通知
         try:
+            notify_text = self._get_notification_text(user_id, reason, details)
             notify_msg = await bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    f'🚫 <a href="tg://user?id={user_id}">{user_id}</a> 在 CAS 黑名单中，'
-                    f"已被自动封禁（违规 {cas_result.offenses} 次）。"
-                ),
+                text=notify_text,
                 parse_mode="HTML",
             )
             await auto_delete_message(notify_msg, delay=30)
         except Exception as e:
-            logger.debug(f"CAS 发送封禁通知失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+            logger.debug(f"发送封禁通知失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
 
         logger.info(
-            f"CAS 中间件拦截黑名单用户 [群组:{chat_id}] [用户:{user_id}] "
-            f"[违规次数:{cas_result.offenses}] [缓存:{cas_result.cached}]"
+            f"拦截异常用户 [群组:{chat_id}] [用户:{user_id}] "
+            f"[原因:{reason}] [详情:{details}] [缓存:{cached}]"
         )
 
-        return None  # 阻止事件继续传播
+    def _get_notification_text(self, user_id: int, reason: str, details: dict[str, Any]) -> str:
+        """生成通知文本
+
+        Args:
+            user_id: 用户 ID
+            reason: 原因
+            details: 详细信息
+
+        Returns:
+            通知文本
+        """
+        user_link = f'<a href="tg://user?id={user_id}">{user_id}</a>'
+
+        if reason == "cas_blacklist":
+            offenses = details.get("offenses", 0)
+            return f"🚫 {user_link} 在 CAS 黑名单中，已被自动封禁（违规 {offenses} 次）。"
+
+        if reason.startswith("user_status_"):
+            status = details.get("status", "unknown")
+            status_map = {
+                "restricted": "被 Telegram 限制",
+                "scam": "被标记为诈骗账号",
+                "fake": "被标记为虚假账号",
+                "deleted": "已删除账号",
+            }
+            status_text = status_map.get(status, status)
+            return f"🚫 {user_link} {status_text}，已被自动封禁。"
+
+        return f"🚫 {user_link} 已被自动封禁（{reason}）。"

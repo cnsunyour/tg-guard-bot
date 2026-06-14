@@ -2,8 +2,6 @@
 
 from datetime import datetime, timedelta
 
-from loguru import logger
-
 from src.core.redis import RedisKeys, get_redis
 from src.models.group import Group
 

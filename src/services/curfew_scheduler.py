@@ -1,6 +1,7 @@
 """宵禁模式调度器"""
 
 import asyncio
+import contextlib
 
 from aiogram import Bot
 from loguru import logger
@@ -40,10 +41,8 @@ class CurfewScheduler:
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         logger.info("✅ 宵禁调度器已停止")
 
     async def _run_loop(self) -> None:
@@ -60,7 +59,7 @@ class CurfewScheduler:
     async def _check_all_groups(self) -> None:
         """检查所有群组的宵禁状态"""
         async with get_db_session() as session:
-            result = await session.execute(select(Group).where(Group.curfew_enabled == True))
+            result = await session.execute(select(Group).where(Group.curfew_enabled))
             groups = result.scalars().all()
 
         for group in groups:

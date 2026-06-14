@@ -67,15 +67,17 @@ class MemberQueryService:
 
         try:
             # 使用 iter_participants 分批获取，避免一次性加载所有成员
-            # limit=None 表示获取所有成员，aggressive=False 避免触发速率限制
-            async for participant in self.client.iter_participants(
-                chat_id, limit=None, aggressive=False
-            ):
+            # aggressive=False 避免触发速率限制
+            async for participant in self.client.iter_participants(chat_id, aggressive=False):
                 members.append(
                     {
                         "user_id": participant.id,
                         "deleted": participant.deleted,
                         "status": self._get_status_name(participant.status),
+                        # ⭐ 新增：异常用户状态检测
+                        "restricted": getattr(participant, "restricted", False),
+                        "scam": getattr(participant, "scam", False),
+                        "fake": getattr(participant, "fake", False),
                     }
                 )
 
@@ -124,34 +126,52 @@ class MemberQueryService:
             logger.error(f"获取群组成员失败: {e}")
             raise
 
-    async def get_deleted_users(self, chat_id: int) -> list[int]:
-        """获取已删除用户 ID 列表
+    async def get_problematic_users(self, chat_id: int) -> dict[str, list[int]]:
+        """获取所有异常状态用户（restricted/scam/fake/deleted）
 
         Args:
             chat_id: 群组 ID
 
         Returns:
-            已删除用户 ID 列表
+            {
+                "restricted": [user_id1, user_id2, ...],
+                "scam": [user_id3, ...],
+                "fake": [user_id4, ...],
+                "deleted": [user_id5, ...]
+            }
         """
         members = await self.get_members(chat_id)
-        deleted = [m["user_id"] for m in members if m["deleted"]]
-        logger.info(f"群组 {chat_id} 有 {len(deleted)} 个已删除用户")
-        return deleted
 
-    async def get_inactive_users(self, chat_id: int, status: str) -> list[int]:
-        """获取指定不活跃状态的用户
+        result = {
+            "restricted": [],
+            "scam": [],
+            "fake": [],
+            "deleted": [],
+        }
 
-        Args:
-            chat_id: 群组 ID
-            status: 不活跃状态 ("long_time_ago" | "last_month" | "last_week")
+        for member in members:
+            user_id = member["user_id"]
 
-        Returns:
-            不活跃用户 ID 列表
-        """
-        members = await self.get_members(chat_id)
-        inactive = [m["user_id"] for m in members if self._should_cleanup(m["status"], status)]
-        logger.info(f"群组 {chat_id} 有 {len(inactive)} 个 {status} 状态的用户")
-        return inactive
+            # 优先级：restricted > scam > fake > deleted
+            # 如果用户同时有多个标记，只归入优先级最高的类别
+            if member.get("restricted", False):
+                result["restricted"].append(user_id)
+            elif member.get("scam", False):
+                result["scam"].append(user_id)
+            elif member.get("fake", False):
+                result["fake"].append(user_id)
+            elif member.get("deleted", False):
+                result["deleted"].append(user_id)
+
+        logger.info(
+            f"群组 {chat_id} 异常用户统计: "
+            f"restricted={len(result['restricted'])}, "
+            f"scam={len(result['scam'])}, "
+            f"fake={len(result['fake'])}, "
+            f"deleted={len(result['deleted'])}"
+        )
+
+        return result
 
     async def refresh_cache(self, chat_id: int) -> int:
         """强制刷新缓存，返回成员数量
@@ -213,26 +233,3 @@ class MemberQueryService:
         elif isinstance(status, UserStatusEmpty):
             return "long_time_ago"
         return "unknown"
-
-    def _should_cleanup(self, user_status: str, target: str) -> bool:
-        """判断是否应该清理
-
-        Args:
-            user_status: 用户状态
-            target: 目标状态阈值
-
-        Returns:
-            是否应该清理
-        """
-        # 状态严重程度排序
-        severity = {
-            "online": 0,
-            "offline": 1,
-            "recently": 2,
-            "last_week": 3,
-            "last_month": 4,
-            "long_time_ago": 5,
-        }
-        target_severity = severity.get(target, 5)
-        user_severity = severity.get(user_status, -1)
-        return user_severity >= target_severity

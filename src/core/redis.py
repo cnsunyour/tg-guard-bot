@@ -250,3 +250,25 @@ class RedisKeys:
         TTL: 60 秒
         """
         return f"join_request_dedup:{chat_id}:{user_id}"
+
+    @staticmethod
+    def user_status_result(user_id: int) -> str:
+        """用户状态检查结果缓存键名
+
+        存储格式: JSON 字符串 {"is_problematic": bool, "reason": str | None, "checked_at": str}
+        - is_problematic: 是否为异常用户
+        - reason: 异常原因（restricted/scam/fake/deleted）
+        - checked_at: 检查时间（ISO 格式）
+        TTL: 可配置（默认 1 小时）
+        """
+        return f"user_status:result:{user_id}"
+
+    @staticmethod
+    def user_status_lock(user_id: int) -> str:
+        """用户状态检查分布式锁键名
+
+        用于防止同一个用户的并发 Telethon API 请求
+        存储格式: "1" (表示正在检查)
+        TTL: 10 秒（防止死锁）
+        """
+        return f"user_status:lock:{user_id}"

@@ -14,10 +14,14 @@ from src.services.member_query import MemberQueryService
 class CleanupResult:
     """清理结果"""
 
+    restricted_kicked: int = 0
+    restricted_failed: int = 0
+    scam_kicked: int = 0
+    scam_failed: int = 0
+    fake_kicked: int = 0
+    fake_failed: int = 0
     deleted_kicked: int = 0
     deleted_failed: int = 0
-    inactive_kicked: int = 0
-    inactive_failed: int = 0
     total_processed: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -32,31 +36,22 @@ class CleanupService:
     async def preview_cleanup(
         member_query: MemberQueryService,
         chat_id: int,
-        cleanup_deleted: bool = True,
-        cleanup_inactive: bool = True,
-        inactive_status: str = "long_time_ago",
     ) -> dict[str, list[int]]:
         """预览清理（不执行）
 
         Args:
             member_query: 成员查询服务
             chat_id: 群组 ID
-            cleanup_deleted: 是否清理已删除用户
-            cleanup_inactive: 是否清理不活跃用户
-            inactive_status: 不活跃状态阈值
 
         Returns:
-            {"deleted": [user_ids], "inactive": [user_ids]}
+            {
+                "restricted": [user_ids],
+                "scam": [user_ids],
+                "fake": [user_ids],
+                "deleted": [user_ids]
+            }
         """
-        result: dict[str, list[int]] = {"deleted": [], "inactive": []}
-
-        if cleanup_deleted:
-            result["deleted"] = await member_query.get_deleted_users(chat_id)
-
-        if cleanup_inactive:
-            result["inactive"] = await member_query.get_inactive_users(chat_id, inactive_status)
-
-        return result
+        return await member_query.get_problematic_users(chat_id)
 
     @staticmethod
     async def execute_cleanup(
@@ -73,7 +68,7 @@ class CleanupService:
             chat_id: 群组 ID
             user_ids: 用户 ID 列表
             operator_id: 操作者 ID
-            reason: 清理原因
+            reason: 清理原因（restricted/scam/fake/deleted）
 
         Returns:
             CleanupResult 清理结果
@@ -88,7 +83,7 @@ class CleanupService:
                     member = await bot.get_chat_member(chat_id, user_id)
                     if member.status in ["creator", "administrator"]:
                         result.errors.append(f"{user_id}: 是管理员，跳过")
-                        result.deleted_failed += 1
+                        CleanupService._increment_failed(result, reason)
                         continue
                 except TelegramBadRequest as e:
                     # 用户可能已不在群组
@@ -101,11 +96,7 @@ class CleanupService:
                 await bot.ban_chat_member(chat_id, user_id)
                 await bot.unban_chat_member(chat_id, user_id)
 
-                if "已删除" in reason:
-                    result.deleted_kicked += 1
-                else:
-                    result.inactive_kicked += 1
-
+                CleanupService._increment_kicked(result, reason)
                 logger.info(f"已踢出用户 {user_id}: {reason}")
 
                 # 延迟避免速率限制
@@ -113,10 +104,7 @@ class CleanupService:
 
             except TelegramForbiddenError:
                 result.errors.append(f"{user_id}: Bot 权限不足")
-                if "已删除" in reason:
-                    result.deleted_failed += 1
-                else:
-                    result.inactive_failed += 1
+                CleanupService._increment_failed(result, reason)
 
             except TelegramBadRequest as e:
                 error_msg = str(e)
@@ -126,17 +114,35 @@ class CleanupService:
                     continue
 
                 result.errors.append(f"{user_id}: {error_msg}")
-                if "已删除" in reason:
-                    result.deleted_failed += 1
-                else:
-                    result.inactive_failed += 1
+                CleanupService._increment_failed(result, reason)
 
             except Exception as e:
                 logger.error(f"踢出用户 {user_id} 失败: {e}")
                 result.errors.append(f"{user_id}: {e}")
-                if "已删除" in reason:
-                    result.deleted_failed += 1
-                else:
-                    result.inactive_failed += 1
+                CleanupService._increment_failed(result, reason)
 
         return result
+
+    @staticmethod
+    def _increment_kicked(result: CleanupResult, reason: str) -> None:
+        """根据原因增加踢出计数"""
+        if "restricted" in reason.lower():
+            result.restricted_kicked += 1
+        elif "scam" in reason.lower():
+            result.scam_kicked += 1
+        elif "fake" in reason.lower():
+            result.fake_kicked += 1
+        elif "deleted" in reason.lower() or "已删除" in reason:
+            result.deleted_kicked += 1
+
+    @staticmethod
+    def _increment_failed(result: CleanupResult, reason: str) -> None:
+        """根据原因增加失败计数"""
+        if "restricted" in reason.lower():
+            result.restricted_failed += 1
+        elif "scam" in reason.lower():
+            result.scam_failed += 1
+        elif "fake" in reason.lower():
+            result.fake_failed += 1
+        elif "deleted" in reason.lower() or "已删除" in reason:
+            result.deleted_failed += 1

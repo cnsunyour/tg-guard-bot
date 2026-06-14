@@ -159,7 +159,8 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
     # ✅ 注册 CAS 黑名单检查中间件（在白名单和限流之后，handler 之前）
-    if settings.cas_enabled:
+    # 同时包含用户状态检测（restricted/scam/fake/deleted）
+    if settings.cas_enabled or settings.user_status_check_enabled:
         from src.bot.middlewares import CASCheckMiddleware
 
         dp.message.middleware(CASCheckMiddleware())
@@ -235,7 +236,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="warn", description="警告成员"),
         BotCommand(command="warnings", description="查看警告记录"),
         BotCommand(command="clearwarnings", description="清除警告"),
-        BotCommand(command="cleanup", description="清理不活跃用户"),
+        BotCommand(command="cleanup", description="清理异常用户"),
         # 消息管理
         BotCommand(command="delbefore", description="删除往前的消息"),
         BotCommand(command="delafter", description="删除往后的消息"),
@@ -288,7 +289,14 @@ async def on_startup(bot: Bot) -> None:
 
     # 初始化 Telethon 客户端
     logger.info("初始化 Telethon 客户端...")
-    await init_telethon_client()
+    telethon_client = await init_telethon_client()
+
+    # 初始化用户状态服务（基于 Telethon）
+    if telethon_client and settings.user_status_check_enabled:
+        from src.services.user_status_service import init_user_status_service
+
+        init_user_status_service(telethon_client)
+        logger.info("✅ 用户状态服务已初始化")
 
     # 初始化健康检查器（记录启动时间）
     from src.core.health import get_health_checker
