@@ -1770,11 +1770,16 @@ async def cmd_activity(message: Message, bot: Bot) -> None:
         text = (
             f"<b>📊 活跃度系统设置</b>\n\n"
             f"当前状态: {status_text}\n\n"
-            f"<b>说明：</b>\n"
-            f"• 启用后，新用户需通过发送文本消息积累活跃度\n"
-            f"• 活跃度 > 0 才能发送图片、贴纸、转发等非文本消息\n"
-            f"• 发送文本消息 +1，发送非文本消息 -2\n"
-            f"• 每日无消息自动衰减 -1"
+            f"<b>非文本消息限制：</b>\n"
+            f"• 启用: 活跃度 ≤ 0 的用户无法发送图片、贴纸、视频等\n"
+            f"• 禁用: 不限制非文本消息，新用户也能发送\n\n"
+            f"<b>活跃度规则：</b>\n"
+            f"• 发送文本消息 +1，非文本消息不扣分\n"
+            f"• 每日无消息自动衰减 -1（活跃度 < 10 时）\n\n"
+            f"<b>其他用途（始终生效）：</b>\n"
+            f"• 高活跃用户垃圾检测误判率更低\n"
+            f"• 可设置跳过垃圾检测的活跃度阈值\n"
+            f"• 宵禁模式下控制发言权限"
         )
 
         reply = await message.answer(text, reply_markup=keyboard)
@@ -1834,7 +1839,6 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
                 return
 
             await GroupRepository.update_activity_settings(chat_id, True)
-            await GroupRepository.update_activity_settings(chat_id, True)
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 启用了活跃度系统")
             await callback.answer("✅ 活跃度系统已启用", show_alert=True)
 
@@ -1843,7 +1847,6 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
                 await callback.answer("ℹ️ 活跃度系统已经是禁用状态", show_alert=True)
                 return
 
-            await GroupRepository.update_activity_settings(chat_id, False)
             await GroupRepository.update_activity_settings(chat_id, False)
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 禁用了活跃度系统")
             await callback.answer("✅ 活跃度系统已禁用", show_alert=True)

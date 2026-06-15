@@ -240,7 +240,6 @@ class Settings(BaseSettings):
     user_status_max_retries: int = Field(default=2, description="用户状态检查最大重试次数")
 
     # 活跃度系统配置
-    activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
     activity_max_confidence_reduction: float = Field(
         default=0.15, description="活跃度最大置信度减少值（用于反垃圾检测）"
     )

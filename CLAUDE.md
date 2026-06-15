@@ -158,9 +158,9 @@ else:
                   │
                   ↓
 ┌─────────────────────────────────────────────────────────┐
-│ 活跃度置信度调整 (降低误判)                              │
+│ 活跃度置信度调整 (降低误判，始终生效)                     │
 │ - 高活跃度用户 (activity >= 10)                          │
-│ - 对数公式: reduction = 0.01 × log2(activity / 10)      │
+│ - 对数公式: reduction = 0.05 × log2(activity / 10)      │
 │ - 最大降低: 0.15 (15%)                                   │
 │ - 调整后 < 阈值 → 改判为正常                             │
 └─────────────────┬───────────────────────────────────────┘
@@ -472,9 +472,13 @@ REPLY_SIMILARITY_THRESHOLD=0.5           # 回复链相似度阈值
 REPLY_CONFIDENCE_REDUCTION=0.2           # 回复链置信度降低幅度
 
 # 活跃度系统配置
-ACTIVITY_ENABLED=true
 ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15   # 最大置信度减少值
-ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过垃圾检测阈值
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过垃圾检测全局阈值
+
+# 说明：
+# - 群组可通过 /activity 命令控制是否限制非文本消息
+# - 活跃度记录、置信度修正、检测豁免功能始终工作
+# - 宵禁模式下的活跃度门槛继续生效
 
 # 验证配置
 VERIFICATION_TIMEOUT=120  # 私聊验证超时时间 (秒)
@@ -570,8 +574,8 @@ SPAM_THRESHOLD_ML=0.7
 SPAM_THRESHOLD_EMBEDDING=0.75
 
 # 活跃度系统
-ACTIVITY_ENABLED=true
-ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15
+ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15   # 置信度修正最大降低值
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过检测阈值（0=使用群组配置）
 
 # 上下文一致性（推荐启用）
 CONTEXT_CONSISTENCY_ENABLED=true

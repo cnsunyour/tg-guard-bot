@@ -15,8 +15,14 @@ class ActivityService:
     活跃度规则:
     - 初始值: 0
     - 文本消息: +1
-    - 非文本消息: 0 (不扣减，但需要活跃度 > 0 才能发送)
+    - 非文本消息: 0 (不扣分)
     - 每日衰减: -1 (活跃度 < 10 时，无消息则衰减；>= 10 时不衰减)
+
+    活跃度用途:
+    - 非文本消息限制: group.activity_enabled=True 时，活跃度 <= 0 不能发非文本
+    - 置信度修正: 活跃度越高，垃圾检测误判率越低（始终生效）
+    - 检测豁免: activity >= threshold 时，跳过垃圾检测（始终生效）
+    - 宵禁门槛: 宵禁期间根据活跃度控制发言权限（始终生效）
     """
 
     # 非文本消息扣分值
@@ -110,18 +116,26 @@ class ActivityService:
         return new_activity
 
     @staticmethod
-    async def check_non_text_allowed(chat_id: int, user_id: int) -> tuple[bool, int]:
+    async def check_non_text_allowed(
+        chat_id: int, user_id: int, check_enabled: bool
+    ) -> tuple[bool, int]:
         """检查用户是否可以发送非文本消息
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
+            check_enabled: 是否启用限制检查（来自 group.activity_enabled）
 
         Returns:
             (是否允许, 当前活跃度)
         """
         current = await ActivityService.get_activity(chat_id, user_id)
 
+        # 如果未启用限制，直接允许
+        if not check_enabled:
+            return True, current
+
+        # 启用限制：活跃度 <= 0 时不允许
         if current <= 0:
             return False, current
 

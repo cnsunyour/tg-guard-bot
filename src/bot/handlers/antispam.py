@@ -268,17 +268,21 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
 
 
 async def check_non_text_message(
-    message: Message, bot: Bot, message_type: str, activity_enabled: bool | None = None
+    message: Message, bot: Bot, message_type: str, group_activity_enabled: bool
 ) -> bool:
     """检查非文本消息是否允许发送（活跃度检查）
 
-    注意：调用此函数前应已过滤管理员
+    注意：
+    - 调用此函数前应已过滤管理员
+    - group_activity_enabled=True: 限制活跃度 <= 0 的用户
+    - group_activity_enabled=False: 不限制，但仍记录活跃度
+    - 活跃度记录始终执行，用于置信度修正、检测豁免等
 
     Args:
         message: 消息对象
         bot: Bot 实例
         message_type: 消息类型（"photo", "sticker", "video" 等）
-        activity_enabled: 是否启用活跃度检查（None 则使用全局配置）
+        group_activity_enabled: 群组活跃度开关（来自 group.activity_enabled）
 
     Returns:
         True 表示消息已被阻止（调用者应直接 return），False 表示允许
@@ -290,16 +294,9 @@ async def check_non_text_message(
     if message.from_user.id == 777000:
         return False
 
-    # 检查活跃度系统是否启用
-    if activity_enabled is None:
-        activity_enabled = settings.activity_enabled
-
-    if not activity_enabled:
-        return False
-
     # 检查活跃度是否允许发送非文本消息
     allowed, current_activity = await ActivityService.check_non_text_allowed(
-        message.chat.id, message.from_user.id
+        message.chat.id, message.from_user.id, check_enabled=group_activity_enabled
     )
 
     if not allowed:
@@ -319,7 +316,7 @@ async def check_non_text_message(
 
         return True  # 消息已被阻止
 
-    # 允许发送，扣除活跃度
+    # 允许发送，记录活跃度
     await ActivityService.record_non_text_message(message.chat.id, message.from_user.id)
     return False  # 允许通过
 
@@ -1345,31 +1342,25 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 检查是否是外部转发或带链接的消息（需要活跃度支撑）
     is_special_message = is_external_forward(message) or has_url_entities(message)
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 记录活跃度（管理员已在上面跳过，不会记录）
     activity = None
-    if activity_system_enabled:
-        if is_special_message:
-            # 外部转发/带链接消息：按非文本消息处理（-2 活跃度）
-            if await check_non_text_message(
-                message,
-                bot,
-                "forward" if is_external_forward(message) else "link",
-                activity_enabled=True,  # 已在上面检查过，这里直接传 True
-            ):
-                return  # 活跃度不足，消息已被删除
-            # 活跃度足够，已扣除，继续垃圾检测
-            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-        else:
-            # 普通文本消息：增加活跃度（+1）
-            activity = await ActivityService.record_text_message(
-                message.chat.id, message.from_user.id
-            )
+    if is_special_message:
+        # 外部转发/带链接消息：按非文本消息处理
+        if await check_non_text_message(
+            message,
+            bot,
+            "forward" if is_external_forward(message) else "link",
+            group.activity_enabled if group else True,
+        ):
+            return  # 活跃度不足，消息已被删除
+        # 活跃度足够，已扣除，继续垃圾检测
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    else:
+        # 普通文本消息：增加活跃度（+1）
+        activity = await ActivityService.record_text_message(message.chat.id, message.from_user.id)
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    if activity_system_enabled and activity is not None:
+    if activity is not None:
         global_threshold = settings.activity_skip_spam_check_threshold
 
         # 确定最终阈值（全局配置优先）
@@ -1500,36 +1491,33 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         return  # 已处理频道马甲，直接返回
 
     # ✅ 活跃度系统：检查是否允许发送非文本消息
-    activity_system_enabled = settings.activity_enabled and group.activity_enabled
-    if activity_system_enabled:
-        if await check_non_text_message(message, bot, "photo", activity_enabled=True):
-            return  # 活跃度不足，消息已被删除
+    # ✅ 活跃度系统：检查是否允许发送非文本消息
+    if await check_non_text_message(message, bot, "photo", group.activity_enabled):
+        return  # 活跃度不足，消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任（activity 变量后续也用于 Vision 置信度调整）
-    activity: int | None = None
-    if activity_system_enabled:
-        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-        global_threshold = settings.activity_skip_spam_check_threshold
+    activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    global_threshold = settings.activity_skip_spam_check_threshold
 
-        # 确定最终阈值（全局配置优先）
-        if global_threshold > 0:
-            final_threshold = global_threshold
-            threshold_source = "全局配置"
-        elif global_threshold == 0:
-            final_threshold = group.activity_skip_threshold if group else 0
-            threshold_source = "群组配置"
-        else:
-            final_threshold = 0
-            threshold_source = "全局禁用"
+    # 确定最终阈值（全局配置优先）
+    if global_threshold > 0:
+        final_threshold = global_threshold
+        threshold_source = "全局配置"
+    elif global_threshold == 0:
+        final_threshold = group.activity_skip_threshold if group else 0
+        threshold_source = "群组配置"
+    else:
+        final_threshold = 0
+        threshold_source = "全局禁用"
 
-        if final_threshold > 0 and activity >= final_threshold:
-            logger.debug(
-                f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
-            )
-            # 记录到上下文
-            await ContextService.record_message(message)
-            return  # 直接返回，不进行垃圾检测
+    if final_threshold > 0 and activity >= final_threshold:
+        logger.debug(
+            f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+            f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+        )
+        # 记录到上下文
+        await ContextService.record_message(message)
+        return  # 直接返回，不进行垃圾检测
 
     # 更新 username 映射
     await update_username_mapping_if_needed(message)
@@ -1729,41 +1717,36 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # ✅ 活跃度检查（管理员已在上面跳过）
     if await check_non_text_message(
-        message, bot, "sticker", activity_enabled=activity_system_enabled
+        message, bot, "sticker", group.activity_enabled if group else True
     ):
         return  # 消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
     # activity 变量在后续 detect_image 也会用到，提升作用域
-    activity: int | None = None
-    if activity_system_enabled:
-        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-        global_threshold = settings.activity_skip_spam_check_threshold
+    activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    global_threshold = settings.activity_skip_spam_check_threshold
 
-        # 确定最终阈值（全局配置优先）
-        if global_threshold > 0:
-            final_threshold = global_threshold
-            threshold_source = "全局配置"
-        elif global_threshold == 0:
-            final_threshold = group.activity_skip_threshold if group else 0
-            threshold_source = "群组配置"
-        else:
-            final_threshold = 0
-            threshold_source = "全局禁用"
+    # 确定最终阈值（全局配置优先）
+    if global_threshold > 0:
+        final_threshold = global_threshold
+        threshold_source = "全局配置"
+    elif global_threshold == 0:
+        final_threshold = group.activity_skip_threshold if group else 0
+        threshold_source = "群组配置"
+    else:
+        final_threshold = 0
+        threshold_source = "全局禁用"
 
-        if final_threshold > 0 and activity >= final_threshold:
-            logger.debug(
-                f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
-            )
-            # 记录到上下文
-            await ContextService.record_message(message)
-            return  # 直接返回，不进行垃圾检测
+    if final_threshold > 0 and activity >= final_threshold:
+        logger.debug(
+            f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+            f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+        )
+        # 记录到上下文
+        await ContextService.record_message(message)
+        return  # 直接返回，不进行垃圾检测
 
     # 检查群组是否启用反垃圾
     if group and not group.antispam_enabled:
@@ -2227,12 +2210,9 @@ async def on_video_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "video", activity_enabled=activity_system_enabled
+        message, bot, "video", group.activity_enabled if group else True
     ):
         return
 
@@ -2270,12 +2250,9 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "animation", activity_enabled=activity_system_enabled
+        message, bot, "animation", group.activity_enabled if group else True
     ):
         return
 
@@ -2313,12 +2290,9 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "voice", activity_enabled=activity_system_enabled
+        message, bot, "voice", group.activity_enabled if group else True
     ):
         return
 
@@ -2356,12 +2330,9 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "video_note", activity_enabled=activity_system_enabled
+        message, bot, "video_note", group.activity_enabled if group else True
     ):
         return
 
@@ -2399,12 +2370,9 @@ async def on_document_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "document", activity_enabled=activity_system_enabled
+        message, bot, "document", group.activity_enabled if group else True
     ):
         return
 
@@ -2442,12 +2410,9 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "audio", activity_enabled=activity_system_enabled
+        message, bot, "audio", group.activity_enabled if group else True
     ):
         return
 
@@ -2505,13 +2470,10 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
     # 直接进行垃圾检测
 
     # 获取活跃度（用于降低检测阈值）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-    activity = None
-    if activity_system_enabled:
-        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    if activity_system_enabled and activity is not None:
+    if activity is not None:
         global_threshold = settings.activity_skip_spam_check_threshold
 
         if global_threshold > 0:
@@ -2695,12 +2657,7 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
     # 如果有 caption，检测 caption 文字
     if message.caption:
         # 获取活跃度（用于降低检测阈值）
-        activity_system_enabled = settings.activity_enabled and (
-            not group or group.activity_enabled
-        )
-        activity = None
-        if activity_system_enabled:
-            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
 
         # 检测器
         detector = get_detector()
