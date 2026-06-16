@@ -337,7 +337,7 @@ async def notify_activity_restriction(bot: Bot, user_id: int, current_activity: 
                 f"您当前的活跃度为 **{current_activity}**，无法发送非文本消息。\n\n"
                 "📝 **如何恢复:**\n"
                 "发送文本消息可以增加活跃度，每条文本消息 +1 活跃度。\n\n"
-                "💡 当活跃度 > 0 时，即可发送图片、贴纸等非文本消息。"
+                "💡 当活跃度 &gt; 0 时，即可发送图片、贴纸等非文本消息。"
             ),
             parse_mode="Markdown",
         )
