@@ -353,8 +353,7 @@ src/
 │   ├── rule_engine.py        # ⭐ 规则引擎 (Stage 1)
 │   ├── classifier.py         # ⭐ TF-IDF + SVM (Stage 2)
 │   ├── embedder.py           # ⭐ bge-small-zh (Stage 3 + 上下文一致性)
-│   ├── ai_detector.py        # ⭐ AI检测器 (OpenAI兼容API)
-│   ├── ocr.py                # PaddleOCR 图片识别
+│   ├── ai_detector.py        # ⭐ AI检测器 (文本 + Vision)
 │   └── trainer.py            # 模型训练脚本
 │
 ├── models/                   # SQLAlchemy ORM
@@ -516,7 +515,7 @@ services:
 | 配置 | 最低要求 | 推荐配置 |
 |------|---------|---------|
 | CPU | 1 vCPU | 2 vCPU |
-| RAM | 1GB (无 OCR) | 2GB (基础) / 4GB (含 OCR) |
+| RAM | 1GB | 2GB |
 | 存储 | 10GB | 20GB SSD |
 
 ### 监控日志
