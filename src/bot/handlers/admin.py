@@ -1770,16 +1770,18 @@ async def cmd_activity(message: Message, bot: Bot) -> None:
         text = (
             f"<b>📊 活跃度系统设置</b>\n\n"
             f"当前状态: {status_text}\n\n"
-            f"<b>非文本消息限制：</b>\n"
-            f"• 启用: 活跃度 ≤ 0 的用户无法发送图片、贴纸、视频等\n"
-            f"• 禁用: 不限制非文本消息，新用户也能发送\n\n"
-            f"<b>活跃度规则：</b>\n"
-            f"• 发送文本消息 +1，非文本消息不扣分\n"
-            f"• 每日无消息自动衰减 -1（活跃度 < 10 时）\n\n"
-            f"<b>其他用途（始终生效）：</b>\n"
-            f"• 高活跃用户垃圾检测误判率更低\n"
-            f"• 可设置跳过垃圾检测的活跃度阈值\n"
-            f"• 宵禁模式下控制发言权限"
+            f"<b>🎯 非文本消息限制：</b>\n"
+            f"• <b>启用</b>: 活跃度 &lt;= 0 时禁止发送图片/贴纸/视频等\n"
+            f"• <b>禁用</b>: 不限制非文本消息（新用户也能发）\n\n"
+            f"<b>📈 活跃度规则：</b>\n"
+            f"• 初始值: 0\n"
+            f"• 文本消息: +1\n"
+            f"• 非文本消息: 不变（当前不扣分）\n"
+            f"• 每日衰减: -1（仅当活跃度 &lt; 10 且当天无消息时）\n\n"
+            f"<b>🛡️ 其他用途（始终生效）：</b>\n"
+            f"• 垃圾检测误判修正（活跃度越高，误判率越低）\n"
+            f"• 检测豁免阈值（达到阈值可跳过垃圾检测）\n"
+            f"• 宵禁模式发言门槛控制"
         )
 
         reply = await message.answer(text, reply_markup=keyboard)
@@ -1851,6 +1853,9 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 禁用了活跃度系统")
             await callback.answer("✅ 活跃度系统已禁用", show_alert=True)
 
+        # 重新获取群组配置，确保状态是最新的
+        group = await GroupRepository.get_or_create(chat_id)
+
         # 更新消息
         status_text = "已启用 ✅" if group.activity_enabled else "已禁用 ❌"
 
@@ -1874,11 +1879,18 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
         text = (
             f"<b>📊 活跃度系统设置</b>\n\n"
             f"当前状态: {status_text}\n\n"
-            f"<b>说明：</b>\n"
-            f"• 启用后，新用户需通过发送文本消息积累活跃度\n"
-            f"• 活跃度 > 0 才能发送图片、贴纸、转发等非文本消息\n"
-            f"• 发送文本消息 +1，发送非文本消息 -2\n"
-            f"• 每日无消息自动衰减 -1"
+            f"<b>🎯 非文本消息限制：</b>\n"
+            f"• <b>启用</b>: 活跃度 &lt;= 0 时禁止发送图片/贴纸/视频等\n"
+            f"• <b>禁用</b>: 不限制非文本消息（新用户也能发）\n\n"
+            f"<b>📈 活跃度规则：</b>\n"
+            f"• 初始值: 0\n"
+            f"• 文本消息: +1\n"
+            f"• 非文本消息: 不变（当前不扣分）\n"
+            f"• 每日衰减: -1（仅当活跃度 &lt; 10 且当天无消息时）\n\n"
+            f"<b>🛡️ 其他用途（始终生效）：</b>\n"
+            f"• 垃圾检测误判修正（活跃度越高，误判率越低）\n"
+            f"• 检测豁免阈值（达到阈值可跳过垃圾检测）\n"
+            f"• 宵禁模式发言门槛控制"
         )
 
         await message.edit_text(text, reply_markup=keyboard)
