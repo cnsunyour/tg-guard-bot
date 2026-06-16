@@ -3,7 +3,7 @@
 	lint format format-check check \
 	security security-strict security-report ci \
 	dev-up dev-down dev-restart dev-logs \
-	prod-build prod-build-ocr prod-up prod-down prod-restart prod-logs \
+	prod-build prod-up prod-down prod-restart prod-logs \
 	db-migrate db-shell \
 	backup backup-postgres backup-redis backup-list backup-cleanup \
 	backup-restore-postgres backup-restore-redis backup-setup-cron \
@@ -17,7 +17,7 @@ help:
 	@echo "📦 安装和依赖:"
 	@echo "  make install         - 安装生产依赖"
 	@echo "  make install-dev     - 安装开发依赖"
-	@echo "  make install-all     - 安装所有依赖（包括 OCR）"
+	@echo "  make install-all     - 安装所有依赖"
 	@echo "  make deps-update     - 更新所有依赖到最新版本"
 	@echo ""
 	@echo "🧪 测试:"
@@ -46,7 +46,6 @@ help:
 	@echo ""
 	@echo "🚀 生产环境:"
 	@echo "  make prod-build      - 构建生产环境镜像"
-	@echo "  make prod-build-ocr  - 构建生产环境镜像（启用 OCR）"
 	@echo "  make prod-up         - 启动生产环境"
 	@echo "  make prod-down       - 停止生产环境"
 	@echo "  make prod-restart    - 重启生产环境"
@@ -200,10 +199,6 @@ dev-logs:
 prod-build:
 	docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
 	@echo "✅ 生产环境镜像构建完成"
-
-prod-build-ocr:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml build --build-arg ENABLE_OCR=true
-	@echo "✅ 生产环境镜像构建完成（启用 OCR）"
 
 prod-up:
 	docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
