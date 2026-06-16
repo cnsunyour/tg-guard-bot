@@ -116,7 +116,6 @@ class AIServiceConfig:
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
-    temperature: float = 0.0
     threshold: float = 0.8
     timeout: int = 10
     max_retries: int = 2
@@ -556,7 +555,6 @@ class AIServiceProvider(ABC):
         }
         payload = {
             "model": self.config.model,
-            "temperature": self.config.temperature,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
@@ -754,7 +752,6 @@ class AIServiceProvider(ABC):
         }
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "temperature": self.config.temperature,
             "messages": messages,
             "response_format": {"type": "json_object"},
         }
@@ -876,7 +873,6 @@ class PrimaryAIServiceProvider(AIServiceProvider):
             api_key=settings.ai_spam_api_key,
             api_base=settings.ai_spam_api_base,
             model=settings.ai_spam_model,
-            temperature=settings.ai_spam_temperature,
             threshold=settings.ai_spam_threshold,
             timeout=settings.ai_spam_timeout,
             max_retries=settings.ai_spam_max_retries,
@@ -945,7 +941,6 @@ class BackupAIServiceProvider(AIServiceProvider):
             api_key=settings.ai_spam_backup_api_key,
             api_base=settings.ai_spam_backup_api_base,
             model=settings.ai_spam_backup_model,
-            temperature=settings.ai_spam_backup_temperature,
             threshold=settings.ai_spam_backup_threshold,
             timeout=settings.ai_spam_backup_timeout,
             max_retries=settings.ai_spam_backup_max_retries,
@@ -1069,7 +1064,6 @@ class HybridAIDetector:
                 api_key=settings.vision_api_key_effective,
                 api_base=settings.vision_api_base_effective,
                 model=settings.ai_spam_vision_model,
-                temperature=settings.ai_spam_vision_temperature,
                 threshold=settings.ai_spam_vision_threshold,
                 timeout=settings.ai_spam_vision_timeout,
                 max_retries=settings.ai_spam_vision_max_retries,
@@ -1086,7 +1080,6 @@ class HybridAIDetector:
                 api_key=settings.vision_backup_api_key_effective,
                 api_base=settings.vision_backup_api_base_effective,
                 model=settings.ai_spam_vision_backup_model,
-                temperature=settings.ai_spam_vision_backup_temperature,
                 threshold=settings.ai_spam_vision_backup_threshold,
                 timeout=settings.ai_spam_vision_timeout,
                 max_retries=settings.ai_spam_vision_backup_max_retries,

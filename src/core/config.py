@@ -73,7 +73,6 @@ class Settings(BaseSettings):
         description="API Base URL（支持 OpenRouter、DeepSeek、Moonshot 等）",
     )
     ai_spam_model: str = Field(default="gpt-4o-mini", description="模型名称")
-    ai_spam_temperature: float = Field(default=0.0, description="生成温度")
     ai_spam_threshold: float = Field(default=0.8, description="置信度阈值")
     ai_spam_timeout: int = Field(default=10, description="超时时间（秒）")
     ai_spam_max_retries: int = Field(default=2, description="最大重试次数")
@@ -104,7 +103,6 @@ class Settings(BaseSettings):
         description="备份 API Base URL（支持不同提供商）",
     )
     ai_spam_backup_model: str = Field(default="gpt-4o-mini", description="备份模型名称")
-    ai_spam_backup_temperature: float = Field(default=0.0, description="备份生成温度")
     ai_spam_backup_threshold: float = Field(default=0.8, description="备份置信度阈值")
     ai_spam_backup_timeout: int = Field(default=10, description="备份超时时间（秒）")
     ai_spam_backup_max_retries: int = Field(default=2, description="备份最大重试次数")
@@ -140,7 +138,6 @@ class Settings(BaseSettings):
     ai_spam_vision_model: str = Field(
         default="gpt-4o-mini", description="Vision 主模型名称（必须支持多模态）"
     )
-    ai_spam_vision_temperature: float = Field(default=0.0, description="Vision 主生成温度")
     ai_spam_vision_threshold: float = Field(default=0.8, description="Vision 主置信度阈值")
     ai_spam_vision_max_retries: int = Field(default=2, description="Vision 主最大重试次数")
 
@@ -157,7 +154,6 @@ class Settings(BaseSettings):
     ai_spam_vision_backup_model: str = Field(
         default="gpt-4o-mini", description="Vision 备模型名称（必须支持多模态）"
     )
-    ai_spam_vision_backup_temperature: float = Field(default=0.0, description="Vision 备生成温度")
     ai_spam_vision_backup_threshold: float = Field(default=0.8, description="Vision 备置信度阈值")
     ai_spam_vision_backup_max_retries: int = Field(default=2, description="Vision 备最大重试次数")
 
