@@ -392,30 +392,6 @@ src/
 
 ## 🔧 开发注意事项
 
-### Git 分支工作流
-
-**双分支模型**:
-- **`main`**: 生产稳定版本,只接受 `dev` 合并,禁止直接开发
-- **`dev`**: 开发主线,所有功能分支从此创建并合并回此
-
-**标准流程**:
-```bash
-# 1. 创建功能分支
-git checkout dev && git pull origin dev
-git checkout -b feature/新功能名
-
-# 2. 开发 + 提交
-git add . && git commit -m "feat: 功能描述"
-
-# 3. 合并到 dev
-git checkout dev && git merge feature/新功能名 --no-ff
-git branch -d feature/新功能名 && git push origin dev
-
-# 4. 测试通过后发布到 main
-git checkout main && git merge dev --no-ff -m "release: 版本描述"
-git push origin main && git checkout dev
-```
-
 ### 代码风格
 
 - **格式化**: Ruff 自动格式化 (`make format`)
