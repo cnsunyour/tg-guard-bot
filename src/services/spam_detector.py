@@ -19,7 +19,6 @@ from src.ml.ai_detector import (
 )
 from src.ml.classifier import get_classifier
 from src.ml.embedder import get_embedder
-from src.ml.ocr import get_ocr_extractor
 from src.ml.rule_engine import get_rule_engine
 from src.repositories.spam_repo import SpamRepository
 
@@ -44,7 +43,6 @@ class SpamDetector:
         self.rule_engine = get_rule_engine()
         self.classifier = get_classifier()
         self.embedder = get_embedder()
-        self.ocr_extractor = get_ocr_extractor()
         self.ai_detector = get_ai_detector()
 
     async def detect(
@@ -720,37 +718,8 @@ class SpamDetector:
         Returns:
             检测结果字典
         """
-        # Vision 直判路径
-        if (
-            settings.ai_spam_vision_enabled
-            and self.ai_detector.enabled
-            and self.ai_detector.any_vision_provider_available
-        ):
-            try:
-                return await self._detect_image_via_vision(
-                    image_path=image_path,
-                    user_id=user_id,
-                    chat_id=chat_id,
-                    caption=caption,
-                    context_text=context_text,
-                    activity=activity,
-                    skip_auto_train=skip_auto_train,
-                )
-            except VisionUnsupportedError as e:
-                logger.info(f"Vision 不支持，降级 OCR [用户:{user_id}]: {e}")
-            except VisionAllFailedError as e:
-                logger.warning(f"Vision 全部失败，降级 OCR [用户:{user_id}]: {e}")
-            except Exception as e:
-                logger.warning(f"Vision 异常，降级 OCR [用户:{user_id}]: {e}")
-
-        # 降级路径：现有 OCR → 文本管道
-        return await self._detect_image_via_ocr(image_path, user_id, chat_id)
-
-    async def _detect_image_via_ocr(
-        self, image_path: str, user_id: int, chat_id: int
-    ) -> DetectionResult:
-        """OCR 提取文字 + 文本检测管道（原 detect_image 实现，降级路径）"""
-        result: DetectionResult = {
+        # Vision 多模态直判（无 OCR 兜底：不可用/失败则放行不检测）
+        empty_result: DetectionResult = {
             "is_spam": False,
             "confidence": 0.0,
             "original_confidence": 0.0,
@@ -760,38 +729,28 @@ class SpamDetector:
             "details": {},
         }
 
-        if not self.ocr_extractor.is_available:
-            logger.warning("OCR 不可用，跳过图片检测")
-            return result
+        if not self.ai_detector.vision_enabled:
+            logger.debug(f"Vision 未启用或无可用 provider，跳过图片检测 [用户:{user_id}]")
+            return empty_result
 
         try:
-            # ✅ P1-11: OCR 是 CPU 密集型操作，在线程池中运行
-            extracted_text = await run_in_executor(self.ocr_extractor.extract_text, image_path)
-
-            if not extracted_text:
-                logger.debug(f"图片中未提取到文字 [用户:{user_id}]")
-                return result
-
-            logger.info(f"从图片提取文字 [用户:{user_id}] 内容: {mask_text(extracted_text)}")
-
-            text_result = await self.detect(text=extracted_text, user_id=user_id, chat_id=chat_id)
-
-            if text_result["is_spam"]:
-                text_result["reasons"].insert(0, "图片 OCR")
-                text_result["details"]["ocr_text"] = extracted_text
-                text_result["details"]["ocr_text_masked"] = mask_text(extracted_text)
-
-                logger.info(
-                    f"检测到图片垃圾信息 [用户:{user_id}] "
-                    f"阶段: {text_result['stage']}, "
-                    f"原因: {', '.join(text_result['reasons'])}"
-                )
-
-            return text_result
-
+            return await self._detect_image_via_vision(
+                image_path=image_path,
+                user_id=user_id,
+                chat_id=chat_id,
+                caption=caption,
+                context_text=context_text,
+                activity=activity,
+                skip_auto_train=skip_auto_train,
+            )
+        except VisionUnsupportedError as e:
+            logger.info(f"Vision 不支持，跳过图片检测 [用户:{user_id}]: {e}")
+        except VisionAllFailedError as e:
+            logger.warning(f"Vision 全部失败，跳过图片检测 [用户:{user_id}]: {e}")
         except Exception as e:
-            logger.error(f"图片检测失败 [用户:{user_id}]: {e}")
-            return result
+            logger.warning(f"Vision 异常，跳过图片检测 [用户:{user_id}]: {e}")
+
+        return empty_result
 
     async def _detect_image_via_vision(
         self,
@@ -836,8 +795,10 @@ class SpamDetector:
             "reasons": ["图片 AI 视觉", ai_reason],
             "details": {
                 **ai_result.get("details", {}),
-                "ocr_text": sample_text,
-                "ocr_text_masked": mask_text(extracted_text) if extracted_text else "[无文字]",
+                "recognized_text": sample_text,
+                "recognized_text_masked": (
+                    mask_text(extracted_text) if extracted_text else "[无文字]"
+                ),
                 "has_caption": bool(caption),
             },
         }

@@ -12,7 +12,6 @@ def mock_detector():
         patch("src.services.spam_detector.get_rule_engine") as mock_get_rule_engine,
         patch("src.services.spam_detector.get_classifier") as mock_get_classifier,
         patch("src.services.spam_detector.get_embedder") as mock_get_embedder,
-        patch("src.services.spam_detector.get_ocr_extractor") as mock_get_ocr_extractor,
         patch("src.services.spam_detector.get_ai_detector") as mock_get_ai_detector,
     ):
 
@@ -29,11 +28,6 @@ def mock_detector():
         mock_embedder = MagicMock()
         mock_embedder.is_initialized = False
         mock_get_embedder.return_value = mock_embedder
-
-        # Mock OCR
-        mock_ocr = MagicMock()
-        mock_ocr.is_available = False
-        mock_get_ocr_extractor.return_value = mock_ocr
 
         # Mock AI detector
         mock_ai = MagicMock()

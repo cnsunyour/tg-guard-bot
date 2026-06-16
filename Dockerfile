@@ -1,9 +1,6 @@
 # Python 3.13 基础镜像
 FROM python:3.13-slim
 
-# 构建参数：是否启用 OCR（默认禁用）
-ARG ENABLE_OCR=false
-
 # 设置工作目录
 WORKDIR /app
 
@@ -13,7 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装基础系统依赖
+# 安装系统依赖（含 cairosvg/TGS 贴纸渲染所需的 Cairo/Pango 库）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
@@ -25,44 +22,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavutil-dev \
     libswscale-dev \
     libswresample-dev \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
-
-# 如果启用 OCR，安装额外的系统依赖
-RUN if [ "$ENABLE_OCR" = "true" ]; then \
-    apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 \
-        libglib2.0-0 \
-        libsm6 \
-        libxext6 \
-        libxrender-dev \
-        libgl1 \
-        libcairo2 \
-        libpango-1.0-0 \
-        libpangocairo-1.0-0 \
-        libgdk-pixbuf-2.0-0 \
-        fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*; \
-    fi
 
 # 复制依赖文件
 COPY pyproject.toml ./
 
 # 安装 Python 依赖
 RUN pip install --upgrade pip setuptools wheel && \
-    if [ "$ENABLE_OCR" = "true" ]; then \
-        # ✅ 使用 EasyOCR（兼容所有 CPU，无 AVX2 要求）\
-        echo "安装 EasyOCR（兼容所有 CPU 和虚拟化环境）..." && \
-        # 安装 CPU 版本的 PyTorch（避免下载 nvidia CUDA 依赖，减少镜像大小）\
-        pip install --upgrade pip && \
-        pip install "torch>=2.0.0" -i https://download.pytorch.org/whl/cpu && \
-        pip install "torchvision>=0.15.0" -i https://download.pytorch.org/whl/cpu && \
-        pip install "easyocr>=1.7.0" && \
-        pip install "paddlepaddle>=3.0.0" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/ && \
-        pip install "paddleocr>=3.0.0" && \
-        pip install -e ".[ocr]"; \
-    else \
-        pip install -e .; \
-    fi
+    pip install -e .
 
 # 复制项目代码
 COPY src/ ./src/
