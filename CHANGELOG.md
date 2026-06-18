@@ -5,6 +5,49 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.1] - 2026-06-18
+
+### Bug 修复
+
+#### Telegram 消息 HTML 解析错误修复 🐛
+- **HTML 实体转义**：修复所有 Telegram 消息中比较符号未转义导致的 HTML 解析错误
+  - `/activity` 命令的活跃度说明（`<= 0` 等改为 HTML 实体 `&lt;= 0`）
+  - `/activityskip` 命令的两处错误提示（`>0` 改为 `&gt;0`）
+  - 活跃度限制通知消息（`> 0` 改为 `&gt;0`）
+- **统一格式**：统一所有活跃度相关说明的表述，确保比较符号正确转义为 HTML 实体
+
+#### `/activity` 命令显示修复 ⭐
+- **规则描述与实际逻辑对齐**：修正 `/activity` 命令显示内容与实际规则不一致的问题
+  - 非文本消息限制：明确 `<= 0` 时禁止发送
+  - 活跃度变化：+1 文本消息，非文本消息不变（当前不扣分）
+  - 衰减规则：仅当活跃度 < 10 且当天无消息时 -1
+- **统一显示**：统一命令显示和回调显示的文本内容
+- **回调状态修复**：回调函数中重新获取群组配置以确保显示最新状态
+- **格式优化**：添加 emoji 图标和层次结构
+
+### 重构优化
+
+#### 移除温度参数配置 🔄
+- **提高 API 兼容性**：删除 4 个温度配置字段，解决部分服务商（如 o1 系列）不允许传递 `temperature` 参数导致的调用失败（400/422 错误）
+  - 删除 `ai_spam_temperature`
+  - 删除 `ai_spam_backup_temperature`
+  - 删除 `ai_spam_vision_temperature`
+  - 删除 `ai_spam_vision_backup_temperature`
+- **清理调用代码**：从文本检测 `_call_api()` 和 Vision 检测 `detect_image()` 中移除 `temperature` 参数
+- **技术原因**：垃圾检测为确定性判断任务，所有温度值均为 0.0，不传参让服务商使用默认值即可
+
+### 文档更新
+
+- **README.md**：删除所有 OCR 功能说明，新增 AI Vision 多模态检测配置说明，更新技术栈表格、性能指标和开发路线图
+- **CLAUDE.md**：更新代码结构（ocr.py → ai_detector.py）、更新资源要求，移除 Git 分支工作流章节
+- **.env.example**：删除 4 个温度配置项
+
+### 代码质量
+- ✅ Config 加载正常
+- ✅ AI Detector 加载正常
+- ✅ Mypy 类型检查通过
+- ✅ Ruff 代码检查通过
+
 ## [1.5.0] - 2026-06-16
 
 ### 删除功能
