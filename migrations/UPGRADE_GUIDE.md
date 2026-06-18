@@ -4,41 +4,40 @@
 
 ## 变更概述
 
-**版本**: v1.1 - 活跃度系统群组开关
-**发布日期**: 2026-01-07
-**影响范围**: 数据库 schema
+**版本**: v1.4.3 - 活跃度系统简化
+**发布日期**: 2026-06-15
+**影响范围**: 配置文件（无需数据库迁移）
 
 ### 主要变更
 
-1. **数据库变更**：在 `groups` 表添加 `activity_enabled` 字段
-2. **新增功能**：管理员可通过 `/activity` 命令控制群组的活跃度系统开关
-3. **默认行为**：新群组和现有群组默认启用活跃度系统
+1. **配置简化**：删除全局开关 `ACTIVITY_ENABLED`，只保留群组开关
+2. **功能增强**：活跃度记录、置信度修正、检测豁免功能始终工作
+3. **行为变更**：群组开关只控制"是否限制活跃度 ≤ 0 的用户发送非文本消息"
+4. **向后兼容**：数据库结构无变化，群组配置完全兼容
 
 ---
 
 ## 升级前准备
 
-### 1. 备份数据库
+### 1. 备份配置文件
 
 ```bash
-# 备份 PostgreSQL 数据库
-docker exec tg-guard-postgres pg_dump -U postgres tg_guard > backup_$(date +%Y%m%d_%H%M%S).sql
+# 备份 .env 配置
+cp .env .env.backup_$(date +%Y%m%d_%H%M%S)
 ```
 
 ### 2. 检查当前版本
 
 ```bash
-# 查看当前数据库表结构
-docker exec tg-guard-postgres psql -U postgres -d tg_guard -c "\d groups"
+# 查看当前配置
+grep ACTIVITY .env
 ```
 
 ---
 
 ## 升级步骤
 
-### 方式一：自动迁移（推荐）
-
-#### 步骤 1：更新代码
+### 步骤 1：更新代码
 
 ```bash
 # 拉取最新代码
@@ -48,77 +47,72 @@ git pull origin main
 git pull origin dev
 ```
 
-#### 步骤 2：重新构建镜像
+### 步骤 2：更新配置文件
 
 ```bash
-# 重新构建 Docker 镜像（包含新的 migrations 目录）
+# 编辑 .env 文件
+nano .env
+
+# 删除以下行（如果存在）：
+# ACTIVITY_ENABLED=true
+
+# 保留以下配置：
+# ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15
+# ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0
+```
+
+### 步骤 3：重新构建并启动
+
+```bash
+# 重新构建 Docker 镜像
 make prod-build
 
-# 或者手动构建
-docker-compose build bot
-```
-
-#### 步骤 3：运行迁移
-
-```bash
-# 运行数据库迁移（在启动新容器前）
-docker-compose run --rm bot python scripts/migrate_schema.py --run
-```
-
-#### 步骤 4：重启服务
-
-```bash
-# 重启 Bot 服务
-docker-compose up -d bot
-```
-
-### 方式二：手动 SQL（仅限熟悉 SQL 的管理员）
-
-如果你更喜欢直接执行 SQL：
-
-```bash
-# 连接到 PostgreSQL 容器
-docker exec -it tg-guard-postgres psql -U postgres -d tg_guard
-
-# 执行以下 SQL：
-ALTER TABLE groups
-ADD COLUMN IF NOT EXISTS activity_enabled BOOLEAN NOT NULL DEFAULT TRUE;
-
-COMMENT ON COLUMN groups.activity_enabled IS '是否启用活跃度系统';
-
--- 验证
-\d groups
+# 重启服务
+make prod-restart
 ```
 
 ---
 
 ## 升级后验证
 
-### 1. 检查字段是否添加
-
-```bash
-docker exec tg-guard-postgres psql -U postgres -d tg_guard -c "\d groups" | grep activity
-```
-
-预期输出应包含：
-```
-activity_enabled | boolean | | not null | true
-```
-
-### 2. 测试新功能
-
-1. 在任意测试群组发送 `/activity` 命令
-2. 验证是否显示活跃度系统控制面板
-3. 点击启用/禁用按钮测试功能
-4. 发送 `/verifyconfig` 验证配置显示是否正确
-
-### 3. 检查日志
+### 1. 检查服务启动
 
 ```bash
 # 查看 Bot 日志
 docker logs tg-guard-bot --tail 50
 
-# 确认无错误
+# 确认无错误（即使保留了 ACTIVITY_ENABLED 也不会报错）
+```
+
+### 2. 测试新功能
+
+1. 在任意测试群组发送 `/activity` 命令
+2. 验证新的说明文案（应显示"始终生效"的辅助功能）
+3. 测试启用/禁用开关：
+   - **启用时**：活跃度 ≤ 0 的用户无法发送非文本消息
+   - **禁用时**：新用户可自由发送任何消息
+4. 验证辅助功能始终工作：
+   - 活跃度记录
+   - 置信度修正
+   - 检测豁免
+
+### 3. 检查配置加载
+
+```bash
+# 确认配置正确加载
+docker exec tg-guard-bot python -c "
+from src.core.config import settings
+print(f'ACTIVITY_MAX_CONFIDENCE_REDUCTION: {settings.activity_max_confidence_reduction}')
+print(f'ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD: {settings.activity_skip_spam_check_threshold}')
+print(f'Has activity_enabled: {hasattr(settings, \"activity_enabled\")}')
+"
+```
+
+预期输出：
+```
+ACTIVITY_MAX_CONFIDENCE_REDUCTION: 0.15
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD: 0
+Has activity_enabled: False
 ```
 
 ---
@@ -133,11 +127,11 @@ docker logs tg-guard-bot --tail 50
 docker-compose stop bot
 ```
 
-### 步骤 2：恢复数据库（如果需要）
+### 步骤 2：恢复配置
 
 ```bash
-# 恢复备份
-docker exec -i tg-guard-postgres psql -U postgres -d tg_guard < backup_YYYYMMDD_HHMMSS.sql
+# 恢复备份的配置文件
+cp .env.backup_YYYYMMDD_HHMMSS .env
 ```
 
 ### 步骤 3：回滚代码
@@ -158,94 +152,82 @@ docker-compose up -d bot
 
 ---
 
-## 迁移工具使用说明
+## 行为变更详解
 
-### 查看迁移状态
+### 修改前（v1.4.2 及之前）
 
-```bash
-docker exec tg-guard-bot python scripts/migrate_schema.py --list
+```
+全局开关 OFF → 所有功能关闭（限制、记录、置信度修正、检测豁免）
+全局开关 ON + 群组开关 OFF → 所有功能关闭
+全局开关 ON + 群组开关 ON → 所有功能启用
 ```
 
-### 手动应用单个迁移
+### 修改后（v1.4.3+）
 
-```bash
-docker exec -i tg-guard-postgres psql -U postgres -d tg_guard < migrations/001_add_activity_enabled.sql
+```
+群组开关 ON → 限制活跃度 ≤ 0 的用户发送非文本消息
+群组开关 OFF → 不限制非文本消息
+
+活跃度记录：始终工作
+置信度修正：始终工作
+检测豁免：始终工作
+宵禁门槛：始终工作
 ```
 
 ---
 
 ## 常见问题
 
-### Q1: 字段已存在错误
+### Q1: 保留了 ACTIVITY_ENABLED 会报错吗？
 
-**问题**: 执行迁移时提示字段已存在
-**原因**: 可能之前已手动添加过该字段
-**解决**:
+**答案**: 不会。即使 `.env` 中保留了 `ACTIVITY_ENABLED=true`，也不会报错，只是该配置不再被使用。
 
-```sql
--- 检查字段是否存在
-SELECT column_name, data_type, column_default
-FROM information_schema.columns
-WHERE table_name = 'groups' AND column_name = 'activity_enabled';
+**建议**: 为了保持配置文件清洁，建议删除该行。
 
--- 如果字段已存在但类型不对，可以删除后重新添加
-ALTER TABLE groups DROP COLUMN IF EXISTS activity_enabled;
-ALTER TABLE groups ADD COLUMN activity_enabled BOOLEAN NOT NULL DEFAULT TRUE;
-```
+### Q2: 现有群组的行为会改变吗？
 
-### Q2: 迁移记录不一致
+**答案**: 不会。群组配置 `activity_enabled` 保持不变：
+- 之前启用的群组：仍然限制活跃度 ≤ 0 的用户
+- 之前禁用的群组：仍然不限制
 
-**问题**: 迁移脚本显示未应用，但字段已存在
-**解决**: 手动标记为已应用
+**新增**: 所有群组的辅助功能（置信度修正、检测豁免）现在始终工作。
 
-```sql
--- 创建迁移记录表（如果不存在）
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version VARCHAR(255) PRIMARY KEY,
-    applied_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    description TEXT
-);
+### Q3: 活跃度数据会丢失吗？
 
--- 手动标记迁移为已应用
-INSERT INTO schema_migrations (version, description)
-VALUES ('001_add_activity_enabled', 'Manually applied')
-ON CONFLICT DO NOTHING;
-```
+**答案**: 不会。所有活跃度数据保留在 Redis 中，功能完全兼容。
 
-### Q3: 权限问题
+### Q4: 宵禁模式还能用吗？
 
-**问题**: 用户权限不足，无法修改表结构
-**解决**: 使用 postgres 用户执行，或授予相应权限
-
-```sql
-GRANT ALL PRIVILEGES ON TABLE groups TO your_user;
-GRANT ALL PRIVILEGES ON TABLE schema_migrations TO your_user;
-```
+**答案**: 完全可以。宵禁模式下的活跃度门槛机制继续工作，不受此次变更影响。
 
 ---
 
 ## 技术细节
 
-### 数据库变更详情
+### 配置变更详情
 
-```sql
--- 变更内容
-ALTER TABLE groups ADD COLUMN activity_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+```bash
+# 删除的配置
+ACTIVITY_ENABLED=true  # 全局开关，已删除
 
--- 字段说明
--- activity_enabled: 群组是否启用活跃度系统
---   - TRUE (默认): 启用
---   - FALSE: 禁用
-
--- 生效逻辑
--- 活跃度系统生效 = 全局开关 (settings.activity_enabled) AND 群组开关 (group.activity_enabled)
+# 保留的配置
+ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15   # 置信度修正最大降低值
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过检测阈值
 ```
+
+### 代码变更详情
+
+- **删除**: `src/core/config.py` 中的 `activity_enabled` 字段
+- **修改**: `src/services/activity.py` - 方法签名更新
+- **修改**: `src/bot/handlers/antispam.py` - 移除全局开关检查
+- **修改**: `src/bot/handlers/admin.py` - 更新命令文案
 
 ### 影响范围
 
 - **现有用户**: 无影响，活跃度数据保留
-- **现有群组**: 默认启用活跃度系统
-- **新群组**: 默认启用活跃度系统
+- **现有群组**: 行为不变，配置保持
+- **新群组**: 默认启用活跃度限制
+- **辅助功能**: 所有群组始终享受置信度修正和检测豁免
 
 ---
 
@@ -254,5 +236,5 @@ ALTER TABLE groups ADD COLUMN activity_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 如遇问题，请：
 
 1. 检查日志：`docker logs tg-guard-bot`
-2. 查看迁移状态：`docker exec tg-guard-bot python scripts/migrate_schema.py --list`
-3. 提交 Issue：https://github.com/your-repo/tg-guard-bot/issues
+2. 验证配置：参考上文"升级后验证"章节
+3. 提交 Issue：https://github.com/cnsunyour/tg-guard-bot/issues

@@ -268,17 +268,21 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
 
 
 async def check_non_text_message(
-    message: Message, bot: Bot, message_type: str, activity_enabled: bool | None = None
+    message: Message, bot: Bot, message_type: str, group_activity_enabled: bool
 ) -> bool:
     """检查非文本消息是否允许发送（活跃度检查）
 
-    注意：调用此函数前应已过滤管理员
+    注意：
+    - 调用此函数前应已过滤管理员
+    - group_activity_enabled=True: 限制活跃度 <= 0 的用户
+    - group_activity_enabled=False: 不限制，但仍记录活跃度
+    - 活跃度记录始终执行，用于置信度修正、检测豁免等
 
     Args:
         message: 消息对象
         bot: Bot 实例
         message_type: 消息类型（"photo", "sticker", "video" 等）
-        activity_enabled: 是否启用活跃度检查（None 则使用全局配置）
+        group_activity_enabled: 群组活跃度开关（来自 group.activity_enabled）
 
     Returns:
         True 表示消息已被阻止（调用者应直接 return），False 表示允许
@@ -290,16 +294,9 @@ async def check_non_text_message(
     if message.from_user.id == 777000:
         return False
 
-    # 检查活跃度系统是否启用
-    if activity_enabled is None:
-        activity_enabled = settings.activity_enabled
-
-    if not activity_enabled:
-        return False
-
     # 检查活跃度是否允许发送非文本消息
     allowed, current_activity = await ActivityService.check_non_text_allowed(
-        message.chat.id, message.from_user.id
+        message.chat.id, message.from_user.id, check_enabled=group_activity_enabled
     )
 
     if not allowed:
@@ -319,7 +316,7 @@ async def check_non_text_message(
 
         return True  # 消息已被阻止
 
-    # 允许发送，扣除活跃度
+    # 允许发送，记录活跃度
     await ActivityService.record_non_text_message(message.chat.id, message.from_user.id)
     return False  # 允许通过
 
@@ -340,7 +337,7 @@ async def notify_activity_restriction(bot: Bot, user_id: int, current_activity: 
                 f"您当前的活跃度为 **{current_activity}**，无法发送非文本消息。\n\n"
                 "📝 **如何恢复:**\n"
                 "发送文本消息可以增加活跃度，每条文本消息 +1 活跃度。\n\n"
-                "💡 当活跃度 > 0 时，即可发送图片、贴纸等非文本消息。"
+                "💡 当活跃度 &gt; 0 时，即可发送图片、贴纸等非文本消息。"
             ),
             parse_mode="Markdown",
         )
@@ -381,19 +378,19 @@ def managed_temp_file(suffix: str = ".jpg") -> Iterator[str]:
                 logger.error(f"删除临时文件失败 {temp_file_path}: {e}")
 
 
-def _extract_ocr_text_from_prompt(prompt_text: str) -> str:
-    """从提示消息中提取 OCR 识别的文本
+def _extract_recognized_text_from_prompt(prompt_text: str) -> str:
+    """从提示消息中提取识别的文本
 
-    格式: "📝 OCR 识别内容:\n「{content}」"
+    格式: "📝 识别内容:\n「{content}」"
 
     Args:
         prompt_text: 提示消息文本
 
     Returns:
-        提取的 OCR 文本，如果提取失败返回空字符串
+        提取的识别文本，如果提取失败返回空字符串
     """
     # 使用正则提取「」之间的内容
-    match = re.search(r"📝 OCR 识别内容:\n「(.+?)」", prompt_text, re.DOTALL)
+    match = re.search(r"📝 识别内容:\n「(.+?)」", prompt_text, re.DOTALL)
     if match:
         content = match.group(1)
         # 移除可能的截断标记
@@ -406,7 +403,7 @@ async def _handle_spam_with_confirmation(
     _bot: Bot,
     result: dict[str, Any],
     _group: Group,
-    ocr_text: str | None = None,
+    recognized_text: str | None = None,
 ) -> None:
     """垃圾消息确认模式处理（保留原消息）
 
@@ -414,14 +411,14 @@ async def _handle_spam_with_confirmation(
     1. 保留原消息（不删除）
     2. 发送确认提示消息（回复原消息）
     3. 通过回复链建立关联，回调时可获取原消息
-    4. 对于 OCR 识别的消息，将识别文本嵌入提示消息
+    4. 对于图片/贴纸等识别出文字的消息，将识别文本嵌入提示消息
 
     Args:
         message: 原消息对象
         _bot: Bot 实例
         result: 检测结果
         _group: 群组配置
-        ocr_text: OCR 识别的文本（用于图片/视频/贴纸）
+        recognized_text: 识别出的文本（用于图片/视频/贴纸）
     """
     # 检查消息发送者
     if not message.from_user:
@@ -458,28 +455,29 @@ async def _handle_spam_with_confirmation(
         f"🔍 检测原因: {reasons_text}\n"
     )
 
-    # 如果有 OCR 识别的文本，显示在提示消息中
-    if ocr_text:
+    # 如果有识别出的文本，显示在提示消息中
+    if recognized_text:
         prompt_text += (
-            f"\n📝 OCR 识别内容:\n「{ocr_text[:200]}{'...' if len(ocr_text) > 200 else ''}」\n"
+            f"\n📝 识别内容:\n"
+            f"「{recognized_text[:200]}{'...' if len(recognized_text) > 200 else ''}」\n"
         )
 
     prompt_text += "\n⏰ 请确认处理方式（删除此提示视为放弃处理）"
 
     # 3. 创建内联按钮
-    # 回调数据格式: spam_confirm:{action}:{user_id}:{has_ocr}
-    # has_ocr: 1 表示有 OCR 文本，0 表示没有
-    has_ocr = "1" if ocr_text else "0"
+    # 回调数据格式: spam_confirm:{action}:{user_id}:{has_text}
+    # has_text: 1 表示有识别文本，0 表示没有
+    has_text = "1" if recognized_text else "0"
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="✅ 确认垃圾",
-                    callback_data=f"spam_confirm:ban:{message.from_user.id}:{has_ocr}",
+                    callback_data=f"spam_confirm:ban:{message.from_user.id}:{has_text}",
                 ),
                 InlineKeyboardButton(
                     text="❌ 误判",
-                    callback_data=f"spam_confirm:false_positive:{message.from_user.id}:{has_ocr}",
+                    callback_data=f"spam_confirm:false_positive:{message.from_user.id}:{has_text}",
                 ),
             ]
         ]
@@ -1345,31 +1343,25 @@ async def on_message(message: Message, bot: Bot) -> None:
     # 检查是否是外部转发或带链接的消息（需要活跃度支撑）
     is_special_message = is_external_forward(message) or has_url_entities(message)
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 记录活跃度（管理员已在上面跳过，不会记录）
     activity = None
-    if activity_system_enabled:
-        if is_special_message:
-            # 外部转发/带链接消息：按非文本消息处理（-2 活跃度）
-            if await check_non_text_message(
-                message,
-                bot,
-                "forward" if is_external_forward(message) else "link",
-                activity_enabled=True,  # 已在上面检查过，这里直接传 True
-            ):
-                return  # 活跃度不足，消息已被删除
-            # 活跃度足够，已扣除，继续垃圾检测
-            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-        else:
-            # 普通文本消息：增加活跃度（+1）
-            activity = await ActivityService.record_text_message(
-                message.chat.id, message.from_user.id
-            )
+    if is_special_message:
+        # 外部转发/带链接消息：按非文本消息处理
+        if await check_non_text_message(
+            message,
+            bot,
+            "forward" if is_external_forward(message) else "link",
+            group.activity_enabled if group else True,
+        ):
+            return  # 活跃度不足，消息已被删除
+        # 活跃度足够，已扣除，继续垃圾检测
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    else:
+        # 普通文本消息：增加活跃度（+1）
+        activity = await ActivityService.record_text_message(message.chat.id, message.from_user.id)
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    if activity_system_enabled and activity is not None:
+    if activity is not None:
         global_threshold = settings.activity_skip_spam_check_threshold
 
         # 确定最终阈值（全局配置优先）
@@ -1500,36 +1492,33 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         return  # 已处理频道马甲，直接返回
 
     # ✅ 活跃度系统：检查是否允许发送非文本消息
-    activity_system_enabled = settings.activity_enabled and group.activity_enabled
-    if activity_system_enabled:
-        if await check_non_text_message(message, bot, "photo", activity_enabled=True):
-            return  # 活跃度不足，消息已被删除
+    # ✅ 活跃度系统：检查是否允许发送非文本消息
+    if await check_non_text_message(message, bot, "photo", group.activity_enabled):
+        return  # 活跃度不足，消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任（activity 变量后续也用于 Vision 置信度调整）
-    activity: int | None = None
-    if activity_system_enabled:
-        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-        global_threshold = settings.activity_skip_spam_check_threshold
+    activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    global_threshold = settings.activity_skip_spam_check_threshold
 
-        # 确定最终阈值（全局配置优先）
-        if global_threshold > 0:
-            final_threshold = global_threshold
-            threshold_source = "全局配置"
-        elif global_threshold == 0:
-            final_threshold = group.activity_skip_threshold if group else 0
-            threshold_source = "群组配置"
-        else:
-            final_threshold = 0
-            threshold_source = "全局禁用"
+    # 确定最终阈值（全局配置优先）
+    if global_threshold > 0:
+        final_threshold = global_threshold
+        threshold_source = "全局配置"
+    elif global_threshold == 0:
+        final_threshold = group.activity_skip_threshold if group else 0
+        threshold_source = "群组配置"
+    else:
+        final_threshold = 0
+        threshold_source = "全局禁用"
 
-        if final_threshold > 0 and activity >= final_threshold:
-            logger.debug(
-                f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
-            )
-            # 记录到上下文
-            await ContextService.record_message(message)
-            return  # 直接返回，不进行垃圾检测
+    if final_threshold > 0 and activity >= final_threshold:
+        logger.debug(
+            f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+            f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+        )
+        # 记录到上下文
+        await ContextService.record_message(message)
+        return  # 直接返回，不进行垃圾检测
 
     # 更新 username 映射
     await update_username_mapping_if_needed(message)
@@ -1545,7 +1534,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     # ✅ 构建 Vision 直判需要的上下文：caption + 群组对话上下文
     caption = (message.caption or "").strip() or None
     context_text: str | None = None
-    if settings.context_enabled and settings.ai_spam_enabled:
+    if settings.context_enabled and (settings.ai_spam_enabled or settings.ai_spam_vision_enabled):
         try:
             context = await ContextService.get_conversation_context(message)
             context_text = ContextService.format_context_for_ai(
@@ -1590,8 +1579,8 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
             f"原因: {', '.join(result['reasons'])}"
         )
 
-        # 获取 OCR 识别的文本（如果有）
-        ocr_text = result.get("details", {}).get("ocr_text", "")
+        # 获取识别出的文本（如果有）
+        recognized_text = result.get("details", {}).get("recognized_text", "")
 
         # 根据群组配置决定处理方式
         if group and group.spam_confirm_enabled:
@@ -1601,7 +1590,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                 _bot=bot,
                 result=dict(result),  # type: ignore[arg-type]
                 _group=group,
-                ocr_text=ocr_text,  # 传递 OCR 文本
+                recognized_text=recognized_text,  # 传递识别文本
             )
         else:
             # 立即处罚模式：删除消息，立即处罚
@@ -1634,13 +1623,13 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                     punishment_text = "禁言 10 分钟"
 
                 if success:
-                    # 缓存 OCR 文本用于管理员反馈（如果有）
-                    if ocr_text:
+                    # 缓存识别文本用于管理员反馈（如果有）
+                    if recognized_text:
                         redis = get_redis()
                         text_cache_key = RedisKeys.spam_message_text(
                             message.chat.id, message.message_id
                         )
-                        await redis.setex(text_cache_key, 86400, ocr_text)
+                        await redis.setex(text_cache_key, 86400, recognized_text)
 
                     # 发送提示消息（包含管理员反馈按钮）
                     message_id_str = str(message.message_id)
@@ -1671,10 +1660,10 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
                     )
                     await auto_delete_message(alert_msg)
 
-                    # 记录反馈（如果有 OCR 文本）
-                    if ocr_text:
+                    # 记录反馈（如果有识别文本）
+                    if recognized_text:
                         await detector.add_feedback(
-                            text=ocr_text,
+                            text=recognized_text,
                             is_spam=True,
                             labeled_by=bot.id,
                             confidence=result["confidence"],
@@ -1729,41 +1718,36 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # ✅ 活跃度检查（管理员已在上面跳过）
     if await check_non_text_message(
-        message, bot, "sticker", activity_enabled=activity_system_enabled
+        message, bot, "sticker", group.activity_enabled if group else True
     ):
         return  # 消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
     # activity 变量在后续 detect_image 也会用到，提升作用域
-    activity: int | None = None
-    if activity_system_enabled:
-        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-        global_threshold = settings.activity_skip_spam_check_threshold
+    activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    global_threshold = settings.activity_skip_spam_check_threshold
 
-        # 确定最终阈值（全局配置优先）
-        if global_threshold > 0:
-            final_threshold = global_threshold
-            threshold_source = "全局配置"
-        elif global_threshold == 0:
-            final_threshold = group.activity_skip_threshold if group else 0
-            threshold_source = "群组配置"
-        else:
-            final_threshold = 0
-            threshold_source = "全局禁用"
+    # 确定最终阈值（全局配置优先）
+    if global_threshold > 0:
+        final_threshold = global_threshold
+        threshold_source = "全局配置"
+    elif global_threshold == 0:
+        final_threshold = group.activity_skip_threshold if group else 0
+        threshold_source = "群组配置"
+    else:
+        final_threshold = 0
+        threshold_source = "全局禁用"
 
-        if final_threshold > 0 and activity >= final_threshold:
-            logger.debug(
-                f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
-            )
-            # 记录到上下文
-            await ContextService.record_message(message)
-            return  # 直接返回，不进行垃圾检测
+    if final_threshold > 0 and activity >= final_threshold:
+        logger.debug(
+            f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+            f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+        )
+        # 记录到上下文
+        await ContextService.record_message(message)
+        return  # 直接返回，不进行垃圾检测
 
     # 检查群组是否启用反垃圾
     if group and not group.antispam_enabled:
@@ -1772,14 +1756,9 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
     # 获取检测器
     detector = get_detector()
 
-    # 检查 OCR 或 Vision 是否可用（Vision 启用时不强制要求本地 OCR）
-    vision_available = (
-        settings.ai_spam_vision_enabled
-        and detector.ai_detector.enabled
-        and detector.ai_detector.any_vision_provider_available
-    )
-    if not detector.ocr_extractor.is_available and not vision_available:
-        logger.debug("OCR 与 AI Vision 都不可用，跳过贴纸检测")
+    # 检查 Vision 是否可用（多模态未配置则跳过贴纸检测）
+    if not detector.ai_detector.vision_enabled:
+        logger.debug("Vision 不可用，跳过贴纸检测")
         return
 
     # ✅ 构建贴纸 caption（emoji + 贴纸包名）和群组对话上下文
@@ -1792,7 +1771,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
     sticker_caption = "\n".join(sticker_meta_parts)
 
     sticker_context_text: str | None = None
-    if settings.context_enabled and settings.ai_spam_enabled:
+    if settings.context_enabled and (settings.ai_spam_enabled or settings.ai_spam_vision_enabled):
         try:
             sticker_context = await ContextService.get_conversation_context(message)
             sticker_context_text = ContextService.format_context_for_ai(
@@ -2139,13 +2118,15 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     punishment_text = "禁言 10 分钟"
 
                 if success:
-                    # 缓存原始消息的 OCR 文本，用于管理员反馈（TTL 1天）
-                    if "ocr_text" in result["details"]:
+                    # 缓存原始消息的识别文本，用于管理员反馈（TTL 1天）
+                    if "recognized_text" in result["details"]:
                         redis = get_redis()
                         text_cache_key = RedisKeys.spam_message_text(
                             message.chat.id, message.message_id
                         )
-                        await redis.setex(text_cache_key, 86400, result["details"]["ocr_text"])
+                        await redis.setex(
+                            text_cache_key, 86400, result["details"]["recognized_text"]
+                        )
 
                     # 发送提示消息
                     message_id_str = str(message.message_id)
@@ -2177,9 +2158,9 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     await auto_delete_message(alert_msg)
 
                     # 记录反馈
-                    if "ocr_text" in result["details"]:
+                    if "recognized_text" in result["details"]:
                         await detector.add_feedback(
-                            text=result["details"]["ocr_text"],
+                            text=result["details"]["recognized_text"],
                             is_spam=True,
                             labeled_by=bot.id,
                             confidence=result["confidence"],
@@ -2227,12 +2208,9 @@ async def on_video_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "video", activity_enabled=activity_system_enabled
+        message, bot, "video", group.activity_enabled if group else True
     ):
         return
 
@@ -2270,12 +2248,9 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "animation", activity_enabled=activity_system_enabled
+        message, bot, "animation", group.activity_enabled if group else True
     ):
         return
 
@@ -2313,12 +2288,9 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "voice", activity_enabled=activity_system_enabled
+        message, bot, "voice", group.activity_enabled if group else True
     ):
         return
 
@@ -2356,12 +2328,9 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "video_note", activity_enabled=activity_system_enabled
+        message, bot, "video_note", group.activity_enabled if group else True
     ):
         return
 
@@ -2399,12 +2368,9 @@ async def on_document_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "document", activity_enabled=activity_system_enabled
+        message, bot, "document", group.activity_enabled if group else True
     ):
         return
 
@@ -2442,12 +2408,9 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
         logger.debug(f"获取群组配置失败（非关键）: {e}")
         group = None
 
-    # 检查活跃度系统是否启用（全局 + 群组）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-
     # 活跃度检查
     if await check_non_text_message(
-        message, bot, "audio", activity_enabled=activity_system_enabled
+        message, bot, "audio", group.activity_enabled if group else True
     ):
         return
 
@@ -2505,13 +2468,10 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
     # 直接进行垃圾检测
 
     # 获取活跃度（用于降低检测阈值）
-    activity_system_enabled = settings.activity_enabled and (not group or group.activity_enabled)
-    activity = None
-    if activity_system_enabled:
-        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+    activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    if activity_system_enabled and activity is not None:
+    if activity is not None:
         global_threshold = settings.activity_skip_spam_check_threshold
 
         if global_threshold > 0:
@@ -2695,12 +2655,7 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
     # 如果有 caption，检测 caption 文字
     if message.caption:
         # 获取活跃度（用于降低检测阈值）
-        activity_system_enabled = settings.activity_enabled and (
-            not group or group.activity_enabled
-        )
-        activity = None
-        if activity_system_enabled:
-            activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
 
         # 检测器
         detector = get_detector()
@@ -2786,10 +2741,10 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
 async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
     """处理垃圾消息确认回调（通过回复链获取原消息）
 
-    回调数据格式: spam_confirm:{action}:{user_id}:{has_ocr}
+    回调数据格式: spam_confirm:{action}:{user_id}:{has_text}
     - action: ban（确认垃圾） 或 false_positive（误判）
     - user_id: 被处理用户的 ID
-    - has_ocr: 1 表示有 OCR 文本，0 表示没有
+    - has_text: 1 表示有识别文本，0 表示没有
 
     原消息通过 callback.message.reply_to_message 获取
     """
@@ -2812,9 +2767,9 @@ async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     # 3. 解析回调数据
-    _, action, user_id_str, has_ocr_str = callback.data.split(":", 3)
+    _, action, user_id_str, has_text_str = callback.data.split(":", 3)
     user_id = int(user_id_str)
-    has_ocr = has_ocr_str == "1"
+    has_text = has_text_str == "1"
 
     original_message = message.reply_to_message
 
@@ -2825,12 +2780,12 @@ async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
             return
 
     # 5. 获取原消息内容
-    # 优先从 caption 获取，如果没有且有 OCR 标记，则从提示消息中提取
+    # 优先从 caption 获取，如果没有且有识别文本标记，则从提示消息中提取
     original_text = original_message.text or original_message.caption or ""
 
-    if not original_text and has_ocr:
-        # 从提示消息中提取 OCR 识别的文本
-        original_text = _extract_ocr_text_from_prompt(message.text or "")
+    if not original_text and has_text:
+        # 从提示消息中提取识别出的文本
+        original_text = _extract_recognized_text_from_prompt(message.text or "")
 
     if not original_text:
         await callback.answer("❌ 无法获取消息内容", show_alert=True)

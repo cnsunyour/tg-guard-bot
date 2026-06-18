@@ -1,13 +1,12 @@
 """AI API 垃圾检测模块 - 支持主备双服务商自动切换
 
 架构设计：
-- AIServiceProvider: 抽象基类
-- PrimaryAIServiceProvider: 主服务商
-- BackupAIServiceProvider: 备份服务商
+- AIServiceProvider: 抽象基类（含文本 detect 与 Vision detect_image）
+- PrimaryAIServiceProvider: 文本主服务商
+- BackupAIServiceProvider: 文本备份服务商
+- VisionServiceProvider: 多模态 Vision 服务商（图片/贴纸，独立配置）
 - HybridAIDetector: 协调器（熔断器、统计追踪、自动回退）
 - AISpamDetector: 向后兼容包装
-
-参考实现：src/ml/hybrid_ocr.py
 """
 
 import asyncio
@@ -117,7 +116,6 @@ class AIServiceConfig:
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
-    temperature: float = 0.0
     threshold: float = 0.8
     timeout: int = 10
     max_retries: int = 2
@@ -557,7 +555,6 @@ class AIServiceProvider(ABC):
         }
         payload = {
             "model": self.config.model,
-            "temperature": self.config.temperature,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
@@ -755,7 +752,6 @@ class AIServiceProvider(ABC):
         }
         payload: dict[str, Any] = {
             "model": self.config.model,
-            "temperature": self.config.temperature,
             "messages": messages,
             "response_format": {"type": "json_object"},
         }
@@ -877,7 +873,6 @@ class PrimaryAIServiceProvider(AIServiceProvider):
             api_key=settings.ai_spam_api_key,
             api_base=settings.ai_spam_api_base,
             model=settings.ai_spam_model,
-            temperature=settings.ai_spam_temperature,
             threshold=settings.ai_spam_threshold,
             timeout=settings.ai_spam_timeout,
             max_retries=settings.ai_spam_max_retries,
@@ -946,7 +941,6 @@ class BackupAIServiceProvider(AIServiceProvider):
             api_key=settings.ai_spam_backup_api_key,
             api_base=settings.ai_spam_backup_api_base,
             model=settings.ai_spam_backup_model,
-            temperature=settings.ai_spam_backup_temperature,
             threshold=settings.ai_spam_backup_threshold,
             timeout=settings.ai_spam_backup_timeout,
             max_retries=settings.ai_spam_backup_max_retries,
@@ -1006,6 +1000,38 @@ class BackupAIServiceProvider(AIServiceProvider):
 
 
 # ============================================================================
+# Vision 服务商实现（通用类，主/备共用，由 name + config 区分）
+# ============================================================================
+
+
+class VisionServiceProvider(AIServiceProvider):
+    """Vision 多模态服务商（图片/贴纸直判）
+
+    与文本 provider 彻底解耦：独立 model，key/base 由 config.py 的
+    vision_*_effective computed property 完成留空回退后传入。
+    复用基类的 detect_image / _call_api_vision / _process_vision_result /
+    supports_vision 及 httpx 客户端生命周期管理。
+    """
+
+    @property
+    def is_available(self) -> bool:
+        """Vision 服务商是否可用：已启用 + 有 key + 模型支持多模态
+
+        将多模态判定纳入可用性，使"启用了但配了纯文本 model"直接视为不可用，
+        在 candidates 选择阶段就被排除（而非等到调用才发现）。
+        """
+        return self.config.enabled and bool(self.config.api_key) and self.supports_vision
+
+    async def detect(self, text: str, use_context_prompt: bool = False) -> AIDetectionResult:
+        """Vision provider 不参与文本检测（契约保护）
+
+        HybridAIDetector 的文本路径只走 self.primary / self.backup，
+        不会调用到此处；保留以满足抽象基类约束。
+        """
+        raise NotImplementedError(f"{self.name} 是 Vision 专用 provider，不支持文本 detect()")
+
+
+# ============================================================================
 # 混合 AI 检测器（协调器）
 # ============================================================================
 
@@ -1029,6 +1055,39 @@ class HybridAIDetector:
         """
         self.primary = PrimaryAIServiceProvider()
         self.backup = BackupAIServiceProvider()
+
+        # Vision 主/备（独立配置；key/base 经 config computed 完成留空回退）
+        self.vision_primary = VisionServiceProvider(
+            "vision_primary",
+            AIServiceConfig(
+                enabled=settings.ai_spam_vision_enabled,
+                api_key=settings.vision_api_key_effective,
+                api_base=settings.vision_api_base_effective,
+                model=settings.ai_spam_vision_model,
+                threshold=settings.ai_spam_vision_threshold,
+                timeout=settings.ai_spam_vision_timeout,
+                max_retries=settings.ai_spam_vision_max_retries,
+                max_length=settings.ai_spam_max_length,
+                client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
+                client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
+            ),
+        )
+        self.vision_backup = VisionServiceProvider(
+            "vision_backup",
+            AIServiceConfig(
+                # 备依赖主开关：Vision 主未启用则备也不启用
+                enabled=settings.ai_spam_vision_backup_enabled and settings.ai_spam_vision_enabled,
+                api_key=settings.vision_backup_api_key_effective,
+                api_base=settings.vision_backup_api_base_effective,
+                model=settings.ai_spam_vision_backup_model,
+                threshold=settings.ai_spam_vision_backup_threshold,
+                timeout=settings.ai_spam_vision_timeout,
+                max_retries=settings.ai_spam_vision_backup_max_retries,
+                max_length=settings.ai_spam_max_length,
+                client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
+                client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
+            ),
+        )
         self.circuit_breaker_threshold = circuit_breaker_threshold
         self.circuit_breaker_cooldown = timedelta(minutes=circuit_breaker_cooldown_minutes)
         self._stats: dict[str, AIServiceStats] = defaultdict(
@@ -1057,6 +1116,30 @@ class HybridAIDetector:
             )
         else:
             logger.debug("备份 AI 服务商未启用或未配置")
+
+        # Vision 主/备初始化日志（含"启用但 model 非多模态"兜底告警）
+        if self.vision_primary.is_available:
+            logger.info(
+                f"✅ Vision 主服务商已启用 [api_base={self.vision_primary.config.api_base}] "
+                f"[model={self.vision_primary.config.model}] "
+                f"[threshold={self.vision_primary.config.threshold}]"
+            )
+        elif settings.ai_spam_vision_enabled and not self.vision_primary.supports_vision:
+            logger.warning(
+                f"⚠️ Vision 已启用但主模型非多模态，Vision 将不可用 "
+                f"[model={self.vision_primary.config.model}]"
+            )
+        else:
+            logger.debug("Vision 主服务商未启用或未配置 key")
+
+        if self.vision_backup.is_available:
+            logger.info(
+                f"✅ Vision 备份服务商已启用 [api_base={self.vision_backup.config.api_base}] "
+                f"[model={self.vision_backup.config.model}] "
+                f"[threshold={self.vision_backup.config.threshold}]"
+            )
+        else:
+            logger.debug("Vision 备份服务商未启用或未配置")
 
     def _is_circuit_open(self, provider: AIServiceProvider) -> bool:
         """检查熔断器是否打开
@@ -1355,14 +1438,15 @@ class HybridAIDetector:
             VisionAllFailedError: 所有支持 vision 的 provider 调用都失败
         """
         candidates: list[AIServiceProvider] = []
-        if self.primary.is_available and self.primary.supports_vision:
-            candidates.append(self.primary)
-        if self.backup.is_available and self.backup.supports_vision:
-            candidates.append(self.backup)
+        if self.vision_primary.is_available:
+            candidates.append(self.vision_primary)
+        if self.vision_backup.is_available:
+            candidates.append(self.vision_backup)
 
         if not candidates:
             raise VisionUnsupportedError(
-                "没有支持 Vision 的 AI provider（检查 ai_spam_model / ai_spam_backup_model 是否多模态）"
+                "没有可用的 Vision provider"
+                "（检查 AI_SPAM_VISION_ENABLED / ai_spam_vision_model 是否多模态 / key 是否配置或可回退）"
             )
 
         primary_error = ""
@@ -1373,10 +1457,10 @@ class HybridAIDetector:
                 logger.debug(f"🔌 {provider.name} 熔断中，跳过 Vision 调用")
                 continue
 
-            # 切换到备份时主动关闭主的连接（对齐现有 detect_with_context 行为）
-            if provider is self.backup and self.primary.is_available:
-                self.primary.request_client_rebuild("switching_to_backup")
-                await self.primary.close()
+            # 切换到备份时主动关闭 Vision 主的连接（对齐文本 detect_with_context 行为）
+            if provider is self.vision_backup and self.vision_primary.is_available:
+                self.vision_primary.request_client_rebuild("switching_to_backup")
+                await self.vision_primary.close()
                 logger.info(f"🔄 Vision 切换到 {provider.name}...")
 
             try:
@@ -1409,7 +1493,7 @@ class HybridAIDetector:
                 formatted_error = provider._format_error(e)
                 self._record_failure(provider, formatted_error)
                 logger.warning(f"❌ {provider.name} Vision 检测失败: {formatted_error}")
-                if provider is self.primary:
+                if provider is self.vision_primary:
                     primary_error = formatted_error
                 else:
                     backup_error = formatted_error
@@ -1417,7 +1501,7 @@ class HybridAIDetector:
                 formatted_error = provider._format_error(e)
                 self._record_failure(provider, formatted_error)
                 logger.error(f"💥 {provider.name} Vision 意外错误: {formatted_error}")
-                if provider is self.primary:
+                if provider is self.vision_primary:
                     primary_error = formatted_error
                 else:
                     backup_error = formatted_error
@@ -1431,6 +1515,10 @@ class HybridAIDetector:
             await self.primary.close()
         if self.backup.is_available:
             await self.backup.close()
+        if self.vision_primary.is_available:
+            await self.vision_primary.close()
+        if self.vision_backup.is_available:
+            await self.vision_backup.close()
 
     def get_stats(self) -> dict[str, dict]:
         """获取所有服务商的统计信息
@@ -1438,7 +1526,12 @@ class HybridAIDetector:
         Returns:
             {provider_name: stats} 字典
         """
-        providers = {"primary": self.primary, "backup": self.backup}
+        providers = {
+            "primary": self.primary,
+            "backup": self.backup,
+            "vision_primary": self.vision_primary,
+            "vision_backup": self.vision_backup,
+        }
         result: dict[str, dict] = {}
 
         for name, provider in providers.items():
@@ -1569,11 +1662,17 @@ class AISpamDetector:
         return await self._detector.detect_with_context(text, context_text)
 
     @property
-    def any_vision_provider_available(self) -> bool:
-        """是否至少有一家启用且支持 vision 的 provider"""
-        return (self._detector.primary.is_available and self._detector.primary.supports_vision) or (
-            self._detector.backup.is_available and self._detector.backup.supports_vision
+    def vision_enabled(self) -> bool:
+        """Vision 是否启用且至少有一家可用 provider（图片/贴纸检测的总开关）"""
+        return (
+            self._detector.vision_primary.is_available
+            or self._detector.vision_backup.is_available
         )
+
+    @property
+    def any_vision_provider_available(self) -> bool:
+        """是否至少有一家可用的 Vision provider（语义同 vision_enabled，保留旧名）"""
+        return self.vision_enabled
 
     async def detect_image_with_context(
         self,
@@ -1589,8 +1688,8 @@ class AISpamDetector:
             VisionUnsupportedError: AI 未启用或没有支持 vision 的 provider
             VisionAllFailedError: 所有 vision provider 都失败
         """
-        if not self.enabled:
-            raise VisionUnsupportedError("AI 检测未启用")
+        if not self.vision_enabled:
+            raise VisionUnsupportedError("Vision 未启用或无可用 provider")
         return await self._detector.detect_image_with_context(
             image_b64, mime, caption=caption, context_text=context_text
         )

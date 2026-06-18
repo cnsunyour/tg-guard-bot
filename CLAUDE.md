@@ -158,9 +158,9 @@ else:
                   │
                   ↓
 ┌─────────────────────────────────────────────────────────┐
-│ 活跃度置信度调整 (降低误判)                              │
+│ 活跃度置信度调整 (降低误判，始终生效)                     │
 │ - 高活跃度用户 (activity >= 10)                          │
-│ - 对数公式: reduction = 0.01 × log2(activity / 10)      │
+│ - 对数公式: reduction = 0.05 × log2(activity / 10)      │
 │ - 最大降低: 0.15 (15%)                                   │
 │ - 调整后 < 阈值 → 改判为正常                             │
 └─────────────────┬───────────────────────────────────────┘
@@ -353,8 +353,7 @@ src/
 │   ├── rule_engine.py        # ⭐ 规则引擎 (Stage 1)
 │   ├── classifier.py         # ⭐ TF-IDF + SVM (Stage 2)
 │   ├── embedder.py           # ⭐ bge-small-zh (Stage 3 + 上下文一致性)
-│   ├── ai_detector.py        # ⭐ AI检测器 (OpenAI兼容API)
-│   ├── ocr.py                # PaddleOCR 图片识别
+│   ├── ai_detector.py        # ⭐ AI检测器 (文本 + Vision)
 │   └── trainer.py            # 模型训练脚本
 │
 ├── models/                   # SQLAlchemy ORM
@@ -392,30 +391,6 @@ src/
 ---
 
 ## 🔧 开发注意事项
-
-### Git 分支工作流
-
-**双分支模型**:
-- **`main`**: 生产稳定版本,只接受 `dev` 合并,禁止直接开发
-- **`dev`**: 开发主线,所有功能分支从此创建并合并回此
-
-**标准流程**:
-```bash
-# 1. 创建功能分支
-git checkout dev && git pull origin dev
-git checkout -b feature/新功能名
-
-# 2. 开发 + 提交
-git add . && git commit -m "feat: 功能描述"
-
-# 3. 合并到 dev
-git checkout dev && git merge feature/新功能名 --no-ff
-git branch -d feature/新功能名 && git push origin dev
-
-# 4. 测试通过后发布到 main
-git checkout main && git merge dev --no-ff -m "release: 版本描述"
-git push origin main && git checkout dev
-```
 
 ### 代码风格
 
@@ -472,9 +447,13 @@ REPLY_SIMILARITY_THRESHOLD=0.5           # 回复链相似度阈值
 REPLY_CONFIDENCE_REDUCTION=0.2           # 回复链置信度降低幅度
 
 # 活跃度系统配置
-ACTIVITY_ENABLED=true
 ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15   # 最大置信度减少值
-ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过垃圾检测阈值
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过垃圾检测全局阈值
+
+# 说明：
+# - 群组可通过 /activity 命令控制是否限制非文本消息
+# - 活跃度记录、置信度修正、检测豁免功能始终工作
+# - 宵禁模式下的活跃度门槛继续生效
 
 # 验证配置
 VERIFICATION_TIMEOUT=120  # 私聊验证超时时间 (秒)
@@ -512,7 +491,7 @@ services:
 | 配置 | 最低要求 | 推荐配置 |
 |------|---------|---------|
 | CPU | 1 vCPU | 2 vCPU |
-| RAM | 1GB (无 OCR) | 2GB (基础) / 4GB (含 OCR) |
+| RAM | 1GB | 2GB |
 | 存储 | 10GB | 20GB SSD |
 
 ### 监控日志
@@ -570,8 +549,8 @@ SPAM_THRESHOLD_ML=0.7
 SPAM_THRESHOLD_EMBEDDING=0.75
 
 # 活跃度系统
-ACTIVITY_ENABLED=true
-ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15
+ACTIVITY_MAX_CONFIDENCE_REDUCTION=0.15   # 置信度修正最大降低值
+ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过检测阈值（0=使用群组配置）
 
 # 上下文一致性（推荐启用）
 CONTEXT_CONSISTENCY_ENABLED=true

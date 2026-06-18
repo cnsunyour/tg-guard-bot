@@ -73,7 +73,6 @@ class Settings(BaseSettings):
         description="API Base URL（支持 OpenRouter、DeepSeek、Moonshot 等）",
     )
     ai_spam_model: str = Field(default="gpt-4o-mini", description="模型名称")
-    ai_spam_temperature: float = Field(default=0.0, description="生成温度")
     ai_spam_threshold: float = Field(default=0.8, description="置信度阈值")
     ai_spam_timeout: int = Field(default=10, description="超时时间（秒）")
     ai_spam_max_retries: int = Field(default=2, description="最大重试次数")
@@ -104,16 +103,15 @@ class Settings(BaseSettings):
         description="备份 API Base URL（支持不同提供商）",
     )
     ai_spam_backup_model: str = Field(default="gpt-4o-mini", description="备份模型名称")
-    ai_spam_backup_temperature: float = Field(default=0.0, description="备份生成温度")
     ai_spam_backup_threshold: float = Field(default=0.8, description="备份置信度阈值")
     ai_spam_backup_timeout: int = Field(default=10, description="备份超时时间（秒）")
     ai_spam_backup_max_retries: int = Field(default=2, description="备份最大重试次数")
 
-    # ========== AI Vision 直判图片配置 ==========
-    # Vision 直判：图片直接送 AI 判垃圾（省一次 OCR 调用，保留视觉信息）
+    # ========== AI Vision 多模态检测配置（图片/贴纸）==========
+    # Vision 直判：图片/贴纸直接送多模态 AI 判垃圾（独立于文本检测，可用不同模型）
     ai_spam_vision_enabled: bool = Field(
-        default=True,
-        description="AI 启用时是否优先用 Vision 直判图片（需 ai_spam_enabled=true 且模型支持多模态）",
+        default=False,
+        description="是否启用 AI Vision 直判图片/贴纸（独立于文本 AI_SPAM_ENABLED；model 须多模态）",
     )
     ai_spam_vision_detail: str = Field(
         default="low",
@@ -122,13 +120,42 @@ class Settings(BaseSettings):
     ai_spam_vision_max_image_bytes: int = Field(
         default=5_242_880,  # 5MB
         ge=1,
-        description="Vision 接受的最大图片字节数，超限降级到传统 OCR 管道",
+        description="Vision 接受的最大图片字节数，超限则跳过该图片检测",
     )
     ai_spam_vision_timeout: int = Field(
         default=30,
         ge=1,
         description="Vision 请求超时时间（秒），通常比文本检测更长",
     )
+
+    # ---- Vision 主服务商（key/base 留空回退文本主配置 ai_spam_*；model 始终独立）----
+    ai_spam_vision_api_key: str = Field(
+        default="", description="Vision 主服务商 API Key（留空回退 AI_SPAM_API_KEY）"
+    )
+    ai_spam_vision_api_base: str = Field(
+        default="", description="Vision 主服务商 API Base（留空回退 AI_SPAM_API_BASE）"
+    )
+    ai_spam_vision_model: str = Field(
+        default="gpt-4o-mini", description="Vision 主模型名称（必须支持多模态）"
+    )
+    ai_spam_vision_threshold: float = Field(default=0.8, description="Vision 主置信度阈值")
+    ai_spam_vision_max_retries: int = Field(default=2, description="Vision 主最大重试次数")
+
+    # ---- Vision 备服务商（key/base 留空回退文本备配置 ai_spam_backup_*；model 始终独立）----
+    ai_spam_vision_backup_enabled: bool = Field(
+        default=False, description="是否启用 Vision 备份服务商（需 AI_SPAM_VISION_ENABLED=true）"
+    )
+    ai_spam_vision_backup_api_key: str = Field(
+        default="", description="Vision 备服务商 API Key（留空回退 AI_SPAM_BACKUP_API_KEY）"
+    )
+    ai_spam_vision_backup_api_base: str = Field(
+        default="", description="Vision 备服务商 API Base（留空回退 AI_SPAM_BACKUP_API_BASE）"
+    )
+    ai_spam_vision_backup_model: str = Field(
+        default="gpt-4o-mini", description="Vision 备模型名称（必须支持多模态）"
+    )
+    ai_spam_vision_backup_threshold: float = Field(default=0.8, description="Vision 备置信度阈值")
+    ai_spam_vision_backup_max_retries: int = Field(default=2, description="Vision 备最大重试次数")
 
     # 上下文检测配置
     context_enabled: bool = Field(default=False, description="是否启用上下文检测（需要 AI 检测）")
@@ -240,7 +267,6 @@ class Settings(BaseSettings):
     user_status_max_retries: int = Field(default=2, description="用户状态检查最大重试次数")
 
     # 活跃度系统配置
-    activity_enabled: bool = Field(default=True, description="是否启用活跃度系统")
     activity_max_confidence_reduction: float = Field(
         default=0.15, description="活跃度最大置信度减少值（用于反垃圾检测）"
     )
@@ -263,34 +289,6 @@ class Settings(BaseSettings):
     )
     telethon_enabled: bool = Field(default=False, description="是否启用 Telethon 客户端")
     cleanup_cache_ttl: int = Field(default=3600, description="成员列表缓存时间（秒）")
-    # OCR 功能配置
-    enable_ocr: bool = Field(default=False, description="是否启用 OCR 功能（需要 4GB+ RAM）")
-
-    # ========== OpenAI OCR 配置 ==========
-    ocr_openai_enabled: bool = Field(default=False, description="是否启用 OpenAI OCR")
-    ocr_openai_api_key: str = Field(default="", description="OpenAI API Key")
-    ocr_openai_model: str = Field(
-        default="gpt-4o-mini", description="OpenAI 模型名称（推荐：gpt-4o-mini 或 gpt-4o）"
-    )
-    ocr_openai_api_url: str = Field(
-        default="",
-        description="自定义 API Base URL（可选，用于代理或兼容接口）",
-    )
-    ocr_openai_timeout: int = Field(default=30, description="超时时间（秒）")
-
-    # ========== 百度智能云 OCR 配置 ==========
-    ocr_baidu_enabled: bool = Field(default=False, description="是否启用百度云 OCR")
-    ocr_baidu_api_key: str = Field(default="", description="百度云 OCR API Key")
-    ocr_baidu_secret_key: str = Field(default="", description="百度云 OCR Secret Key")
-    ocr_baidu_use_accurate: bool = Field(default=False, description="是否使用高精度版")
-    ocr_baidu_timeout: int = Field(default=10, description="超时时间（秒）")
-
-    # ========== PaddleOCR 配置 ==========
-    ocr_paddle_enabled: bool = Field(default=True, description="是否启用 PaddleOCR")
-    ocr_paddle_lang: str = Field(default="ch", description="语言 (ch=中英文, en=英文)")
-
-    # ========== EasyOCR 配置 ==========
-    ocr_easy_enabled: bool = Field(default=True, description="是否启用 EasyOCR（最终回退）")
     # ✅ P1-9: 模型签名密钥改为必填，强制用户配置安全密钥
     model_signature_key: str = Field(
         ...,
@@ -380,15 +378,15 @@ class Settings(BaseSettings):
                     "建议：使用至少 16 位的随机密码"
                 )
 
-        # Vision 依赖 AI 检测启用；不一致则自动关闭并记录
-        if self.ai_spam_vision_enabled and not self.ai_spam_enabled:
+        # Vision 备份依赖 Vision 主开关；不一致则提示（不强制关闭）
+        if self.ai_spam_vision_backup_enabled and not self.ai_spam_vision_enabled:
             import warnings
 
             warnings.warn(
-                "ai_spam_vision_enabled=true 但 ai_spam_enabled=false，已自动关闭 Vision 直判",
+                "ai_spam_vision_backup_enabled=true 但 ai_spam_vision_enabled=false，"
+                "Vision 备份不会生效",
                 stacklevel=2,
             )
-            object.__setattr__(self, "ai_spam_vision_enabled", False)
 
     @property
     def database_url(self) -> str:
@@ -401,6 +399,26 @@ class Settings(BaseSettings):
         if self.redis_password:
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def vision_api_key_effective(self) -> str:
+        """Vision 主 API Key：留空回退文本主 key"""
+        return self.ai_spam_vision_api_key or self.ai_spam_api_key
+
+    @property
+    def vision_api_base_effective(self) -> str:
+        """Vision 主 API Base：留空回退文本主 base"""
+        return self.ai_spam_vision_api_base or self.ai_spam_api_base
+
+    @property
+    def vision_backup_api_key_effective(self) -> str:
+        """Vision 备 API Key：留空回退文本备 key"""
+        return self.ai_spam_vision_backup_api_key or self.ai_spam_backup_api_key
+
+    @property
+    def vision_backup_api_base_effective(self) -> str:
+        """Vision 备 API Base：留空回退文本备 base"""
+        return self.ai_spam_vision_backup_api_base or self.ai_spam_backup_api_base
 
 
 # 全局配置实例

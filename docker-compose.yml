@@ -3,9 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        # 设置为 true 以启用 OCR 功能（需要 4GB+ RAM）
-        ENABLE_OCR: ${ENABLE_OCR:-false}
     container_name: tg-guard-bot
     restart: unless-stopped
     # ✅ L1: 确保容器以非 root 用户运行

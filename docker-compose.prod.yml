@@ -8,7 +8,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 4G  # 启用 OCR 需要 4GB
+          memory: 2G  # 嵌入模型 + ML 分类器
         reservations:
           cpus: '0.5'
           memory: 512M

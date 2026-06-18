@@ -5,6 +5,241 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.1] - 2026-06-18
+
+### Bug 修复
+
+#### Telegram 消息 HTML 解析错误修复 🐛
+- **HTML 实体转义**：修复所有 Telegram 消息中比较符号未转义导致的 HTML 解析错误
+  - `/activity` 命令的活跃度说明（`<= 0` 等改为 HTML 实体 `&lt;= 0`）
+  - `/activityskip` 命令的两处错误提示（`>0` 改为 `&gt;0`）
+  - 活跃度限制通知消息（`> 0` 改为 `&gt;0`）
+- **统一格式**：统一所有活跃度相关说明的表述，确保比较符号正确转义为 HTML 实体
+
+#### `/activity` 命令显示修复 ⭐
+- **规则描述与实际逻辑对齐**：修正 `/activity` 命令显示内容与实际规则不一致的问题
+  - 非文本消息限制：明确 `<= 0` 时禁止发送
+  - 活跃度变化：+1 文本消息，非文本消息不变（当前不扣分）
+  - 衰减规则：仅当活跃度 < 10 且当天无消息时 -1
+- **统一显示**：统一命令显示和回调显示的文本内容
+- **回调状态修复**：回调函数中重新获取群组配置以确保显示最新状态
+- **格式优化**：添加 emoji 图标和层次结构
+
+### 重构优化
+
+#### 移除温度参数配置 🔄
+- **提高 API 兼容性**：删除 4 个温度配置字段，解决部分服务商（如 o1 系列）不允许传递 `temperature` 参数导致的调用失败（400/422 错误）
+  - 删除 `ai_spam_temperature`
+  - 删除 `ai_spam_backup_temperature`
+  - 删除 `ai_spam_vision_temperature`
+  - 删除 `ai_spam_vision_backup_temperature`
+- **清理调用代码**：从文本检测 `_call_api()` 和 Vision 检测 `detect_image()` 中移除 `temperature` 参数
+- **技术原因**：垃圾检测为确定性判断任务，所有温度值均为 0.0，不传参让服务商使用默认值即可
+
+### 文档更新
+
+- **README.md**：删除所有 OCR 功能说明，新增 AI Vision 多模态检测配置说明，更新技术栈表格、性能指标和开发路线图
+- **CLAUDE.md**：更新代码结构（ocr.py → ai_detector.py）、更新资源要求，移除 Git 分支工作流章节
+- **.env.example**：删除 4 个温度配置项
+
+### 代码质量
+- ✅ Config 加载正常
+- ✅ AI Detector 加载正常
+- ✅ Mypy 类型检查通过
+- ✅ Ruff 代码检查通过
+
+## [1.5.0] - 2026-06-16
+
+### 删除功能
+
+#### 彻底删除 OCR 功能 🗑️
+- **删除所有 OCR 代码**：移除 1400+ 行 OCR 相关代码
+  - 删除 `src/ml/ocr.py`、`src/ml/hybrid_ocr.py`、`src/ml/ocr_providers.py`
+  - 删除 `scripts/test_easyocr.py`
+  - 删除所有 OCR 配置环境变量（14 个）
+- **删除 OCR 依赖包**：移除重型机器学习依赖
+  - torch, torchvision, paddleocr, paddlepaddle, easyocr
+  - openai, baidu-aip（OCR 相关）
+  - 镜像体积减少 2-3GB
+  - 内存需求降低：4GB → 2GB
+- **删除 Makefile 命令**：移除 `prod-build-ocr` 构建命令
+
+### 新增功能
+
+#### Vision 多模态检测独立配置 ✨
+- **主备双服务商架构**：Vision 检测支持主备自动回退
+  - 新增 `VisionServiceProvider` 通用类
+  - 支持 Vision 主服务商配置（6 个字段）
+  - 支持 Vision 备服务商配置（7 个字段）
+  - 对齐文本检测的主备架构
+- **自动回退机制**：key/base 可留空回退文本配置
+  - 新增 4 个 computed properties 实现自动回退
+  - `vision_api_key_effective`：留空回退 `ai_spam_api_key`
+  - `vision_api_base_effective`：留空回退 `ai_spam_api_base`
+  - `vision_backup_api_key_effective`：留空回退 `ai_spam_backup_api_key`
+  - `vision_backup_api_base_effective`：留空回退 `ai_spam_backup_api_base`
+- **独立判断属性**：新增 `vision_enabled` 属性
+  - 独立于 `ai_spam_enabled` 判断
+  - 支持"只开文本"或"只开 Vision"场景
+
+### 重构优化
+
+#### Vision 检测架构重构 🔄
+- **与文本检测解耦**：Vision 不再依赖 `AI_SPAM_ENABLED`
+  - 文本和图片可使用不同模型（成本优化）
+  - `AI_SPAM_MODEL` 用于文本检测
+  - `AI_SPAM_VISION_MODEL` 用于图片/贴纸检测
+- **HybridAIDetector 重构**：支持 vision_primary/vision_backup
+  - Vision 主备服务商独立管理
+  - 熔断器、统计追踪完全独立
+  - 与文本检测共享 HTTP 客户端生命周期管理
+- **图片检测行为变更**：移除 OCR 降级路径
+  - 旧行为：Vision 失败 → 降级 OCR → 文本检测
+  - 新行为：Vision 不可用/失败 → 跳过图片检测（放行）
+  - 记录日志说明跳过原因
+
+#### 字段重命名（向后兼容）🔤
+- **统一命名规范**：去除 OCR 痕迹
+  - `ocr_text` → `recognized_text`
+  - `has_ocr` → `has_text`
+  - `_extract_ocr_text_from_prompt` → `_extract_recognized_text_from_prompt`
+  - 提示文案："OCR 识别内容" → "识别内容"
+- **功能保留**：字段语义不变，仅命名更中性
+
+#### 依赖优化 📦
+- **lottie/cairosvg 移到主依赖**：TGS 动画贴纸渲染需要
+  - 从 `[project.optional-dependencies].ocr` 移到 `[project.dependencies]`
+  - 与 OCR 引擎无关，单独保留
+- **删除 ocr 依赖组**：`[project.optional-dependencies].ocr` 整组删除
+- **简化 all 组**：`tg-guard-bot[dev,ocr]` → `tg-guard-bot[dev]`
+
+### 变更
+
+#### 破坏性变更 ⚠️
+- **图片检测默认关闭**：`AI_SPAM_VISION_ENABLED` 默认值改为 `false`
+  - 更安全的默认配置
+  - 需主动配置才能启用图片检测
+- **无 OCR 兜底**：Vision 不可用时跳过图片检测
+  - 删除 OCR 降级路径
+  - 未配置 Vision 或 Vision 失败时，图片/贴纸直接放行
+- **模型独立配置**：必须配置 `AI_SPAM_VISION_MODEL`
+  - 需配置为多模态模型（如 gpt-4o-mini, claude-3-5-sonnet）
+  - 不再从 `AI_SPAM_MODEL` 继承
+
+#### 配置变更 🔧
+- **新增 Vision 配置**：13 个新环境变量
+  - `AI_SPAM_VISION_ENABLED`、`AI_SPAM_VISION_MODEL` 等（主服务商）
+  - `AI_SPAM_VISION_BACKUP_ENABLED`、`AI_SPAM_VISION_BACKUP_MODEL` 等（备服务商）
+  - 详见 `.env.example`
+- **删除 OCR 配置**：14 个 OCR 环境变量全部删除
+  - `ENABLE_OCR`、`OCR_OPENAI_*`、`OCR_BAIDU_*`、`OCR_PADDLE_*`、`OCR_EASY_*`
+- **内存需求调整**：`docker-compose.prod.yml` 内存限制
+  - 4GB → 2GB（嵌入模型 + ML 分类器）
+
+### 优化
+
+#### 成本优化 💰
+- **模型分离策略**：文本和图片使用不同模型
+  - 文本检测：便宜纯文本模型（如 deepseek-chat, $0.001/1K tokens）
+  - 图片检测：多模态模型（如 gpt-4o-mini, $0.15/1K tokens）
+  - **预计节省 90%+ API 成本**（纯文本消息占比 >95%）
+- **示例计算**：日均 10000 条消息（9500 文本 + 500 图片）
+  - 改造前：全用 gpt-4o-mini = $45/月
+  - 改造后：文本用 deepseek-chat + 图片用 gpt-4o-mini = $2.55/月
+  - **节省成本：94.3%** 🔥
+
+#### 资源优化 🚀
+- **镜像体积**：减少 2-3GB（无 torch/paddle/easyocr）
+- **内存需求**：4GB → 2GB
+- **启动时间**：更快（无需加载 OCR 模型）
+- **部署成本**：更低（更小的服务器即可运行）
+
+#### 高可用性 🛡️
+- **Vision 主备回退**：与文本检测架构完全对齐
+- **配置灵活性**：key/base 可留空回退
+- **独立控制**：文本和图片检测独立开关
+
+### 代码质量
+
+- **代码减少**：净减少 1403 行代码（16 个文件修改）
+- **测试覆盖**：✅ 所有单元测试通过（8 passed）
+- **静态检查**：✅ Ruff 检查通过
+- **类型检查**：✅ Mypy 检查通过
+- **导入测试**：✅ Python 模块导入正常
+- **残留检查**：✅ 无残留 OCR 引用
+
+### 升级指南
+
+#### 最简配置（复用文本 key/base）
+```bash
+# 文本检测：便宜纯文本模型
+AI_SPAM_ENABLED=true
+AI_SPAM_API_KEY=sk-xxx
+AI_SPAM_API_BASE=https://api.openai.com/v1
+AI_SPAM_MODEL=deepseek-chat
+
+# 图片检测：多模态模型（key/base 留空自动回退上面的配置）
+AI_SPAM_VISION_ENABLED=true
+AI_SPAM_VISION_MODEL=gpt-4o-mini
+```
+
+#### 完整配置（主备双服务商）
+```bash
+# 文本主服务商
+AI_SPAM_ENABLED=true
+AI_SPAM_API_KEY=sk-main-xxx
+AI_SPAM_MODEL=deepseek-chat
+
+# 文本备服务商
+AI_SPAM_BACKUP_ENABLED=true
+AI_SPAM_BACKUP_API_KEY=sk-backup-xxx
+AI_SPAM_BACKUP_MODEL=glm-4-flash
+
+# Vision 主服务商（key/base 留空回退文本主）
+AI_SPAM_VISION_ENABLED=true
+AI_SPAM_VISION_MODEL=gpt-4o-mini
+
+# Vision 备服务商（key/base 留空回退文本备）
+AI_SPAM_VISION_BACKUP_ENABLED=true
+AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
+```
+
+---
+
+## [1.4.3] - 2026-06-15
+
+### 重构优化
+
+#### 活跃度系统简化 ⭐
+- **移除全局开关**：删除 `settings.activity_enabled` 全局配置，简化控制逻辑
+  - 只保留群组开关 `group.activity_enabled`
+  - 群组开关只控制"是否限制活跃度 ≤ 0 的用户发送非文本消息"
+  - 降低配置复杂度，提升易用性
+- **辅助功能始终工作**：活跃度记录、置信度修正、检测豁免功能不受开关影响
+  - 高活跃用户始终享受垃圾检测误判率降低的好处
+  - 高活跃用户始终享受检测豁免（如果设置了阈值）
+  - 宵禁模式下的活跃度门槛继续生效
+- **向后兼容**：数据库结构无变化，群组配置完全兼容
+  - 现有群组行为不变
+  - 活跃度数据完整保留
+  - 即使 `.env` 中保留 `ACTIVITY_ENABLED` 也不会报错
+
+### Bug 修复
+- **修复重复调用 bug**：修复 `/activity` 命令回调处理中重复调用数据库更新的问题
+
+### 文档更新
+- 更新 README.md - 活跃度系统说明
+- 更新 CLAUDE.md - 配置和流程说明
+- 更新 migrations/UPGRADE_GUIDE.md - 升级指南
+- 更新 .env.example - 删除 ACTIVITY_ENABLED 配置项
+- 更新 `/activity` 命令文案 - 更清晰的功能说明
+
+### 代码质量
+- ✅ 语法检查通过
+- ✅ 代码格式化完成（Black + isort）
+- ✅ Ruff lint 检查通过
+- ✅ 所有单元测试通过
+
 ## [1.4.2] - 2026-06-14
 
 ### 新增功能

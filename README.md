@@ -86,15 +86,20 @@
 - **自动训练** - AI检测结果自动入库作为训练样本
 
 #### 活跃度系统
-- **动态信任机制**：
+- **非文本消息限制**（可选，群主可通过 `/activity` 控制）：
+  - 启用时：活跃度 ≤ 0 的用户无法发送图片、贴纸、视频等
+  - 禁用时：新用户也可自由发送非文本消息
+- **活跃度规则**：
   - 普通文本消息：+1 活跃度
-  - 非文本消息（图片/贴纸等）：不扣减活跃度，但需要活跃度允许才可发送（不足则删除并私聊提示）
-  - 外部转发/带链接消息：按“特殊非文本”处理（需要活跃度允许）
-  - 高活跃度用户可跳过垃圾检测（阈值支持全局/群组配置）
-- **置信度调整**：
-  - 对数公式：reduction = 0.01 × log2(activity / 10)
-  - 最大降低 15% 置信度
-  - 调整后低于阈值改判为正常
+  - 非文本消息（图片/贴纸等）：不扣分
+  - 外部转发/带链接消息：按”特殊非文本”处理
+  - 每日无消息自动衰减 -1（活跃度 < 10 时）
+- **辅助功能**（始终生效）：
+  - **置信度修正**：活跃度越高，垃圾检测误判率越低
+    - 对数公式：reduction = 0.05 × log2(activity / 10)
+    - 最大降低 15% 置信度
+  - **检测豁免**：高活跃度用户可跳过垃圾检测（阈值支持全局/群组配置）
+  - **宵禁门槛**：宵禁期间根据活跃度控制发言权限
 
 #### 上下文一致性检测（降低误判）⭐
 - **回复链相关性检测**（优先级最高）：
@@ -108,10 +113,10 @@
 
 #### 其他功能
 - **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段
-- **混合 OCR 服务** - 多提供者自动回退（OpenAI OCR → 百度云 OCR → PaddleOCR → EasyOCR）
-  - 云 OCR 优先（内存占用低，准确率高）
-  - 本地 OCR 回退（离线可用）
-  - 熔断保护（自动跳过故障提供者）
+- **AI Vision 多模态检测** - 图片/贴纸直接送 AI 判垃圾（独立配置，主备双服务商）
+  - 文本和图片可使用不同模型（成本优化）
+  - 支持主备双服务商自动回退
+  - key/base 可留空回退文本配置
 - **文本长度预过滤** - 过滤过短或过长的异常消息，减少无效检测
 - **管理员反馈** - 误判纠正，持续优化
 - **自动模型训练** - 达到阈值自动触发训练
@@ -138,9 +143,7 @@
 | scikit-learn | 1.4+ | ML 分类器 |
 | fastembed | 0.3+ | 语义嵌入 |
 | jieba | 0.42+ | 中文分词 |
-| OpenAI/Baidu OCR | - | 云 OCR（推荐，内存占用低） |
-| PaddleOCR | 3.0+ | 本地 OCR（可选） |
-| EasyOCR | 1.7+ | 本地 OCR（最终回退） |
+| lottie/cairosvg | - | TGS 动画贴纸渲染 |
 
 ## 🚀 快速开始
 
@@ -228,7 +231,6 @@ make dev-logs        # 查看日志
 ### 生产环境
 ```bash
 make prod-build      # 构建生产镜像
-make prod-build-ocr  # 构建生产镜像（启用 OCR）
 make prod-up         # 启动生产环境
 make prod-down       # 停止生产环境
 make prod-restart    # 重启 Bot
@@ -396,7 +398,7 @@ tg-guard-bot/
 │   │   ├── rule_engine.py      # 规则引擎
 │   │   ├── classifier.py       # ML 分类器
 │   │   ├── embedder.py         # 语义嵌入
-│   │   └── ocr.py              # 图片 OCR
+│   │   └── ai_detector.py      # AI 检测器（文本 + Vision）
 │   ├── models/                 # 数据模型
 │   │   ├── group.py            # 群组配置
 │   │   ├── user.py             # 用户/警告
@@ -471,8 +473,10 @@ tg-guard-bot/
 
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
-| `ACTIVITY_ENABLED` | 全局启用活跃度系统 | true | ❌ |
-| `ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD` | 活跃度跳过垃圾检测阈值（0=禁用） | 0 | ❌ |
+| `ACTIVITY_MAX_CONFIDENCE_REDUCTION` | 活跃度最大置信度减少值 | 0.15 | ❌ |
+| `ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD` | 活跃度跳过垃圾检测阈值（0=使用群组配置） | 0 | ❌ |
+
+> 说明：群组可通过 `/activity` 命令控制是否限制非文本消息，活跃度记录、置信度修正、检测豁免功能始终工作。
 
 #### 反垃圾配置
 
@@ -482,7 +486,6 @@ tg-guard-bot/
 | `CAS_API_URL` | CAS API 基础 URL | https://api.cas.chat | ❌ |
 | `CAS_CHECK_TIMEOUT` | CAS 检查超时（秒） | 5 | ❌ |
 | `CAS_CACHE_TTL` | CAS 缓存 TTL（秒） | 86400 | ❌ |
-| `ENABLE_OCR` | 启用 OCR 功能 | false | ❌ |
 | `SPAM_THRESHOLD_RULE` | 规则引擎阈值 | 0.8 | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
 | `SPAM_THRESHOLD_EMBEDDING` | Embedding 阈值 | 0.75 | ❌ |
@@ -491,7 +494,7 @@ tg-guard-bot/
 | `REGEX_RULES_CONFIG_PATH` | 自定义规则配置文件路径 | config/spam_rules.json | ❌ |
 | `REGEX_RULES_MAX_TEXT_LENGTH` | 正则规则检测的最大文本长度 | 500 | ❌ |
 
-> 说明：CAS 检查采用“失败放行”降级策略；Redis 不可用时会直连 API（仍失败放行），避免误伤正常用户。
+> 说明：CAS 检查采用”失败放行”降级策略；Redis 不可用时会直连 API（仍失败放行），避免误伤正常用户。
 
 #### CAPTCHA 验证配置（可选）
 
@@ -544,40 +547,43 @@ TURNSTILE_SITE_KEY=
 > - **TURNSTILE_SECRET_KEY 不在 Bot 端配置**：它应配置在统一 WebApp（Cloudflare Pages/Functions）的环境变量 `TURNSTILE_SECRET_KEY` 中（见 `captcha-webapp/README.md`、`captcha-webapp/functions/api/verify.js`）。
 > - 如果你希望 Turnstile 可能被随机选中，请在 Bot 端同时配置 Turnstile Site Key；直接指定 Turnstile 验证不受影响。
 
-#### OCR 配置（可选）
+#### AI Vision 多模态检测配置（可选）
 
-**混合 OCR 服务**（多提供者自动回退）：
+用于检测图片/贴纸垃圾内容，支持主备双服务商自动回退。
 
-> 说明：当前代码实现的混合 OCR 优先级为 **OpenAI → 百度云 → PaddleOCR → EasyOCR**（见 `src/ml/hybrid_ocr.py`）。
-
-**OpenAI OCR**（第一优先级，云 API）：
+**最简配置**（复用文本 key/base）：
 ```env
-OCR_OPENAI_ENABLED=true
-OCR_OPENAI_API_KEY=sk-...
-OCR_OPENAI_MODEL=gpt-4o-mini
-OCR_OPENAI_API_URL=  # 可选，自定义 API Base URL
-OCR_OPENAI_TIMEOUT=30
+# 文本检测：便宜纯文本模型
+AI_SPAM_ENABLED=true
+AI_SPAM_API_KEY=sk-xxx
+AI_SPAM_API_BASE=https://api.openai.com/v1
+AI_SPAM_MODEL=deepseek-chat
+
+# 图片检测：多模态模型（key/base 留空自动回退上面的配置）
+AI_SPAM_VISION_ENABLED=true
+AI_SPAM_VISION_MODEL=gpt-4o-mini
 ```
 
-**百度智能云 OCR**（第二优先级，云 API）：
+**完整配置**（主备双服务商）：
 ```env
-OCR_BAIDU_ENABLED=true
-OCR_BAIDU_API_KEY=...
-OCR_BAIDU_SECRET_KEY=...
-OCR_BAIDU_USE_ACCURATE=false
-OCR_BAIDU_TIMEOUT=10
+# Vision 主服务商
+AI_SPAM_VISION_ENABLED=true
+AI_SPAM_VISION_API_KEY=sk-vision-main-xxx  # 留空回退 AI_SPAM_API_KEY
+AI_SPAM_VISION_API_BASE=https://api.openai.com/v1  # 留空回退 AI_SPAM_API_BASE
+AI_SPAM_VISION_MODEL=gpt-4o-mini
+AI_SPAM_VISION_DETAIL=low  # OpenAI image_url.detail: low/high/auto
+AI_SPAM_VISION_TIMEOUT=30
+
+# Vision 备服务商
+AI_SPAM_VISION_BACKUP_ENABLED=true
+AI_SPAM_VISION_BACKUP_API_KEY=  # 留空回退 AI_SPAM_BACKUP_API_KEY
+AI_SPAM_VISION_BACKUP_API_BASE=  # 留空回退 AI_SPAM_BACKUP_API_BASE
+AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
+AI_SPAM_VISION_BACKUP_DETAIL=low
+AI_SPAM_VISION_BACKUP_TIMEOUT=30
 ```
 
-**PaddleOCR**（第三优先级，本地）：
-```env
-OCR_PADDLE_ENABLED=true
-OCR_PADDLE_LANG=ch
-```
-
-**EasyOCR**（最终回退，本地）：
-```env
-OCR_EASY_ENABLED=true
-```
+> **成本优化提示**：文本消息占比 >95%，将文本检测配置为便宜模型（如 deepseek-chat），图片检测使用多模态模型，可节省 90%+ API 成本。
 
 📚 详细配置参考：
 - [.env.example](.env.example) - 完整配置模板
@@ -595,13 +601,15 @@ OCR_EASY_ENABLED=true
 
 ## 📈 性能指标
 
-| 指标 | 无 OCR | 有 OCR |
-|------|--------|--------|
-| 镜像大小 | ~300MB | ~1.2GB |
-| 内存占用（空闲） | ~200MB | ~400MB |
-| 内存占用（峰值） | ~300MB | ~1.5GB |
+| 指标 | 基础版 | 启用 Vision |
+|------|--------|-------------|
+| 镜像大小 | ~300MB | ~300MB |
+| 内存占用（空闲） | ~200MB | ~200MB |
+| 内存占用（峰值） | ~500MB | ~800MB |
 | 文本消息处理 | <100ms | <100ms |
-| 图片消息处理 | N/A | 1-5s |
+| 图片消息处理（Vision） | N/A | 1-3s |
+
+> **说明**：v1.5.0 删除 OCR 功能后，镜像和内存占用大幅降低。Vision 多模态检测采用 API 调用，无本地模型加载。
 
 ## 🗺️ 开发路线图
 
@@ -609,12 +617,13 @@ OCR_EASY_ENABLED=true
 - [x] **Phase 2**: 入群验证（7 种验证方式 + 私聊验证）
 - [x] **Phase 3**: 群管理（Kick/Mute/Ban/Warn）
 - [x] **Phase 4**: 反垃圾系统（三阶段检测管道）
-- [x] **Phase 5**: 图片 OCR（EasyOCR）
+- [x] **Phase 5**: AI Vision 多模态检测（图片/贴纸垃圾检测）
 - [x] **Phase 6**: 部署优化（监控/备份/文档）
 - [x] **Phase 7**: 验证系统增强（7 种验证 + 动态超时配置）
 - [x] **Phase 8**: 多 CAPTCHA 集成（Friendly/hCaptcha/MTCaptcha/ALTCHA + 统一 WebApp）
 - [x] **v1.1.0**: 上下文一致性检测（降低误判率）
-- [x] **v1.2.0**: 高级正则规则引擎 + 混合 OCR + @username 解析
+- [x] **v1.2.0**: 高级正则规则引擎 + @username 解析
+- [x] **v1.5.0**: 删除 OCR，重构 Vision 为独立配置（主备双服务商）
 
 ## 🤝 贡献
 
@@ -644,8 +653,6 @@ OCR_EASY_ENABLED=true
 - [jieba](https://github.com/fxsjy/jieba) - 中文分词工具
 - [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5) - 中文语义嵌入模型
 - [fastembed](https://github.com/qdrant/fastembed) - 快速文本嵌入库
-- [EasyOCR](https://github.com/JaidedAI/EasyOCR) - 易用的 OCR 工具
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 轻量级 OCR 工具
 
 ### 开发工具
 - [Pydantic](https://github.com/pydantic/pydantic) - 数据验证库
@@ -660,7 +667,7 @@ OCR_EASY_ENABLED=true
 ## 📞 联系方式
 
 - 提交 Issue: [GitHub Issues](https://github.com/cnsunyour/tg-guard-bot/issues)
-- 技术交流: [Telegram 群组]（可选）
+- 技术交流: [Telegram 群组](https://t.me/tg_smart_guard)
 
 ---
 
