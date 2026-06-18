@@ -667,7 +667,7 @@ AI_SPAM_VISION_BACKUP_TIMEOUT=30
 ## 📞 联系方式
 
 - 提交 Issue: [GitHub Issues](https://github.com/cnsunyour/tg-guard-bot/issues)
-- 技术交流: [Telegram 群组]（可选）
+- 技术交流: [Telegram 群组](https://t.me/tg_smart_guard)
 
 ---
 
