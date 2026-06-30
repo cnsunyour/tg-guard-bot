@@ -61,6 +61,15 @@
       "enabled": true
     },
     {
+      "id": "recruit_quick_money",
+      "pattern": "(?=.*[带帶])(?=.*缺[钱錢])(?=.*兄弟)(?=.*(打底|[进進]群)).{1,120}",
+      "risk_level": "high",
+      "category": "scam",
+      "description": "拉人头暴富招募诈骗",
+      "enabled": true,
+      "max_match_length": 120
+    },
+    {
       "id": "private_chat_service",
       "pattern": "(?=(.*私聊))(?=.*(发泄|欲望)).{1,100}",
       "risk_level": "medium",
