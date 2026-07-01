@@ -1,6 +1,7 @@
 """系统事件处理器"""
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import ADMINISTRATOR, KICKED, MEMBER, ChatMemberUpdatedFilter
 from aiogram.types import ChatMemberUpdated
 from loguru import logger
@@ -8,6 +9,9 @@ from loguru import logger
 from src.repositories.group_repo import GroupRepository
 
 router = Router(name="events")
+
+# 仅处理群组/超级群事件，避免私聊触发 my_chat_member 时被误判为「加入群组」
+router.my_chat_member.filter(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 
 
 @router.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=KICKED >> MEMBER))
