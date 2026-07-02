@@ -274,6 +274,11 @@ class Settings(BaseSettings):
         default=0,
         description="活跃度跳过垃圾检测全局阈值（>0=全局统一阈值，=0=使用群组配置，<0=全局禁用）",
     )
+    activity_decay_floor: int = Field(
+        default=1,
+        ge=0,
+        description="活跃度衰减下限：曾经发过言的用户活跃度最多衰减到此值（默认1，使其免受非文本消息拦截误伤）；设为0则退回旧行为（可衰减到0）。",
+    )
 
     # AI 模型路径
     ml_model_path: str = Field(default="data/models/spam_classifier.pkl", description="ML 模型路径")
