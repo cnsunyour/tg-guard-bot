@@ -10,7 +10,7 @@ from loguru import logger
 
 from src.core.cache import PermissionCache
 from src.core.config import settings
-from src.core.utils import auto_delete_message
+from src.core.utils import auto_delete_message, should_skip_sender
 from src.repositories.audit_repo import AuditRepository
 from src.services.cas_service import get_cas_service
 from src.services.user_status_service import get_user_status_service
@@ -56,6 +56,11 @@ class CASCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         bot: Bot = data["bot"]
+
+        # 跳过 Telegram 系统服务账号（777000 等）和 Bot 自身
+        # 避免对关联频道同步转发等服务消息发起无谓的 CAS / 状态查询
+        if should_skip_sender(event.from_user.id, bot.id):
+            return await handler(event, data)
 
         # 跳过群组管理员
         if await PermissionCache.is_admin(bot, event.chat.id, event.from_user.id):
