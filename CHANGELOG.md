@@ -5,6 +5,28 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.3] - 2026-07-02
+
+### 行为优化
+
+#### 活跃度非文本拦截收窄至「从未发言」用户 🎯
+- **问题**：activity 启用时，所有活跃度为 0 的成员（含因日衰减归零的老用户）发非文本消息都会被删除，误伤长期潜水但曾活跃的真实用户
+- **改进**：将拦截范围收窄为仅命中「从未发言」的成员；曾发言的老用户活跃度不再衰减到 0
+  - 核心洞察：Redis 中「有 activity key」即代表曾发言——衰减下限只抬高这部分用户，无 key 的从未发言者保持 0 仍被拦截（含「入群后长期潜水再冒泡」的小号）
+- **新增配置 `activity_decay_floor`**（默认 1，`ge=0`，设为 0 可回退旧行为）
+- **衰减逻辑精确化**（`get_activity`）：
+  - 仅当 `stored > activity_decay_floor` 时才衰减，结果 `max(stored - days, floor)` 保底
+  - `stored <= floor`（含 0）不衰减、保持原值，避免活跃度 0 被反向「抬升」
+  - 防御性读取分支仅用 `max(*, 0)` 防负数，不参与 floor 抬升
+- **修复 `record_non_text_message`**：不再为从未发言用户创建 `activity=0` 键，避免其被衰减下限误判为「曾发言」而绕过拦截
+- **文案同步**：更新 `/activity` 面板、`groupset` 菜单共 3 处活跃度规则说明
+
+### 代码质量
+- ✅ 新增 `tests/test_activity.py`（12 个用例，activity 服务覆盖率 0% → 57%+）
+- ✅ codex 两轮代码审查通过
+- ✅ Mypy 类型检查通过（无新增错误）
+- ✅ Ruff 代码检查通过
+
 ## [1.5.2] - 2026-07-01
 
 ### 性能优化
