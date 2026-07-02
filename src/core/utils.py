@@ -259,26 +259,26 @@ def validate_user_id(user_id: int) -> bool:
 TELEGRAM_SERVICE_IDS: frozenset[int] = frozenset({777000})
 
 
-def should_skip_sender(user_id: int, bot_id: int | None = None) -> bool:
+def should_skip_sender(user_id: int, bot_id: int) -> bool:
     """判断消息发送者是否应优先跳过反垃圾 / 用户状态检测
 
     覆盖：
     - Telegram 系统服务账号（如 777000，关联频道同步、服务通知）
-    - Bot 自身（bot_id 提供时检查，避免消息回环触发自检）
+    - Bot 自身（user_id == bot_id，避免消息回环触发自检）
 
     用于 CAS 检查中间件、频道马甲检测、活跃度限制等统一短路，
     避免对特殊来源发起无谓的外部 API 请求。
 
     Args:
         user_id: 发送者用户 ID
-        bot_id: 当前 Bot 的用户 ID（可选）
+        bot_id: 当前 Bot 的用户 ID
 
     Returns:
         True 表示该发送者应跳过后续检测
     """
     if user_id in TELEGRAM_SERVICE_IDS:
         return True
-    return bot_id is not None and user_id == bot_id
+    return user_id == bot_id
 
 
 async def auto_delete_message(message, delay: int = 30) -> None:
