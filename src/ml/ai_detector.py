@@ -1665,8 +1665,7 @@ class AISpamDetector:
     def vision_enabled(self) -> bool:
         """Vision 是否启用且至少有一家可用 provider（图片/贴纸检测的总开关）"""
         return (
-            self._detector.vision_primary.is_available
-            or self._detector.vision_backup.is_available
+            self._detector.vision_primary.is_available or self._detector.vision_backup.is_available
         )
 
     @property
