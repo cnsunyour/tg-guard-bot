@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.4] - 2026-07-09
+
+### Bug 修复
+
+#### 特殊发送者在 CAS / 状态检测前优先跳过 🐛
+- **问题**：Telegram 系统服务账号 `777000`（关联频道同步转发 / 服务通知）在 CAS 中间件层缺少短路，导致每次同步消息都触发 CAS API 请求，失败时经 3 次指数退避重试后降级放行，造成无谓的网络请求、日志噪声与约 3.5s 处理延迟
+  - 根因：`777000` 的跳过逻辑仅存在于 antispam handler 层，而 `CASCheckMiddleware` 在 handler 之前执行，handler 层的跳过为时已晚
+- **修复**：在 `CASCheckMiddleware` 的 admin 检查前统一短路特殊发送者，CAS 与用户状态检查同时跳过
+- **新增 `should_skip_sender()` 统一判断**（`core/utils.py`）：覆盖 Telegram 系统服务账号（`TELEGRAM_SERVICE_IDS`，含 `777000`）与 Bot 自身（防消息回环自检）
+  - antispam 两处硬编码 `== 777000`（频道马甲检测、非文本活跃度检查）统一改用该函数，顺带覆盖 Bot 自身
+  - `verification.py` 的入群 / 加入请求流程不受影响：`777000` 不会以新成员或申请者身份出现
+
+### 代码质量
+- ✅ `should_skip_sender` 签名收紧为 `(user_id: int, bot_id: int)`，与文件内 `validate_user_id` 风格一致
+- ✅ codex read-only 审查通过（确认短路位置正确、无遗漏调用路径）
+- ✅ Mypy 类型检查通过
+- ✅ Ruff 代码检查通过
+
 ## [1.5.3] - 2026-07-02
 
 ### 行为优化
