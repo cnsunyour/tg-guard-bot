@@ -48,6 +48,10 @@ class SpamRule:
     description: str  # 规则描述
     max_match_length: int = 200  # 最大匹配长度（性能优化）
     enabled: bool = True  # 是否启用
+    # 关键词预筛（外层 AND，内层 OR）：作为原正则的必要条件做 O(N) 快速预判，
+    # 全组命中才执行正则，避免「多关键词 AND」型前瞻正则在长文本上的二次回溯。
+    # 关键词需以小写形式提供（运行时与小写文本比对）。空元组表示不预筛。
+    prefilter: tuple[tuple[str, ...], ...] = ()
 
     @property
     def confidence(self) -> float:
@@ -234,9 +238,15 @@ class RegexRuleEngine:
         """
         # 性能优化：先截断文本
         text = text[:500]
+        # 预筛使用小写文本，兼容英文关键词（如 BTC/USDT）的大小写无关比对
+        text_lower = text.lower()
 
         for rule in self.rules:
             if not rule.enabled:
+                continue
+
+            # 关键词预筛门禁：配置了 prefilter 且未全组命中则跳过昂贵的正则匹配
+            if rule.prefilter and not self._passes_prefilter(text_lower, rule.prefilter):
                 continue
 
             pattern = self._get_compiled_pattern(rule)
@@ -296,7 +306,24 @@ class RegexRuleEngine:
             description=rule_dict["description"],
             max_match_length=rule_dict.get("max_match_length", 200),
             enabled=rule_dict.get("enabled", True),
+            prefilter=tuple(tuple(group) for group in rule_dict.get("prefilter", [])),
         )
+
+    @staticmethod
+    def _passes_prefilter(text_lower: str, prefilter: tuple[tuple[str, ...], ...]) -> bool:
+        """关键词预筛：外层组间 AND，内层组内 OR
+
+        作为原正则的必要条件做 O(N) 快速预判，全部通过才执行正则匹配。
+
+        Args:
+            text_lower: 已转小写的待检测文本
+            prefilter: 预筛关键词集合（关键词需为小写）
+
+        Returns:
+            是否通过预筛（True 表示需进一步执行正则）
+        """
+        # 外层组间 AND，内层组内 OR；all/any 均短路求值
+        return all(any(keyword in text_lower for keyword in group) for group in prefilter)
 
     def _precompile_all(self) -> None:
         """预编译所有规则的正则表达式"""

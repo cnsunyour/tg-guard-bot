@@ -16,10 +16,11 @@ class ActivityService:
     - 初始值: 0
     - 文本消息: +1
     - 非文本消息: 0 (不扣分)
-    - 每日衰减: -1 (活跃度 < 10 时，无消息则衰减；>= 10 时不衰减)
+    - 每日衰减: -1 (仅当当前活跃度 > activity_decay_floor 且 < 10 时衰减；>= 10 不衰减)
+      衰减结果最低保留 activity_decay_floor (默认1)；活跃度 <= floor (含 0) 不衰减保持原值
 
     活跃度用途:
-    - 非文本消息限制: group.activity_enabled=True 时，活跃度 <= 0 不能发非文本
+    - 非文本消息限制: group.activity_enabled=True 时，活跃度 == 0（从未发言）才不能发非文本
     - 置信度修正: 活跃度越高，垃圾检测误判率越低（始终生效）
     - 检测豁免: activity >= threshold 时，跳过垃圾检测（始终生效）
     - 宵禁门槛: 宵禁期间根据活跃度控制发言权限（始终生效）
@@ -69,7 +70,13 @@ class ActivityService:
             if days_passed > 0:
                 if stored_activity < 10:
                     # 活跃度低于 10 时才衰减，每天 -1
-                    actual_activity = max(0, stored_activity - days_passed)
+                    # 仅当当前活跃度高于 floor 时才衰减，避免 <= floor 的值反被抬升
+                    if stored_activity > settings.activity_decay_floor:
+                        actual_activity = max(
+                            stored_activity - days_passed, settings.activity_decay_floor
+                        )
+                    else:
+                        actual_activity = max(stored_activity, 0)
                 else:
                     # 活跃度 >= 10 时不衰减
                     actual_activity = stored_activity
@@ -145,6 +152,8 @@ class ActivityService:
     async def record_non_text_message(chat_id: int, user_id: int) -> int:
         """记录非文本消息，扣除活跃度 (扣减值为 0 时不实际扣减)
 
+        从未发言用户（无 activity key）跳过记录，保持活跃度 0 以维持新人非文本拦截。
+
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
@@ -155,6 +164,12 @@ class ActivityService:
         redis = get_redis()
         activity_key = RedisKeys.user_activity(chat_id, user_id)
         last_date_key = RedisKeys.activity_last_date(chat_id, user_id)
+
+        # 从未发言用户（无 activity key）不建立活跃度记录：
+        # 非文本消息不扣分，也不应创建 key=0，否则会被衰减下限误判为
+        # "曾发言"而绕过新人非文本拦截，保持活跃度 0（新人状态）。
+        if await redis.get(activity_key) is None:
+            return 0
 
         # 先获取当前实际活跃度 (含衰减)
         current = await ActivityService.get_activity(chat_id, user_id)

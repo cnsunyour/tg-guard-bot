@@ -24,6 +24,7 @@ from src.core.utils import (
     check_admin_permission,
     format_user_mention,
     get_chat_administrators_mention,
+    should_skip_sender,
 )
 from src.models.group import Group
 from src.repositories.group_repo import GroupRepository
@@ -181,9 +182,9 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
     if not is_channel_as_sender(message):
         return False
 
-    # 快速路径：Telegram 系统账号 777000 专用于关联频道同步转发，直接跳过
-    if message.from_user and message.from_user.id == 777000:
-        logger.debug(f"跳过关联频道同步消息（系统账号 777000）[群组:{message.chat.id}]")
+    # 快速路径：Telegram 系统服务账号（777000 关联频道同步转发）/ Bot 自身，直接跳过
+    if message.from_user and should_skip_sender(message.from_user.id, bot.id):
+        logger.debug(f"跳过特殊来源消息（系统账号/Bot自身）[群组:{message.chat.id}]")
         return True
 
     # 检查群组是否启用反频道马甲
@@ -290,8 +291,8 @@ async def check_non_text_message(
     # 类型缩小
     assert message.from_user
 
-    # 跳过 Telegram 系统账号（777000），关联频道同步消息即以此身份转发
-    if message.from_user.id == 777000:
+    # 跳过 Telegram 系统服务账号（777000 关联频道同步转发）和 Bot 自身
+    if should_skip_sender(message.from_user.id, bot.id):
         return False
 
     # 检查活跃度是否允许发送非文本消息

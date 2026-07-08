@@ -214,3 +214,82 @@ def test_regex_rule_risk_levels():
     assert SpamRiskLevel.HIGH.value == "high"
     assert SpamRiskLevel.MEDIUM.value == "medium"
     assert SpamRiskLevel.LOW.value == "low"
+
+
+@pytest.mark.unit
+def test_prefilter_gate_blocks_regex():
+    """测试关键词预筛门禁：未全组命中则跳过正则匹配"""
+    from src.ml.rule_engine import RegexRuleEngine, SpamRiskLevel, SpamRule
+
+    rule = SpamRule(
+        id="test_prefilter",
+        pattern=r"(?=.*[带帶])(?=.*缺[钱錢])(?=.*兄弟)(?=.*(打底|[进進]群)).{1,120}",
+        risk_level=SpamRiskLevel.HIGH,
+        category="scam",
+        description="预筛测试",
+        prefilter=(("带", "帶"), ("缺钱", "缺錢"), ("兄弟",), ("打底", "进群", "進群")),
+    )
+    engine = RegexRuleEngine([rule])
+
+    # 全组命中 → 通过预筛并命中正则
+    is_match, hit, _ = engine.check("带两个缺钱的兄弟，进群一起搞")
+    assert is_match
+    assert hit.id == "test_prefilter"
+
+    # 缺少"缺钱"组 → 预筛拦截（即便其余特征齐全）
+    is_match, _, _ = engine.check("带上兄弟一起进群打底")
+    assert not is_match
+
+
+@pytest.mark.unit
+def test_prefilter_semantics_equivalent():
+    """测试预筛是原正则的必要条件：命中正则的文本必然通过预筛（判定不变）"""
+    from src.ml.rule_engine import RegexRuleEngine, SpamRiskLevel, SpamRule
+
+    rule = SpamRule(
+        id="test_eq",
+        pattern=r"(?=.*[带帶])(?=.*缺[钱錢])(?=.*兄弟)(?=.*(打底|[进進]群)).{1,120}",
+        risk_level=SpamRiskLevel.HIGH,
+        category="scam",
+        description="等价性测试",
+        prefilter=(("带", "帶"), ("缺钱", "缺錢"), ("兄弟",), ("打底", "进群", "進群")),
+    )
+    engine = RegexRuleEngine([rule])
+
+    # 真实垃圾模板变体（含简繁体、截断）均应命中
+    spam_samples = [
+        "🤍美美吖🎉 带两个缺钱的兄弟，一天保你一万打底，进群找王哥",
+        "帶幾個缺錢的兄弟，進群一起搞",
+        "带上缺钱的兄弟，打底也能赚",
+    ]
+    for s in spam_samples:
+        is_match, _, _ = engine.check(s)
+        assert is_match, f"应命中但未命中: {s}"
+
+    # 正常文本不应误判
+    normal_samples = [
+        "我带两个朋友去吃饭",
+        "这个游戏打底分挺高的，兄弟们进群一起玩",  # 缺"缺钱"
+        "兄弟你缺钱吗，我借你点",  # 缺"带"+"打底/进群"
+    ]
+    for s in normal_samples:
+        is_match, _, _ = engine.check(s)
+        assert not is_match, f"应放行但误判: {s}"
+
+
+@pytest.mark.unit
+def test_prefilter_disabled_by_default():
+    """测试未配置 prefilter 的规则行为不变（默认空，正常执行正则）"""
+    from src.ml.rule_engine import RegexRuleEngine, SpamRiskLevel, SpamRule
+
+    rule = SpamRule(
+        id="test_no_prefilter",
+        pattern=r"免费社工库",
+        risk_level=SpamRiskLevel.CRITICAL,
+        category="illegal",
+        description="无预筛规则",
+    )
+    assert rule.prefilter == ()
+    engine = RegexRuleEngine([rule])
+    is_match, _, _ = engine.check("这里有免费社工库")
+    assert is_match
