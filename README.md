@@ -6,8 +6,9 @@
 
 一个功能强大的 Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾功能。
 
-[![Version](https://img.shields.io/github/v/tag/cnsunyour/tg-guard-bot?label=version&color=blue)](https://github.com/cnsunyour/tg-guard-bot/tags)
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Release](https://img.shields.io/github/v/release/cnsunyour/tg-guard-bot?label=Release&color=blue)](https://github.com/cnsunyour/tg-guard-bot/releases/latest)
+[![Tag](https://img.shields.io/github/v/tag/cnsunyour/tg-guard-bot?label=Tag&color=orange)](https://github.com/cnsunyour/tg-guard-bot/tags)
+[![Python](https://img.shields.io/badge/Python-3.12+-red.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-brightgreen.svg)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -111,6 +112,15 @@
 - **设计原则**：只降低不提高（避免误判话题转移）
 - **效果**：即使规则引擎误判，上下文调整也能救回正常对话
 
+#### 黑名单与账号状态拦截（可选）
+- **CAS 黑名单检查**（[Combot Anti-Spam](https://cas.chat)）：
+  - 入群 + 消息双阶段拦截，命中即自动封禁并删除消息
+  - 结果缓存（默认 24h）+ 分布式锁防并发；采用"失败放行"降级策略，Redis 不可用时直连 API，避免误伤正常用户
+  - 系统服务账号（如 `777000`）与 Bot 自身在检测前优先跳过
+- **用户状态检测**（基于 Telethon）：
+  - 拦截被 Telegram 官方标记为 `restricted` / `scam` / `fake` / `deleted` 的异常账号
+  - 结果缓存（默认 1h），与 CAS 共用统一拦截中间件
+
 #### 其他功能
 - **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段
 - **AI Vision 多模态检测** - 图片/贴纸直接送 AI 判垃圾（独立配置，主备双服务商）
@@ -124,6 +134,7 @@
 ### ⚡ 其他功能
 - **群组白名单** - 只在授权群组中提供服务，自动退出未授权群组
 - **反频道马甲** - 禁止用户以频道身份发言，避免广告滥用
+- **宵禁模式** `/curfew` - 指定时段（支持自定义时区）内根据活跃度门槛控制发言，夜间防骚扰
 - **消息删除工具** - 批量删除消息（delbefore/delafter/delrange）
 - **健康监控** `/health` - 系统状态和性能指标
 - **统计信息** `/stats` - 反垃圾统计和运行信息
@@ -324,6 +335,11 @@ make backup-setup-cron                    # 设置自动备份定时任务
 - `/activity` - 活跃度系统开关（启用/禁用）
 - `/activityskip [阈值]` - 查看或设置活跃度跳过垃圾检测的阈值
 
+**宵禁模式**
+- `/curfew` - 查看当前宵禁状态
+- `/curfew 23:00 7:00 [+8]` - 启用宵禁（时段 + 可选时区，默认 +8）
+- `/curfew off` - 禁用宵禁
+
 ### 超级管理员命令
 - `/health` - 查看系统健康状态
 - `/stats` - 查看统计信息
@@ -486,6 +502,8 @@ tg-guard-bot/
 | `CAS_API_URL` | CAS API 基础 URL | https://api.cas.chat | ❌ |
 | `CAS_CHECK_TIMEOUT` | CAS 检查超时（秒） | 5 | ❌ |
 | `CAS_CACHE_TTL` | CAS 缓存 TTL（秒） | 86400 | ❌ |
+| `USER_STATUS_CHECK_ENABLED` | 启用用户状态检测（restricted/scam/fake/deleted，需 Telethon） | false | ❌ |
+| `USER_STATUS_CACHE_TTL` | 用户状态检查缓存 TTL（秒） | 3600 | ❌ |
 | `SPAM_THRESHOLD_RULE` | 规则引擎阈值 | 0.8 | ❌ |
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
 | `SPAM_THRESHOLD_EMBEDDING` | Embedding 阈值 | 0.75 | ❌ |
