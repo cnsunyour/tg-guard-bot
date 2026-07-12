@@ -586,6 +586,19 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     user_id = user.id
     username = user.username or user.full_name
 
+    # ✅ 绝对第一步：写 joining 标记，覆盖 restrict 生效前的抢发窗口
+    # 必须早于 restrict 与所有后续检查，确保 chat_member 更新一到就落盘；
+    # 对所有入群者统一适用，靠 TTL 自动过期，不在任何路径显式清理。
+    # Redis 抖动不应中断入群验证流程，故仅记录日志。
+    try:
+        await get_redis().setex(
+            RedisKeys.verification_joining(chat_id, user_id),
+            settings.verification_joining_window_seconds,
+            "1",
+        )
+    except Exception as e:
+        logger.error(f"写入入群短窗口标记失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
+
     logger.info(f"用户 {username} ({user_id}) 加入群组 {chat_id}")
 
     # ✅ 记录 username 映射

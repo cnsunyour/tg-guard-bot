@@ -51,6 +51,16 @@ class RedisKeys:
         return f"verification:{chat_id}:{user_id}"
 
     @staticmethod
+    def verification_joining(chat_id: int, user_id: int) -> str:
+        """入群短窗口标记键名
+
+        on_user_join 绝对第一步写入，用于拦截 restrict_chat_member 生效前的抢发消息。
+        对所有入群者统一适用，靠 TTL 自动过期（不区分邀请来源、不在任何路径显式清理）。
+        TTL 由 settings.verification_joining_window_seconds 控制（默认 3 秒）。
+        """
+        return f"verification_joining:{chat_id}:{user_id}"
+
+    @staticmethod
     def rate_limit(user_id: int, chat_id: int) -> str:
         """频率限制键名"""
         return f"rate_limit:{chat_id}:{user_id}"

@@ -140,6 +140,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
 
+    # ✅ 注册入群短窗口消息防护中间件（白名单之后、宵禁/自动删除/CAS/反垃圾之前）
+    # 删除新成员在 restrict 生效前抢发的群消息，命中即阻断后续处理
+    from src.bot.middlewares import VerificationGuardMiddleware
+
+    dp.message.middleware(VerificationGuardMiddleware())
+
     # ✅ 注册速率限制中间件
     # 说明：
     # - 消息不做速率限制，全部交由反垃圾系统处理，检测为垃圾后直接封禁/禁言，比简单限流更有效
