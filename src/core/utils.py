@@ -159,13 +159,12 @@ def escape_html(text: str | None) -> str:
 def mask_user_name(name: str | None) -> str:
     """脱敏用户显示名，防止 spammer 借用户名投递广告
 
-    规则：保留首尾各 2 个字符，中间用 ``*`` 替换；名字过短时按比例降级，
-    保证脱敏后中间至少有一个 ``*``，避免短名字原样显示而绕过脱敏。
+    规则：保留首尾各 1 个字符（共 2 个），中间用 ``*`` 替换；名字过短时
+    降级为全部遮盖，保证脱敏后中间至少有一个 ``*``，避免短名字原样显示
+    而绕过脱敏。
 
-    - 长度 0~1：全部替换为 ``*``
-    - 长度 2：``**``
-    - 长度 3~4：保留首尾各 1 个字符
-    - 长度 ≥5：保留首尾各 2 个字符
+    - 长度 0~2：全部替换为 ``*``
+    - 长度 ≥3：保留首尾各 1 个字符，其余替换为 ``*``
 
     按 Unicode code point 计数与切片。组合 emoji（ZWJ 序列、旗帜等）可能
     被从中间切开导致显示异常，但不影响广告文字的遮盖效果，故不引入额外
@@ -182,7 +181,7 @@ def mask_user_name(name: str | None) -> str:
         >>> mask_user_name("张三李四")
         '张**四'
         >>> mask_user_name("加微信低价VPN办理")
-        '加微******办理'
+        '加********理'
     """
     if not name:
         return ""
@@ -193,8 +192,8 @@ def mask_user_name(name: str | None) -> str:
     if length <= 1:
         return "*" * length
 
-    # 首尾各保留 keep 个字符，且保证中间至少留 1 个脱敏字符
-    keep = min(2, (length - 1) // 2)
+    # 首尾各保留 1 个字符，且保证中间至少留 1 个脱敏字符（length <= 2 时全遮）
+    keep = min(1, (length - 1) // 2)
     if keep == 0:
         return "*" * length
     return normalized[:keep] + "*" * (length - keep * 2) + normalized[-keep:]

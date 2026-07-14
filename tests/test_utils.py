@@ -35,10 +35,10 @@ def test_escape_html():
         ("张三", "**"),
         ("张三李", "张*李"),
         ("张三李四", "张**四"),
-        ("张三李四王", "张三*四王"),
-        ("张三李四王五", "张三**王五"),
+        ("张三李四王", "张***王"),
+        ("张三李四王五", "张****五"),
         ("A😀B", "A*B"),
-        ("  Alice\tBob\n", "Al*****ob"),
+        ("  Alice\tBob\n", "A*******b"),
     ],
 )
 def test_mask_user_name(name, expected):
@@ -54,8 +54,8 @@ def test_mask_user_name_before_escape_html():
     from src.core.utils import escape_html, mask_user_name
 
     masked = mask_user_name("<&X>Z")
-    assert masked == "<&*>Z"
-    assert escape_html(masked) == "&lt;&amp;*&gt;Z"
+    assert masked == "<***Z"
+    assert escape_html(masked) == "&lt;***Z"
 
 
 @pytest.mark.unit
@@ -72,11 +72,11 @@ def test_masked_mention_html():
 
     # 普通用户：链接基于可信数字 ID，显示名脱敏
     user = MockUser(123456, "John", "John Doe", "johndoe")
-    assert masked_mention_html(user) == '<a href="tg://user?id=123456">Jo****oe</a>'
+    assert masked_mention_html(user) == '<a href="tg://user?id=123456">J******e</a>'
 
     # 含 HTML 特殊字符：脱敏后再转义，原始内容不得出现
     user2 = MockUser(789, "T", "<&X>Z", None)
-    assert masked_mention_html(user2) == '<a href="tg://user?id=789">&lt;&amp;*&gt;Z</a>'
+    assert masked_mention_html(user2) == '<a href="tg://user?id=789">&lt;***Z</a>'
 
 
 @pytest.mark.unit
@@ -95,14 +95,14 @@ def test_format_user_mention():
     # 有 username 的用户：显示名与 @username 都应脱敏
     user1 = MockUser(123456, "John", "John Doe", "johndoe")
     result1 = format_user_mention(user1)
-    assert result1 == "Jo****oe (@jo***oe)"
+    assert result1 == "J******e (@j*****e)"
     assert "John Doe" not in result1  # 原始显示名不得泄露
     assert "@johndoe" not in result1  # 原始 @username 不得泄露
 
     # 没有 username 的用户：回退到数字 ID（ID 不脱敏）
     user2 = MockUser(789012, "Jane", "Jane Smith", None)
     result2 = format_user_mention(user2)
-    assert result2 == "Ja******th (ID:789012)"
+    assert result2 == "J********h (ID:789012)"
     assert "Jane Smith" not in result2
 
     # 带有 HTML 特殊字符的名字：脱敏后再转义，原始标签不得出现
