@@ -1635,7 +1635,7 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
                 f"• 操作: /approve {report.id}\n\n"
             )
 
-        response += "💡 使用 /approve <ID> 处理举报"
+        response += "💡 使用 /approve &lt;ID&gt; 处理举报"
 
         reply = await message.answer(response)
         await auto_delete_message(reply, delay=60)  # 60秒后删除

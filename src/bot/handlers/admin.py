@@ -1406,7 +1406,7 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
         if len(args) < 2:
             reply = await message.answer(
                 "❌ 请指定超时时间（秒）\n\n"
-                "用法: /settimeout <秒数>\n"
+                "用法: /settimeout &lt;秒数&gt;\n"
                 "范围: 30-300 秒\n"
                 "示例: /settimeout 120"
             )
