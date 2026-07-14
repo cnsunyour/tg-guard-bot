@@ -156,22 +156,93 @@ def escape_html(text: str | None) -> str:
     return html.escape(str(text))
 
 
+def mask_user_name(name: str | None) -> str:
+    """脱敏用户显示名，防止 spammer 借用户名投递广告
+
+    规则：保留首尾各 2 个字符，中间用 ``*`` 替换；名字过短时按比例降级，
+    保证脱敏后中间至少有一个 ``*``，避免短名字原样显示而绕过脱敏。
+
+    - 长度 0~1：全部替换为 ``*``
+    - 长度 2：``**``
+    - 长度 3~4：保留首尾各 1 个字符
+    - 长度 ≥5：保留首尾各 2 个字符
+
+    按 Unicode code point 计数与切片。组合 emoji（ZWJ 序列、旗帜等）可能
+    被从中间切开导致显示异常，但不影响广告文字的遮盖效果，故不引入额外
+    依赖做字形簇感知。
+
+    本函数只做脱敏、不做 HTML 转义；调用方需按「先脱敏后转义」顺序使用，
+    即 ``escape_html(mask_user_name(...))``，避免破坏 HTML 实体。
+
+    Example:
+        >>> mask_user_name("张三")
+        '**'
+        >>> mask_user_name("张三李")
+        '张*李'
+        >>> mask_user_name("张三李四")
+        '张**四'
+        >>> mask_user_name("加微信低价VPN办理")
+        '加微******办理'
+    """
+    if not name:
+        return ""
+
+    # 规范化空白：合并连续空白为单个空格并去除首尾空白，防止换行符破坏群消息布局
+    normalized = " ".join(str(name).split())
+    length = len(normalized)
+    if length <= 1:
+        return "*" * length
+
+    # 首尾各保留 keep 个字符，且保证中间至少留 1 个脱敏字符
+    keep = min(2, (length - 1) // 2)
+    if keep == 0:
+        return "*" * length
+    return normalized[:keep] + "*" * (length - keep * 2) + normalized[-keep:]
+
+
 def format_user_mention(user) -> str:
-    """安全地格式化用户提及，防止 HTML 注入
+    """安全地格式化用户提及，防止 HTML 注入与用户名广告投递
+
+    显示名与 @username 均经 :func:`mask_user_name` 脱敏，避免 spammer 通过
+    用户名展示广告。HTML 特殊字符在脱敏后再转义。
 
     Args:
         user: Telegram User 对象
 
     Returns:
-        格式化的安全用户提及字符串
+        安全的用户提及字符串，形如 ``脱敏名 (@脱敏username)``
+        或 ``脱敏名 (ID:用户ID)``
     """
-    # 转义用户名
-    name = escape_html(user.full_name or user.first_name or "Unknown")
+    # 先脱敏再转义（顺序不可颠倒，否则会破坏 HTML 实体）
+    name = escape_html(mask_user_name(user.full_name or user.first_name or "Unknown"))
 
-    # 用户名或 ID
-    identifier = f"@{user.username}" if user.username else f"ID:{user.id}"
+    # @username 同样可能携带广告，一并脱敏；无 username 时回退到数字 ID（无需脱敏）
+    identifier = (
+        f"@{escape_html(mask_user_name(user.username))}" if user.username else f"ID:{user.id}"
+    )
 
     return f"{name} ({identifier})"
+
+
+def masked_mention_html(user) -> str:
+    """生成显示名脱敏的可点击 HTML 用户提及
+
+    与 :func:`format_user_mention` 不同，本函数生成可点击的 ``<a>`` 链接
+    （基于可信的数字 user_id），管理员点击仍能精确定位用户，而链接文本
+    只展示脱敏后的显示名，不暴露 spammer 塞入用户名的广告内容。
+
+    Args:
+        user: Telegram User 对象
+
+    Returns:
+        HTML mention 字符串，如 ``<a href="tg://user?id=123">张***三</a>``
+
+    Note:
+        点击跳转后，Telegram 资料页仍会展示真实名称，属于平台行为，
+        Bot 端无法屏蔽。
+    """
+    name = escape_html(mask_user_name(user.full_name or user.first_name or "Unknown"))
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
 def mask_text(text: str | None, show_length: int = 10) -> str:
