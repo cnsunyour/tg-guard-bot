@@ -5,12 +5,12 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.enums import ChatType
-from aiogram.types import Message, TelegramObject
+from aiogram.types import Message, TelegramObject, User
 from loguru import logger
 
 from src.core.cache import PermissionCache
 from src.core.config import settings
-from src.core.utils import auto_delete_message, should_skip_sender
+from src.core.utils import auto_delete_message, masked_mention_html, should_skip_sender
 from src.repositories.audit_repo import AuditRepository
 from src.services.cas_service import get_cas_service
 from src.services.user_status_service import get_user_status_service
@@ -80,6 +80,7 @@ class CASCheckMiddleware(BaseMiddleware):
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
+                    user=event.from_user,
                     reason="cas_blacklist",
                     details={"offenses": cas_result.offenses},
                     cached=cas_result.cached,
@@ -97,6 +98,7 @@ class CASCheckMiddleware(BaseMiddleware):
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
+                    user=event.from_user,
                     reason=f"user_status_{status_result.reason}",
                     details={"status": status_result.reason},
                     cached=status_result.cached,
@@ -111,6 +113,7 @@ class CASCheckMiddleware(BaseMiddleware):
         bot: Bot,
         chat_id: int,
         user_id: int,
+        user: User,
         reason: str,
         details: dict[str, Any],
         cached: bool,
@@ -122,6 +125,7 @@ class CASCheckMiddleware(BaseMiddleware):
             bot: Bot 实例
             chat_id: 群组 ID
             user_id: 用户 ID
+            user: 用户对象（用于生成脱敏的群内通知）
             reason: 原因（cas_blacklist/user_status_restricted/user_status_scam 等）
             details: 详细信息
             cached: 是否来自缓存
@@ -155,7 +159,7 @@ class CASCheckMiddleware(BaseMiddleware):
 
         # 发送群内通知
         try:
-            notify_text = self._get_notification_text(user_id, reason, details)
+            notify_text = self._get_notification_text(user, reason, details)
             notify_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=notify_text,
@@ -170,18 +174,18 @@ class CASCheckMiddleware(BaseMiddleware):
             f"[原因:{reason}] [详情:{details}] [缓存:{cached}]"
         )
 
-    def _get_notification_text(self, user_id: int, reason: str, details: dict[str, Any]) -> str:
+    def _get_notification_text(self, user: User, reason: str, details: dict[str, Any]) -> str:
         """生成通知文本
 
         Args:
-            user_id: 用户 ID
+            user: 用户对象（显示名将脱敏，防止 spammer 借用户名投广告）
             reason: 原因
             details: 详细信息
 
         Returns:
             通知文本
         """
-        user_link = f'<a href="tg://user?id={user_id}">{user_id}</a>'
+        user_link = masked_mention_html(user)
 
         if reason == "cas_blacklist":
             offenses = details.get("offenses", 0)
