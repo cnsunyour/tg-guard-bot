@@ -24,7 +24,12 @@ from loguru import logger
 from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
-from src.core.utils import auto_delete_message, escape_html, format_user_mention
+from src.core.utils import (
+    auto_delete_message,
+    escape_html,
+    format_user_mention,
+    masked_mention_html,
+)
 from src.repositories.audit_repo import AuditRepository
 from src.repositories.group_repo import GroupRepository
 from src.services.cas_service import get_cas_service
@@ -1522,7 +1527,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 assert message.from_user  # 类型缩小
                 welcome_msg = await bot.send_message(
                     chat_id=chat_id,
-                    text=f"✅ 欢迎 {message.from_user.mention_html()} 加入群组！",
+                    text=f"✅ 欢迎 {masked_mention_html(message.from_user)} 加入群组！",
                     parse_mode="HTML",
                 )
 

@@ -15,6 +15,7 @@ from src.core.utils import (
     check_admin_permission_strict_message,
     escape_html,
     get_chat_administrators_mention,
+    mask_user_name,
     parse_message_link,
     parse_message_link_with_chat,
 )
@@ -1817,7 +1818,7 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
                 f"• 举报ID: #{report_id}\n"
                 f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
                 f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-                f"• 处理者: {callback.from_user.full_name}\n\n"
+                f"• 处理者: {escape_html(mask_user_name(callback.from_user.full_name))}\n\n"
                 f"✓ 用户已封禁\n"
                 f"✓ 消息已删除\n"
                 f"✓ 已添加到训练库"
@@ -1874,7 +1875,7 @@ async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
                 f"• 举报ID: #{report_id}\n"
                 f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
                 f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-                f"• 处理者: {callback.from_user.full_name}\n\n"
+                f"• 处理者: {escape_html(mask_user_name(callback.from_user.full_name))}\n\n"
                 f"💡 此举报已被标记为误报或不需要处理"
             )
             await callback.answer("✅ 举报已拒绝", show_alert=True)
