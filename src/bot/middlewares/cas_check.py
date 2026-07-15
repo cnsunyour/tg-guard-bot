@@ -188,8 +188,7 @@ class CASCheckMiddleware(BaseMiddleware):
         user_link = masked_mention_html(user)
 
         if reason == "cas_blacklist":
-            offenses = details.get("offenses", 0)
-            return f"🚫 {user_link} 在 CAS 黑名单中，已被自动封禁（违规 {offenses} 次）。"
+            return f"🚫 {user_link} 在 CAS 黑名单中，已被自动封禁。"
 
         if reason.startswith("user_status_"):
             status = details.get("status", "unknown")

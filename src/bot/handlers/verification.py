@@ -447,8 +447,7 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
                 )
 
             logger.info(
-                f"CAS 黑名单用户加入请求被拒 [群组:{chat_id}] [用户:{user_id}] "
-                f"[违规次数:{cas_result.offenses}]"
+                f"CAS 黑名单用户加入请求被拒 [群组:{chat_id}] [用户:{user_id}]"
             )
             return  # 结束处理
     # ========== CAS 检查结束 ==========
@@ -700,18 +699,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             try:
                 notify_msg = await bot.send_message(
                     chat_id=chat_id,
-                    text=(
-                        f"🚫 {format_user_mention(user)} 在 CAS 黑名单中，"
-                        f"已被自动封禁（违规 {cas_result.offenses} 次）。"
-                    ),
+                    text=f"🚫 {format_user_mention(user)} 在 CAS 黑名单中，已被自动封禁。",
                 )
                 await auto_delete_message(notify_msg, delay=30)
             except Exception as e:
                 logger.warning(f"发送 CAS 封禁通知失败: {e}")
 
             logger.info(
-                f"CAS 黑名单用户加入被拒 [群组:{chat_id}] [用户:{user_id}] "
-                f"[违规次数:{cas_result.offenses}]"
+                f"CAS 黑名单用户加入被拒 [群组:{chat_id}] [用户:{user_id}]"
             )
             return  # 结束处理，不继续后续流程
     # ========== CAS 检查结束 ==========
