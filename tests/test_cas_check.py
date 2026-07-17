@@ -27,7 +27,7 @@ def test_cas_notification_masks_user_name():
     assert "tg://user?id=123456" in text  # 保留可点击链接（基于可信 ID）
     assert "123456</a>" not in text  # 链接文本不再是纯数字 ID
     assert "CAS 黑名单" in text
-    assert "违规 3 次" in text
+    assert "违规 3 次" not in text  # 产品决策：群内通知不展示违规次数（73b63fa）
 
     # 用户状态通知（诈骗账号）
     text_scam = middleware._get_notification_text(user, "user_status_scam", {"status": "scam"})

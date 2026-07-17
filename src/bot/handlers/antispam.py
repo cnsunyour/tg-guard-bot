@@ -1788,6 +1788,9 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 
     sticker_skip_auto_train = bool(group and group.spam_confirm_enabled)
 
+    # PIL 各工厂返回不同具体类型（ImageFile/Image），函数级统一按基类声明
+    img: Image.Image
+
     # 使用 context manager 确保临时文件清理
     try:
         # 检查 sticker 是否存在
