@@ -173,3 +173,72 @@ def test_validate_user_id():
     assert validate_user_id(-1) is False
     assert validate_user_id(0) is False
     assert validate_user_id(2**63) is False  # 超出范围
+
+
+@pytest.mark.unit
+def test_get_app_version_matches_pyproject():
+    """get_app_version 应返回 pyproject.toml 中定义的版本号
+
+    版本号的唯一来源是 pyproject.toml，函数直接读取它，二者必须一致。
+    本测试用于防止版本号被重新硬编码或读取逻辑失效。
+    """
+    import tomllib
+    from pathlib import Path
+
+    from src.core.utils import get_app_version
+
+    # 测试文件位于 tests/ 下，项目根为其上一级目录
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject.open("rb") as f:
+        expected = tomllib.load(f)["project"]["version"]
+
+    assert get_app_version() == expected
+
+
+@pytest.mark.unit
+def test_get_app_version_prefers_pyproject_over_metadata(monkeypatch):
+    """pyproject.toml 版本应优先于包元数据
+
+    锁定「pyproject 优先」这一优先级：mock 元数据返回一个明显的假版本，
+    若函数错误地优先使用元数据则会命中该假版本。
+    """
+    import src.core.utils as utils
+
+    monkeypatch.setattr(utils.importlib.metadata, "version", lambda _: "9.9.9-fake")
+    assert utils.get_app_version() != "9.9.9-fake"
+
+
+@pytest.mark.unit
+def test_get_app_version_falls_back_to_metadata(monkeypatch):
+    """pyproject.toml 不可用时回退到包元数据"""
+    import src.core.utils as utils
+
+    monkeypatch.setattr(utils, "_read_version_from_pyproject", lambda _: None)
+    monkeypatch.setattr(utils.importlib.metadata, "version", lambda _: "2.0.0")
+    assert utils.get_app_version() == "2.0.0"
+
+
+@pytest.mark.unit
+def test_get_app_version_unknown_when_both_unavailable(monkeypatch):
+    """pyproject 与包元数据都不可用时返回 unknown"""
+    from unittest.mock import Mock
+
+    import src.core.utils as utils
+
+    monkeypatch.setattr(utils, "_read_version_from_pyproject", lambda _: None)
+    monkeypatch.setattr(
+        utils.importlib.metadata,
+        "version",
+        Mock(side_effect=utils.importlib.metadata.PackageNotFoundError),
+    )
+    assert utils.get_app_version() == "unknown"
+
+
+@pytest.mark.unit
+def test_read_version_rejects_mismatched_project_name(tmp_path):
+    """pyproject.toml 的 project.name 非 tg-guard-bot 时应回退（返回 None）"""
+    from src.core.utils import _read_version_from_pyproject
+
+    other = tmp_path / "pyproject.toml"
+    other.write_text('[project]\nname = "other-bot"\nversion = "3.3.3"\n', encoding="utf-8")
+    assert _read_version_from_pyproject(other) is None
