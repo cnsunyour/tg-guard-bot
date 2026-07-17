@@ -61,12 +61,3 @@ def sample_normal_texts():
         "谢谢大家的帮助",
         "周末有什么计划？",
     ]
-
-
-# pytest-asyncio 配置
-@pytest.fixture(scope="session")
-def event_loop_policy():
-    """设置事件循环策略"""
-    import asyncio
-
-    return asyncio.get_event_loop_policy()
