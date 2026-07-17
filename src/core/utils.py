@@ -2,8 +2,11 @@
 
 import asyncio
 import html
+import importlib.metadata
 import json
 import re
+import tomllib
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
@@ -12,6 +15,70 @@ from loguru import logger
 
 from src.core.redis import RedisKeys, get_redis
 from src.core.retry import retry_on_network_error
+
+
+def _read_version_from_pyproject(pyproject_path: Path) -> str | None:
+    """从 pyproject.toml 读取版本号，失败返回 None（交由调用方回退）
+
+    - 校验 ``[project].name == "tg-guard-bot"``，避免读到同名异属的
+      ``pyproject.toml``（如 monorepo、site-packages 残留）而误报版本
+    - 文件不存在视为正常降级（纯 wheel 部署无 pyproject），静默返回 None；
+      其余读取 / 解析异常记 WARNING 后返回 None
+    """
+    try:
+        with pyproject_path.open("rb") as pyproject_file:
+            data = tomllib.load(pyproject_file)
+    except FileNotFoundError:
+        return None  # 文件不存在属正常场景（如纯 wheel 部署），静默降级
+    except (OSError, ValueError) as e:  # ValueError 已涵盖 TOMLDecodeError
+        logger.warning(f"读取 {pyproject_path} 失败，将回退到包元数据: {e}")
+        return None
+
+    project = data.get("project")
+    if not isinstance(project, dict) or project.get("name") != "tg-guard-bot":
+        logger.warning(f"{pyproject_path} 非 tg-guard-bot 项目，将回退到包元数据")
+        return None
+
+    version = project.get("version")
+    if isinstance(version, str) and version.strip():
+        return version.strip()
+
+    logger.warning(f"{pyproject_path} 缺少有效的 [project].version，将回退到包元数据")
+    return None
+
+
+def get_app_version() -> str:
+    """获取应用版本号，用于 Sentry release 等场景
+
+    版本的唯一来源是 ``pyproject.toml``。优先直接读取项目根目录的
+    ``pyproject.toml``（源码直接运行时可即时反映版本号变更，无需重新安装）；
+    当运行环境不含该文件（如纯 wheel 部署）时，回退读取已安装发行包的元数据。
+    两者都失败则返回 ``"unknown"``，确保版本探测失败不影响应用启动。
+
+    注意：容器环境中能否即时跟随版本号，取决于 ``pyproject.toml`` 是否随源码
+    挂载或随镜像重建（本项目生产 Dockerfile 已 ``COPY pyproject.toml``）。
+
+    Returns:
+        应用版本号字符串；无法确定时返回 ``"unknown"``
+    """
+    # 1. 优先读取项目根目录的 pyproject.toml（源码直接运行时即时同步版本号）
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    version = _read_version_from_pyproject(pyproject_path)
+    if version:
+        return version
+
+    # 2. 回退：读取已安装包的元数据（纯 wheel 部署等无 pyproject 的场景）
+    try:
+        version = importlib.metadata.version("tg-guard-bot").strip()
+        if version:
+            return version
+        logger.warning("tg-guard-bot 包元数据版本为空，使用 unknown 占位")
+    except importlib.metadata.PackageNotFoundError:
+        logger.warning("未找到 tg-guard-bot 包元数据，使用 unknown 占位")
+    except Exception as e:
+        logger.warning(f"读取已安装包版本失败，使用 unknown 占位: {e}")
+
+    return "unknown"
 
 
 def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
