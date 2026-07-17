@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.1] - 2026-07-17
+
+### 代码质量
+
+- ✅ 修复 `make check` 报告的全部问题，检查链路恢复全绿（mypy 0 错误、pytest 120 passed、0 warning）
+  - 补充类型注解消除 9 处 mypy 错误：`member_query` 的 `result` 字典注解、宵禁二次查询改名 `current_group`、PIL 图片变量函数级前置声明 `img: Image.Image`、异常状态通知兜底 `reason or "未知状态"`
+  - CAS 群组通知测试改为负向断言，对齐 [1.6.0] 移除违规次数展示的产品决策
+  - 删除 `conftest.py` 冗余 `event_loop_policy` fixture，消除 `pytest-asyncio` 弃用警告
+  - `verification.py` 两处 `logger.info` 合并（black 格式化）
+
 ## [1.6.0] - 2026-07-17
 
 ### 新增功能
