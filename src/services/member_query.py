@@ -142,7 +142,7 @@ class MemberQueryService:
         """
         members = await self.get_members(chat_id)
 
-        result = {
+        result: dict[str, list[int]] = {
             "restricted": [],
             "scam": [],
             "fake": [],

@@ -17,6 +17,7 @@ from src.core.database import close_db, init_db
 from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关闭函数
 from src.core.redis import close_redis
 from src.core.telethon_client import close_telethon_client, init_telethon_client
+from src.core.utils import get_app_version
 
 # 定义需要过滤的网络临时性错误类型（用于 Sentry 过滤和异常处理）
 NETWORK_ERROR_TYPES = (
@@ -139,6 +140,12 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
+
+    # ✅ 注册入群短窗口消息防护中间件（白名单之后、宵禁/自动删除/CAS/反垃圾之前）
+    # 删除新成员在 restrict 生效前抢发的群消息，命中即阻断后续处理
+    from src.bot.middlewares import VerificationGuardMiddleware
+
+    dp.message.middleware(VerificationGuardMiddleware())
 
     # ✅ 注册速率限制中间件
     # 说明：
@@ -380,8 +387,8 @@ async def main() -> None:
                     event_level=40,  # 仅 ERROR 及以上级别创建 Sentry 事件 (40=ERROR)
                 )
             ],
-            # 发布版本（使用项目版本）
-            release="tg-guard-bot@1.3.0",
+            # 发布版本（跟随 pyproject.toml 自动同步）
+            release=f"tg-guard-bot@{get_app_version()}",
             # 附加上下文
             attach_stacktrace=True,
             # 过滤敏感数据

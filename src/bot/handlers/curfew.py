@@ -93,7 +93,7 @@ async def cmd_curfew(message: Message, bot: Bot) -> None:
     if len(parts) < 2:
         reply = await message.answer(
             "❌ 参数错误\n\n"
-            "用法: /curfew <开始时间> <结束时间> [时区]\n"
+            "用法: /curfew &lt;开始时间&gt; &lt;结束时间&gt; [时区]\n"
             "示例: /curfew 23:00 7:00 或 /curfew 23 7 +8"
         )
         await auto_delete_message(reply)
@@ -150,8 +150,8 @@ async def cmd_curfew(message: Message, bot: Bot) -> None:
     )
 
     # 检查当前是否在宵禁期
-    group = await GroupRepository.get(message.chat.id)
-    is_in_curfew = CurfewService.is_in_curfew(group) if group else False
+    current_group = await GroupRepository.get(message.chat.id)
+    is_in_curfew = CurfewService.is_in_curfew(current_group) if current_group else False
     status_text = "（当前正处于宵禁时段）" if is_in_curfew else "（当前不在宵禁时段）"
 
     reply = await message.answer(

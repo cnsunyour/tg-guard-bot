@@ -1635,7 +1635,7 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
                 f"• 操作: /approve {report.id}\n\n"
             )
 
-        response += "💡 使用 /approve <ID> 处理举报"
+        response += "💡 使用 /approve &lt;ID&gt; 处理举报"
 
         reply = await message.answer(response)
         await auto_delete_message(reply, delay=60)  # 60秒后删除
@@ -1817,7 +1817,7 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
                 f"• 举报ID: #{report_id}\n"
                 f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
                 f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-                f"• 处理者: {callback.from_user.full_name}\n\n"
+                f"• 处理者: {escape_html(callback.from_user.full_name)}\n\n"
                 f"✓ 用户已封禁\n"
                 f"✓ 消息已删除\n"
                 f"✓ 已添加到训练库"
@@ -1874,7 +1874,7 @@ async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
                 f"• 举报ID: #{report_id}\n"
                 f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
                 f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-                f"• 处理者: {callback.from_user.full_name}\n\n"
+                f"• 处理者: {escape_html(callback.from_user.full_name)}\n\n"
                 f"💡 此举报已被标记为误报或不需要处理"
             )
             await callback.answer("✅ 举报已拒绝", show_alert=True)

@@ -5,6 +5,60 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.2] - 2026-07-18
+
+### Bug 修复
+
+#### 验证成功后的邀请链接收紧到 `failed_restore` 场景 🔧
+- **问题**：此前每位用户验证通过后都会创建一次性邀请链接并附带"点击加入"按钮。但 normal 模式用户一直在群里（仅权限被限制后恢复）、join_request 模式 `approve_chat_join_request` 已让用户加入，这两种场景的链接纯属冗余，且 normal 模式追加文案“💡 如果没有自动加入”对从未离开群的用户逻辑不通
+- **调整**：仅在 `failed_restore`（`restore_user_permissions` 失败）时尝试创建链接供用户手动重新加入；并拆分创建与发送的异常处理（日志区分二者）、降级文案改为明确引导联系管理员
+
+## [1.6.1] - 2026-07-17
+
+### 代码质量
+
+- ✅ 修复 `make check` 报告的全部问题，检查链路恢复全绿（mypy 0 错误、pytest 120 passed、0 warning）
+  - 补充类型注解消除 9 处 mypy 错误：`member_query` 的 `result` 字典注解、宵禁二次查询改名 `current_group`、PIL 图片变量函数级前置声明 `img: Image.Image`、异常状态通知兜底 `reason or "未知状态"`
+  - CAS 群组通知测试改为负向断言，对齐 [1.6.0] 移除违规次数展示的产品决策
+  - 删除 `conftest.py` 冗余 `event_loop_policy` fixture，消除 `pytest-asyncio` 弃用警告
+  - `verification.py` 两处 `logger.info` 合并（black 格式化）
+
+## [1.6.0] - 2026-07-17
+
+### 新增功能
+
+#### 入群短窗口消息防护中间件 🛡️
+- **场景**：新成员入群后、`restrict_chat_member` 权限真正下发生效前的短暂窗口里仍可抢发消息，既有反垃圾链路拦截不到
+- **实现**：`on_user_join` 在绝对第一步写入 `verification_joining` 标记（默认 TTL 3s），新增 `VerificationGuardMiddleware` 对新发群消息查此标记，命中即删除消息并阻断后续处理
+- **策略**：对所有入群者统一适用，仅靠 TTL 过期；**只删消息不封禁**，避免误伤入群即发言的少数正常用户；Redis 查询失败 fail-open（WARNING 日志，不上报 Sentry）
+- **注册顺序**：`WhitelistMiddleware` 之后、`CurfewMiddleware` 之前，仅拦截 message
+- 新增配置项 `verification_joining_ttl`（`.env.example` 同步补充）
+
+#### 群组消息用户名称脱敏显示 🔒
+- **问题**：spammer 可将广告塞进用户显示名或 @username，bot 发往群组的含用户名消息原样展示，等于替垃圾信息二次曝光
+- **新增 `mask_user_name`**：对用户名做星号遮盖，保留首尾各 1 个字符，中间替换为 `*`，短名按比例降级保证至少 1 个 `*`
+- **统一应用**：所有群组用户提及走 `format_user_mention` / `masked_mention_html`（先脱敏后 HTML 转义），覆盖欢迎消息、CAS 群组通知等
+- **举报处理者（管理员）名称不脱敏**，仅做 HTML 转义
+
+### Bug 修复
+
+#### `/reports` 列表 HTML 解析崩溃 🐛
+- **问题**：`cmd_reports` 末尾提示语的字面 `<ID>` 在全局 `ParseMode.HTML` 下被当作未知标签解析，列表发送抛异常，管理员只看到兜底的「获取举报列表失败」
+- **修复**：将 HTML 输出中未转义的字面尖括号占位符转为 HTML 实体（moderation 的 `<ID>`、admin 的 `/settimeout <秒数>`、curfew 的 `/curfew <开始时间> <结束时间>`）
+
+#### CAS 群组通知优化
+- CAS 中间件群组通知原仅显示数字 ID，改为脱敏用户名（`masked_mention_html`），与其他群组通知一致
+- 移除 CAS 封禁通知中的违规次数显示（用户加入 / 消息拦截两处）及对应日志字段；审计日志 `offenses` 字段保留用于内部分析
+
+### 文档更新
+- README.md 拆分 release/tag 徽章，补充 CAS / 用户状态 / 宵禁功能说明
+- `.env.example` 补充入群短窗口配置项 `verification_joining_ttl`
+
+### 代码质量
+- ✅ Sentry release 标识改为动态派生（`get_app_version`），跟随 `pyproject.toml` 版本号自动同步，消除此前硬编码 `1.3.0` 长期滞后的隐患
+- ✅ 新增 `tests/test_verification_guard.py`（入群短窗口防护）
+- ✅ 补充用户名脱敏、CAS 通知文案、占位符转义、版本号读取等单元测试
+
 ## [1.5.4] - 2026-07-09
 
 ### Bug 修复

@@ -5,6 +5,7 @@ from .cas_check import CASCheckMiddleware
 from .curfew import CurfewMiddleware
 from .retry_after import RetryAfterMiddleware
 from .throttle import ThrottleMiddleware
+from .verification_guard import VerificationGuardMiddleware
 from .whitelist import WhitelistMiddleware
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "CurfewMiddleware",
     "RetryAfterMiddleware",
     "ThrottleMiddleware",
+    "VerificationGuardMiddleware",
     "WhitelistMiddleware",
 ]

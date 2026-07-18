@@ -234,6 +234,15 @@ class Settings(BaseSettings):
 
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
+    verification_joining_window_seconds: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "入群短窗口消息删除时长（秒）：新成员在此时长内于群里发言，消息会被直接删除，"
+            "用于拦截 restrict 生效前的抢发。默认 3 秒，依据 restrict 往返 + 消息投递延迟估算；"
+            "只删不封，误删代价小故偏长优于偏短。"
+        ),
+    )
     max_warnings: int = Field(default=3, description="最大警告次数（触发禁言）")
     warning_expiration_days: int = Field(default=7, description="警告有效期（天）")
     warning_mute_duration_hours: int = Field(
