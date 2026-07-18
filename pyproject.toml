@@ -3,7 +3,7 @@
 # ============================================================================
 [project]
 name = "tg-guard-bot"
-version = "1.6.1"
+version = "1.6.2"
 description = "Telegram 群管理机器人，支持入群验证、群管理和智能反垃圾"
 authors = [{name = "tg-guard-bot"}]
 readme = "README.md"
