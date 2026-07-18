@@ -133,7 +133,10 @@ async def send_verification_success_message(
     chat_title: str,
     message_type: str = "success",
 ) -> None:
-    """发送验证成功消息（带一次性邀请链接）
+    """发送验证成功消息
+
+    仅 ``failed_restore``（权限恢复失败）时尝试附带一次性邀请链接，供用户手动重新加入；
+    其余场景用户已成功入群，发送纯文本成功消息即可。
 
     Args:
         bot: Bot 实例
@@ -143,52 +146,64 @@ async def send_verification_success_message(
         message_type: 消息类型
             - "success": 验证成功，已自动加入
             - "success_join_request": 验证成功，加入请求已批准
-            - "failed_restore": 验证成功，但恢复权限失败
+            - "failed_restore": 验证成功，但恢复权限失败（尝试附带一次性邀请链接）
     """
-    # 创建一次性邀请链接（10分钟有效）
-    invite_link = None
-    try:
-        invite = await bot.create_chat_invite_link(
-            chat_id=chat_id,
-            expire_date=datetime.now() + timedelta(minutes=10),
-            member_limit=1,  # 一次性链接
-            creates_join_request=False,  # 直接加入，不需要批准
-        )
-        invite_link = invite.invite_link
-        logger.info(f"已为用户 {user_id} 创建一次性邀请链接（{message_type}）")
-    except Exception as e:
-        logger.warning(f"创建邀请链接失败: {e}")
-
     # 根据消息类型构建文本
     if message_type == "success":
         text = f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！"
     elif message_type == "success_join_request":
         text = f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！"
     elif message_type == "failed_restore":
-        text = f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限。\n\n请点击下方按钮加入群组：<b>{chat_title}</b>\n\n您已通过验证，将自动获得权限！"
+        text = (
+            f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限。\n\n"
+            f"请点击下方按钮重新加入群组：<b>{chat_title}</b>\n\n"
+            f"您已通过验证，重新加入后将自动获得权限！"
+        )
     else:
         text = f"✅ <b>验证成功！</b>\n\n群组：<b>{chat_title}</b>"
 
-    # 添加邀请链接提示和按钮
-    if invite_link:
-        if message_type in ["success", "success_join_request"]:
-            text += "\n\n💡 如果没有自动加入，请点击下方按钮手动加入："
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🔗 点击加入群组", url=invite_link)]]
+    # 仅在权限恢复失败时尝试创建一次性邀请链接（10 分钟有效，限使用一次）
+    if message_type == "failed_restore":
+        try:
+            invite = await bot.create_chat_invite_link(
+                chat_id=chat_id,
+                expire_date=datetime.now() + timedelta(minutes=10),
+                member_limit=1,  # 限使用一次（不绑定用户身份）
+                creates_join_request=False,  # 直接加入，不需要批准
+            )
+        except Exception as e:
+            logger.warning(f"创建邀请链接失败，降级为纯文本通知: {e}")
+        else:
+            try:
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="🔗 点击加入群组", url=invite.invite_link)]
+                    ]
+                )
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
+                logger.info(f"已为用户 {user_id} 发送重新加入按钮（failed_restore）")
+                return
+            except Exception as e:
+                logger.warning(f"发送重新加入按钮失败，降级为纯文本: {e}")
+
+        # 创建或发送失败：降级文案，引导联系管理员
+        text = (
+            f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限，"
+            f"且生成重新加入按钮失败。\n\n请联系管理员协助重新加入群组：<b>{chat_title}</b>。"
         )
-        await bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-    else:
-        await bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+
+    # 纯文本成功消息（含 failed_restore 降级路径）
+    await bot.send_message(
+        chat_id=user_id,
+        text=text,
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
 
 async def check_user_spam_info(
