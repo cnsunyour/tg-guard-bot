@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.2] - 2026-07-18
+
+### Bug 修复
+
+#### 验证成功后的邀请链接收紧到 `failed_restore` 场景 🔧
+- **问题**：此前每位用户验证通过后都会创建一次性邀请链接并附带"点击加入"按钮。但 normal 模式用户一直在群里（仅权限被限制后恢复）、join_request 模式 `approve_chat_join_request` 已让用户加入，这两种场景的链接纯属冗余，且 normal 模式追加文案“💡 如果没有自动加入”对从未离开群的用户逻辑不通
+- **调整**：仅在 `failed_restore`（`restore_user_permissions` 失败）时尝试创建链接供用户手动重新加入；并拆分创建与发送的异常处理（日志区分二者）、降级文案改为明确引导联系管理员
+
 ## [1.6.1] - 2026-07-17
 
 ### 代码质量
