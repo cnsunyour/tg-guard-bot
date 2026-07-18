@@ -1,6 +1,10 @@
-"""网络请求重试装饰器
+"""网络请求重试工具
 
-用于自动重试因网络临时错误失败的操作
+提供两种形式的网络临时错误重试：
+
+- ``retry_on_network_error``：装饰器形式，用于包装独立的异步函数。
+- ``retry_async_call``：调用时形式，用于对已有协程方法（如 bot API 调用）
+  做一次性重试，无需定义新的被装饰函数。
 """
 
 import asyncio
@@ -17,6 +21,15 @@ from loguru import logger
 
 P = ParamSpec("P")
 T = TypeVar("T")
+
+# 可重试的网络临时错误类型（装饰器与 retry_async_call 共享）
+# 注意：TelegramRetryAfter 因需读取 e.retry_after 单独处理，不在此元组中
+_RETRYABLE_NETWORK_ERRORS = (
+    TelegramNetworkError,
+    TelegramServerError,
+    ConnectionError,
+    TimeoutError,
+)
 
 
 def retry_on_network_error(
@@ -72,12 +85,7 @@ def retry_on_network_error(
                         logger.error(f"{func.__name__} 达到最大重试次数，速率限制未解除")
                         raise
 
-                except (
-                    TelegramNetworkError,
-                    TelegramServerError,
-                    ConnectionError,
-                    TimeoutError,
-                ) as e:
+                except _RETRYABLE_NETWORK_ERRORS as e:
                     # 网络临时错误，指数退避重试
                     if attempt < max_retries:
                         logger.warning(
@@ -107,3 +115,61 @@ def retry_on_network_error(
         return wrapper
 
     return decorator
+
+
+async def retry_async_call[T](
+    coro_factory: Callable[[], Awaitable[T]],
+    *,
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    backoff_factor: float = 2.0,
+    max_delay: float = 10.0,
+) -> T:
+    """调用时形式的网络错误重试。
+
+    与 :func:`retry_on_network_error` 装饰器语义一致：仅重试网络临时错误
+    （含 429 速率限制），非网络错误立即抛出，重试耗尽抛出最后一次异常。
+
+    适合对已有协程方法（如 ``bot.approve_chat_join_request``）做一次性重试，
+    无需定义新的被装饰函数。每次重试都重新调用 ``coro_factory``，避免复用
+    已 await 过的协程对象。
+
+    与装饰器的差异：非网络错误直接传播，**不在此处记日志**（由调用方统一记录），
+    避免与调用方的异常处理产生重复 error 日志。
+
+    Args:
+        coro_factory: 返回待执行 coroutine 的零参工厂（每次重试重新调用）。
+        max_retries: 最大重试次数，不含首次尝试（默认 3，即最多尝试 4 次）。
+        initial_delay: 首次重试前等待秒数。
+        backoff_factor: 退避因子（指数增长）。
+        max_delay: 单次等待上限（秒）。
+
+    Returns:
+        工厂协程的返回值。
+
+    Raises:
+        重试耗尽后抛出最后一次捕获的可重试异常；非网络错误立即原样抛出。
+    """
+    delay = initial_delay
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_factory()
+        except TelegramRetryAfter as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(
+                f"触发速率限制，等待 {e.retry_after} 秒后重试 "
+                f"(尝试 {attempt + 1}/{max_retries + 1})"
+            )
+            await asyncio.sleep(e.retry_after)
+        except _RETRYABLE_NETWORK_ERRORS as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(
+                f"网络错误: {type(e).__name__}: {e}，"
+                f"等待 {delay:.1f} 秒后重试 (尝试 {attempt + 1}/{max_retries + 1})"
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * backoff_factor, max_delay)
+    # 理论不可达：循环内最后一次 attempt 必然 return 或 raise
+    raise RuntimeError("retry_async_call 重试逻辑异常")
