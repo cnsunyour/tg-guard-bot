@@ -24,6 +24,7 @@ from loguru import logger
 from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
+from src.core.retry import retry_async_call
 from src.core.utils import (
     auto_delete_message,
     escape_html,
@@ -67,137 +68,126 @@ async def decline_join_request(bot: Bot, chat_id: int, user_id: int) -> bool:
         raise
 
 
+async def _restore_user_permissions_once(bot: Bot, chat_id: int, user_id: int) -> None:
+    """单次恢复用户权限的核心操作（不含异常兜底）。
+
+    幂等：每次调用都重新查询会员状态并按需恢复，可安全重试。
+    由 :func:`restore_user_permissions` 通过 ``retry_async_call`` 包裹重试。
+    """
+    member = await bot.get_chat_member(chat_id, user_id)
+
+    if member.status == "kicked":
+        # 用户被封禁，解除封禁（only_if_banned 避免 restricted 用户被误踢）
+        await bot.unban_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            only_if_banned=True,
+        )
+    elif member.status == "restricted":
+        # 恢复权限 + 31 秒后自动移出 restricted 列表
+        until_date = datetime.utcnow() + timedelta(seconds=31)
+
+        await bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_change_info=False,
+                can_invite_users=False,
+                can_pin_messages=False,
+                can_manage_topics=False,
+            ),
+            until_date=until_date,
+        )
+    # 其他状态（member, administrator 等）无需操作
+
+    logger.info(f"已恢复用户 {user_id} 权限 (原状态: {member.status})")
+
+
 async def restore_user_permissions(bot: Bot, chat_id: int, user_id: int) -> bool:
-    """恢复用户权限并从 restricted 列表移除（30秒后自动移除）
+    """恢复用户权限并从 restricted 列表移除（30秒后自动移除）。
 
-    修复 unban_chat_member(..., only_if_banned=False) 导致 restricted 用户被踢出的 bug
-
-    Args:
-        bot: Bot 实例
-        chat_id: 群组 ID
-        user_id: 用户 ID
+    内部对 Telegram 网络临时错误自动重试（最多 3 次，指数退避）；重试耗尽
+    或发生非网络错误时返回 ``False``，由调用方降级处理。
 
     Returns:
         是否成功
     """
     try:
-        # 获取用户当前状态
-        member = await bot.get_chat_member(chat_id, user_id)
-
-        if member.status == "kicked":
-            # 用户被封禁，解除封禁
-            await bot.unban_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                only_if_banned=True,
-            )
-        elif member.status == "restricted":
-            # 用户被禁言，恢复权限 + 31秒后自动移出 restricted 列表
-            until_date = datetime.utcnow() + timedelta(seconds=31)
-
-            await bot.restrict_chat_member(
-                chat_id=chat_id,
-                user_id=user_id,
-                permissions=ChatPermissions(
-                    can_send_messages=True,
-                    can_send_audios=True,
-                    can_send_documents=True,
-                    can_send_photos=True,
-                    can_send_videos=True,
-                    can_send_video_notes=True,
-                    can_send_voice_notes=True,
-                    can_send_polls=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                    can_change_info=False,
-                    can_invite_users=False,
-                    can_pin_messages=False,
-                    can_manage_topics=False,
-                ),
-                until_date=until_date,
-            )
-        # 其他状态（member, administrator 等）无需操作
-
-        logger.info(f"已恢复用户 {user_id} 权限 (原状态: {member.status})")
+        await retry_async_call(lambda: _restore_user_permissions_once(bot, chat_id, user_id))
         return True
-
     except Exception as e:
-        logger.error(f"恢复用户权限失败 [用户:{user_id}]: {e}")
+        logger.error(f"恢复用户权限失败（重试耗尽）[用户:{user_id}]: {e}")
+        return False
+
+
+async def approve_join_request(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """批准用户的加入请求。
+
+    内部对 Telegram 网络临时错误自动重试（最多 3 次，指数退避）；重试耗尽
+    或发生非网络错误时返回 ``False``，由调用方降级处理。
+
+    Returns:
+        是否成功
+    """
+    try:
+        await retry_async_call(
+            lambda: bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+        )
+        return True
+    except Exception as e:
+        logger.error(f"批准加入请求失败（重试耗尽）[用户:{user_id}]: {e}")
         return False
 
 
 async def send_verification_success_message(
     bot: Bot,
     user_id: int,
-    chat_id: int,
     chat_title: str,
     message_type: str = "success",
 ) -> None:
-    """发送验证成功消息
+    """发送验证结果消息（纯文本）。
 
-    仅 ``failed_restore``（权限恢复失败）时尝试附带一次性邀请链接，供用户手动重新加入；
-    其余场景用户已成功入群，发送纯文本成功消息即可。
+    所有关键操作（权限恢复、加入请求批准）均由调用方带重试执行，失败时传入
+    对应的 ``*_failed`` 类型，由本函数发送降级引导文案。不再创建邀请链接：
+    restricted 用户点击「加入群组」链接无效，重试 + 联系管理员更可靠。
 
     Args:
         bot: Bot 实例
         user_id: 用户 ID
-        chat_id: 群组 ID
         chat_title: 群组标题（已转义 HTML）
         message_type: 消息类型
-            - "success": 验证成功，已自动加入
+            - "success": 验证成功，已恢复群组权限
             - "success_join_request": 验证成功，加入请求已批准
-            - "failed_restore": 验证成功，但恢复权限失败（尝试附带一次性邀请链接）
+            - "restore_failed": 验证已通过，但权限恢复失败（用户仍在群内）
+            - "approve_failed": 验证已通过，但加入请求批准失败（用户尚未入群）
     """
-    # 根据消息类型构建文本
     if message_type == "success":
         text = f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！"
     elif message_type == "success_join_request":
         text = f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！"
-    elif message_type == "failed_restore":
+    elif message_type == "restore_failed":
         text = (
-            f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限。\n\n"
-            f"请点击下方按钮重新加入群组：<b>{chat_title}</b>\n\n"
-            f"您已通过验证，重新加入后将自动获得权限！"
+            f"✅ <b>验证已通过</b>\n\n暂时无法自动恢复您在群组 <b>{chat_title}</b> 中的发言权限。\n\n"
+            f"请稍后在群内尝试发言；若仍无法发言，请联系管理员协助处理。"
+        )
+    elif message_type == "approve_failed":
+        text = (
+            f"✅ <b>验证已通过</b>\n\n暂时无法自动批准您加入群组：<b>{chat_title}</b>。\n\n"
+            f"请稍后重新提交加入请求；若仍无法加入，请联系管理员协助处理。"
         )
     else:
         text = f"✅ <b>验证成功！</b>\n\n群组：<b>{chat_title}</b>"
 
-    # 仅在权限恢复失败时尝试创建一次性邀请链接（10 分钟有效，限使用一次）
-    if message_type == "failed_restore":
-        try:
-            invite = await bot.create_chat_invite_link(
-                chat_id=chat_id,
-                expire_date=datetime.now() + timedelta(minutes=10),
-                member_limit=1,  # 限使用一次（不绑定用户身份）
-                creates_join_request=False,  # 直接加入，不需要批准
-            )
-        except Exception as e:
-            logger.warning(f"创建邀请链接失败，降级为纯文本通知: {e}")
-        else:
-            try:
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text="🔗 点击加入群组", url=invite.invite_link)]
-                    ]
-                )
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=keyboard,
-                )
-                logger.info(f"已为用户 {user_id} 发送重新加入按钮（failed_restore）")
-                return
-            except Exception as e:
-                logger.warning(f"发送重新加入按钮失败，降级为纯文本: {e}")
-
-        # 创建或发送失败：降级文案，引导联系管理员
-        text = (
-            f"✅ <b>验证成功！</b>\n\n由于网络问题，无法自动恢复您的权限，"
-            f"且生成重新加入按钮失败。\n\n请联系管理员协助重新加入群组：<b>{chat_title}</b>。"
-        )
-
-    # 纯文本成功消息（含 failed_restore 降级路径）
     await bot.send_message(
         chat_id=user_id,
         text=text,
@@ -515,17 +505,18 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
             # 用户已通过验证，直接批准加入请求
             logger.info(f"用户 {user_id} 已通过验证，直接批准加入请求")
 
-            try:
-                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+            chat_title = "群组"
+            with contextlib.suppress(Exception):
+                chat = await bot.get_chat(chat_id)
+                chat_title = escape_html(chat.title) if chat.title else "群组"
+
+            if await approve_join_request(bot, chat_id, user_id):
                 logger.info(f"已批准用户 {user_id} 的加入请求（已验证用户）")
 
-                # 清除验证标记
-                await redis.delete(approved_key)
+                # 不删除 approved_key：用户随后加入群组时由 on_user_join 恢复权限并消费此标记
 
                 # 在私聊中通知用户
                 with contextlib.suppress(Exception):
-                    chat = await bot.get_chat(chat_id)
-                    chat_title = escape_html(chat.title) if chat.title else "群组"
                     await bot.send_message(
                         chat_id=user_id,
                         text=f"✅ <b>加入成功！</b>\n\n您的加入请求已批准，欢迎加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
@@ -534,9 +525,10 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
 
                 return  # 已处理，直接返回
 
-            except Exception as e:
-                logger.error(f"批准已验证用户的加入请求失败: {e}")
-                # 批准失败，继续走正常验证流程
+            # 批准失败（重试耗尽）：保留 approved_key 以便用户重新提交加入请求时自动批准
+            with contextlib.suppress(Exception):
+                await send_verification_success_message(bot, user_id, chat_title, "approve_failed")
+            return
 
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
@@ -643,6 +635,9 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             if await verification_service.is_verification_pending(chat_id, user_id):
                 await verification_service.clear_verification(chat_id, user_id)
                 logger.info(f"用户 {user_id} 由管理员邀请，已清除待验证状态")
+
+            # 消费可能残留的 approved_key（管理员邀请/批准与 Bot 验证竞争时），使命已完成
+            await get_redis().delete(RedisKeys.verification_approved(chat_id, user_id))
 
             # 直接发送欢迎消息（不需要限制权限）
             welcome_msg = await bot.send_message(
@@ -784,23 +779,23 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             # 用户已通过验证，恢复权限
             logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
 
-            # ✅ 恢复用户权限（修复 bug：不再踢出用户）
-            await restore_user_permissions(bot, chat_id, user_id)
+            chat_title = escape_html(event.chat.title) if event.chat.title else "群组"
 
-            # 清除验证标记
+            # ✅ 恢复用户权限（内部含重试，失败时降级通知）
+            if not await restore_user_permissions(bot, chat_id, user_id):
+                # 恢复失败：保留 approved_key，以便用户重新入群时再次尝试
+                with contextlib.suppress(Exception):
+                    await send_verification_success_message(
+                        bot, user_id, chat_title, "restore_failed"
+                    )
+                return
+
+            # 恢复成功：清除验证标记
             await redis.delete(approved_key)
-
-            # 获取群组信息
-            chat = await bot.get_chat(chat_id)
-            chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
-                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
-                )
+                await send_verification_success_message(bot, user_id, chat_title, "success")
 
             # 在群内发送欢迎消息
             welcome_msg = await bot.send_message(
@@ -1519,16 +1514,42 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=int(message_id_str))
 
+            # ✅ 清除验证状态（提前到可能早退之前，避免遗留状态被超时任务重复处理）
+            await verification_service.clear_verification(chat_id, user_id)
+
             await message.answer("✅ 验证成功！")
+
+            # ✅ 设置"已验证"标记（10 分钟），以便权限恢复/批准失败后用户重新触发入群时跳过验证
+            approved_key = RedisKeys.verification_approved(chat_id, user_id)
+            await redis.setex(approved_key, 600, "1")
+
+            # 获取群组标题（用于失败降级文案）
+            chat_title = "群组"
+            with contextlib.suppress(Exception):
+                chat = await bot.get_chat(chat_id)
+                chat_title = escape_html(chat.title) if chat.title else "群组"
 
             # 处理验证成功逻辑
             if is_join_request:
-                # 批准加入请求
-                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+                # 批准加入请求（内部含重试）
+                if not await approve_join_request(bot, chat_id, user_id):
+                    with contextlib.suppress(Exception):
+                        await send_verification_success_message(
+                            bot, user_id, chat_title, "approve_failed"
+                        )
+                    return
                 logger.info(f"用户 {user_id} 验证成功，已批准加入请求")
             else:
-                # ✅ 恢复用户权限（修复 bug：不再踢出用户）
-                await restore_user_permissions(bot, chat_id, user_id)
+                # ✅ 恢复用户权限（内部含重试，失败时降级通知）
+                if not await restore_user_permissions(bot, chat_id, user_id):
+                    with contextlib.suppress(Exception):
+                        await send_verification_success_message(
+                            bot, user_id, chat_title, "restore_failed"
+                        )
+                    return
+
+                # 恢复成功：approved_key 使命完成，删除避免 10 分钟内重新加入免验证
+                await redis.delete(approved_key)
 
                 # 发送欢迎消息到群组
                 assert message.from_user  # 类型缩小
@@ -1547,9 +1568,6 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 asyncio.create_task(delayed_delete())
 
                 logger.info(f"用户 {user_id} 验证成功")
-
-            # 清除验证状态
-            await verification_service.clear_verification(chat_id, user_id)
 
         else:
             # 验证失败 - 清理所有相关键
@@ -1796,22 +1814,24 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
             await redis.setex(approved_key, 600, "1")  # 10分钟
 
-            try:
-                await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+            approved = await approve_join_request(bot, chat_id, user_id)
+            if approved:
                 logger.info(
                     f"用户 {user_id} {provider.upper()} 验证成功，已批准加入请求 (群组 {chat_id})"
                 )
-            except Exception as e:
-                logger.error(f"批准加入请求失败: {e}")
-                # 即使失败，用户已验证，approved_key 会在用户重新加入时生效
+            else:
+                # 批准失败（重试耗尽）：approved_key 保留，用户重新提交加入请求时可自动批准
+                logger.warning(
+                    f"用户 {user_id} {provider.upper()} 批准加入请求失败（重试耗尽），"
+                    f"approved_key 保留以便重新提交加入请求"
+                )
 
             # 在私聊中通知用户
+            message_type = "success_join_request" if approved else "approve_failed"
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
-                await send_verification_success_message(
-                    bot, user_id, chat_id, chat_title, "success_join_request"
-                )
+                await send_verification_success_message(bot, user_id, chat_title, message_type)
 
         else:
             # 正常入群模式：恢复群组权限
@@ -1824,22 +1844,23 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             success = await restore_user_permissions(bot, chat_id, user_id)
 
             if not success:
-                # 恢复权限失败，通知用户需要重新加入，并提供邀请链接
+                # 恢复权限失败，通知用户稍后重试或联系管理员
                 with contextlib.suppress(Exception):
                     chat = await bot.get_chat(chat_id)
                     chat_title = escape_html(chat.title) if chat.title else "群组"
                     await send_verification_success_message(
-                        bot, user_id, chat_id, chat_title, "failed_restore"
+                        bot, user_id, chat_title, "restore_failed"
                     )
                 return  # 提前返回，不发送欢迎消息
+
+            # 恢复成功：approved_key 使命完成，删除避免 10 分钟内重新加入免验证
+            await redis.delete(approved_key)
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
-                await send_verification_success_message(
-                    bot, user_id, chat_id, chat_title, "success"
-                )
+                await send_verification_success_message(bot, user_id, chat_title, "success")
 
             # 在群内发送欢迎消息
             user = message.from_user
@@ -1909,13 +1930,22 @@ async def handle_verification_success(
             # 标记用户已验证（10分钟有效期）
             await redis.setex(approved_key, 600, "1")  # 10分钟
 
-            # 批准加入请求
-            await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+            # 批准加入请求（内部含重试）
+            if not await approve_join_request(bot, chat_id, user_id):
+                with contextlib.suppress(Exception):
+                    await send_verification_success_message(
+                        bot, user_id, chat_title, "approve_failed"
+                    )
+                await callback.answer(
+                    "⚠️ 验证已通过，但暂时无法批准加入请求，请稍后重试或联系管理员",
+                    show_alert=True,
+                )
+                return
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
                 await send_verification_success_message(
-                    bot, user_id, chat_id, chat_title, "success_join_request"
+                    bot, user_id, chat_title, "success_join_request"
                 )
 
             await callback.answer("✅ 验证成功！")
@@ -1923,14 +1953,29 @@ async def handle_verification_success(
 
         else:
             # 正常入群模式：恢复群组权限
-            # ✅ 恢复用户权限（修复 bug：不再踢出用户）
-            await restore_user_permissions(bot, chat_id, user_id)
+            redis = get_redis()
+            approved_key = RedisKeys.verification_approved(chat_id, user_id)
+            # ✅ 设置"已验证"标记（10 分钟），以便权限恢复失败后用户重新加入时跳过验证
+            await redis.setex(approved_key, 600, "1")
+
+            # ✅ 恢复用户权限（内部含重试，失败时降级通知）
+            if not await restore_user_permissions(bot, chat_id, user_id):
+                with contextlib.suppress(Exception):
+                    await send_verification_success_message(
+                        bot, user_id, chat_title, "restore_failed"
+                    )
+                await callback.answer(
+                    "⚠️ 验证已通过，但暂时无法恢复发言权限，请稍后重试或联系管理员",
+                    show_alert=True,
+                )
+                return
+
+            # 恢复成功：approved_key 使命完成，删除避免 10 分钟内重新加入免验证
+            await redis.delete(approved_key)
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
-                await send_verification_success_message(
-                    bot, user_id, chat_id, chat_title, "success"
-                )
+                await send_verification_success_message(bot, user_id, chat_title, "success")
 
             # 在群内发送欢迎消息（仅此一条群内消息）
             welcome_msg = await bot.send_message(

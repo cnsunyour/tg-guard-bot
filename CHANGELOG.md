@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.3] - 2026-07-19
+
+### Bug 修复
+
+#### 验证成功流程改用网络重试，彻底移除邀请链接 🔧
+- **问题**：v1.6.2 收紧邀请链接后暴露多处既有缺陷：
+  - `handle_verification_success`、文本验证码、`on_user_join` 共 4 处 `restore_user_permissions` 调用忽略返回值，恢复失败仍发送成功文案与欢迎消息
+  - Web CAPTCHA 等路径 `approve_chat_join_request` 失败仍通知"已批准"
+  - restricted 用户点击"加入群组"邀请链接无效（已在群内不会触发重新入群）
+  - `on_join_request` 的 approved_key 恢复路径批准成功后过早删除标记，与随后的 `on_user_join` 事件竞争，导致已验证用户加入后又被要求验证
+- **修复**：
+  - 移除 `send_verification_success_message` 的全部邀请链接逻辑，改为 `success` / `success_join_request` / `restore_failed` / `approve_failed` 四种纯文本消息
+  - 新增 `retry_async_call`（`src/core/retry.py`），对权限恢复与加入请求批准做网络错误重试（最多 3 次，指数退避）
+  - 改造全部 8 个调用点：恢复/批准失败时发送降级文案、提前返回、保留 `approved_key`
+  - 统一 `approved_key` 生命周期：写入者不删、approve 成功不删（留给 on_user_join restore）、restore 成功才删、失败保留
+  - 文本验证码与 `handle_verification_success` 的 normal 路径补写 `approved_key`（原本缺失，导致失败后用户重新入群仍被要求验证）
+  - 管理员邀请/批准分支补消费残留的 `approved_key`
+
 ## [1.6.2] - 2026-07-18
 
 ### Bug 修复
