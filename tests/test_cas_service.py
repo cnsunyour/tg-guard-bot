@@ -133,6 +133,29 @@ async def test_check_user_retry_max_attempts(cas_service, mock_redis):
 
 
 @pytest.mark.asyncio
+async def test_check_user_timeout_includes_phase_and_effective_timeout(cas_service, mock_redis):
+    """空消息超时仍记录阶段、有效超时值并按配置重试"""
+    user_id = 123456789
+
+    mock_client = AsyncMock()
+    mock_client.timeout = httpx.Timeout(5, connect=3.0)
+    mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout(""))
+
+    with (
+        patch("src.services.cas_service.get_redis", return_value=mock_redis),
+        patch("src.services.cas_service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+    ):
+        cas_service._client = mock_client
+        result = await cas_service.check_user(user_id)
+
+    # 应尝试 3 次（初始 + 2 次重试），重试间两次 sleep
+    assert mock_client.get.await_count == 3
+    assert mock_sleep.await_count == 2
+    assert result.is_banned is False
+    assert result.error == "[error_type=ReadTimeout] [phase=read] [timeout_seconds=5]"
+
+
+@pytest.mark.asyncio
 async def test_check_user_from_cache(cas_service, mock_redis):
     """测试从缓存读取结果"""
     user_id = 123456789
