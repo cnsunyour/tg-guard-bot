@@ -8,11 +8,13 @@ from contextlib import suppress
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from src.ml.ai_detector import (
     AIServiceConfig,
     AIServiceError,
+    AIServiceProvider,
     BackupAIServiceProvider,
     HybridAIDetector,
     PrimaryAIServiceProvider,
@@ -655,3 +657,48 @@ class TestAIServiceProviderVision:
         assert detection.is_spam is False
         assert detection.confidence == 0.5
         assert detection.details["extracted_text"] == ""
+
+
+# ============================================================================
+# _format_error 输出回归保护
+# 防止公共格式化器（src.core.http_errors）日后改动悄然改变 AI 日志格式
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (httpx.ReadTimeout(""), "ReadTimeout [phase=read]"),
+        (httpx.ConnectTimeout(""), "ConnectTimeout [phase=connect]"),
+        (httpx.WriteTimeout(""), "WriteTimeout [phase=write]"),
+        (httpx.PoolTimeout(""), "PoolTimeout [phase=pool]"),
+        (httpx.ReadTimeout("timed out"), "ReadTimeout [phase=read] [message=timed out]"),
+        (httpx.ConnectError(""), "ConnectError"),
+        (httpx.ConnectError("connection refused"), "ConnectError [message=connection refused]"),
+        (ValueError("无法解析"), "ValueError [message=无法解析]"),
+    ],
+)
+def test_format_error_output_stable(error, expected):
+    """_format_error 对各类异常输出稳定，锁定改造前的历史格式"""
+    assert AIServiceProvider._format_error(error) == expected
+
+
+def test_format_error_aiservice_error_keeps_provider():
+    """AIServiceError 保留 provider 与 message（领域异常不走公共格式化器）"""
+    error = AIServiceError("primary", "所有重试失败")
+    assert (
+        AIServiceProvider._format_error(error)
+        == "AIServiceError [provider=primary] [message=所有重试失败]"
+    )
+
+
+def test_format_error_http_status_error_raw_mode():
+    """HTTPStatusError 提取状态码、响应原文与 message（raw 模式保持历史格式）"""
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    response = httpx.Response(429, text='{"error":{"message":"rate limited"}}', request=request)
+    error = httpx.HTTPStatusError("429 Too Many Requests", request=request, response=response)
+    assert (
+        AIServiceProvider._format_error(error)
+        == 'HTTPStatusError [status_code=429] [response={"error":{"message":"rate limited"}}] '
+        "[message=429 Too Many Requests]"
+    )

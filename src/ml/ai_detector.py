@@ -24,6 +24,7 @@ import httpx
 from loguru import logger
 
 from src.core.config import settings
+from src.core.http_errors import format_httpx_error
 
 # ============================================================================
 # Vision 支持工具（模型判定 + 图片编码）
@@ -476,7 +477,11 @@ class AIServiceProvider(ABC):
 
     @staticmethod
     def _format_error(e: Exception) -> str:
-        """格式化异常信息，避免日志只出现空错误。"""
+        """格式化异常信息，避免日志只出现空错误。
+
+        AIServiceError 保留领域信息；httpx 异常委托公共格式化工具
+        （raw 模式保持历史输出格式，含响应原文）；其余异常输出类名 + 消息。
+        """
 
         def _truncate(message: str, limit: int = 200) -> str:
             normalized = re.sub(r"\s+", " ", message).strip()
@@ -490,42 +495,12 @@ class AIServiceProvider(ABC):
                 return f"{e.__class__.__name__} [provider={e.provider}] " f"[message={message}]"
             return f"{e.__class__.__name__} [provider={e.provider}]"
 
+        # httpx 异常委托公共工具：raw 截断响应原文、name 保持类名前缀，
+        # 与改造前的 _format_error 输出完全一致（不传 timeout/include_cause）
+        if isinstance(e, httpx.HTTPError):
+            return format_httpx_error(e, response_body_mode="raw", error_type_mode="name")
+
         error_type = e.__class__.__name__
-
-        if isinstance(e, httpx.TimeoutException):
-            timeout_phase = None
-            if isinstance(e, httpx.ConnectTimeout):
-                timeout_phase = "connect"
-            elif isinstance(e, httpx.ReadTimeout):
-                timeout_phase = "read"
-            elif isinstance(e, httpx.WriteTimeout):
-                timeout_phase = "write"
-            elif isinstance(e, httpx.PoolTimeout):
-                timeout_phase = "pool"
-
-            parts = [error_type]
-            if timeout_phase:
-                parts.append(f"[phase={timeout_phase}]")
-
-            message = _truncate(str(e))
-            if message:
-                parts.append(f"[message={message}]")
-            return " ".join(parts)
-
-        if isinstance(e, httpx.HTTPStatusError):
-            parts = [error_type, f"[status_code={e.response.status_code}]"]
-            try:
-                response_text = _truncate(e.response.text)
-            except Exception:
-                response_text = ""
-            if response_text:
-                parts.append(f"[response={response_text}]")
-
-            message = _truncate(str(e))
-            if message:
-                parts.append(f"[message={message}]")
-            return " ".join(parts)
-
         message = _truncate(str(e))
         if message:
             return f"{error_type} [message={message}]"
