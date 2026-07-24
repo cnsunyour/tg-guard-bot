@@ -5,6 +5,40 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.4] - 2026-07-24
+
+### Bug 修复
+
+#### 修复举报按钮权限绕过 🔐
+- **问题**：`on_report_approve` / `on_report_reject` 把 Bot 发送的 `callback.message` 传给 `check_admin_permission_strict_message`，该校验 `message.from_user.id`——而 `callback.message.from_user` 是 Bot 自身（必为群管理员），守卫恒真，任意普通成员可点击「接受/拒绝」执行封禁/删除/入库或拒绝举报
+- **修复**：改为 `check_admin_permission_strict(bot, chat_id, callback.from_user.id)` 严格校验实际点击者（直接 API 查询、不信任缓存）；API 异常 fail-closed 拒绝
+- 新增 `tests/test_moderation_callbacks.py` 回归测试，锁住「权限检查使用点击者 ID 且拒绝后不进入业务处理」
+
+#### 入群处理新增 in-flight 互斥锁，修复 AI 慢请求期间重复触发检测 🔧
+- **问题**：AI 反垃圾检测慢请求/超时可能耗时远超 60s dedup 窗口，且 pending 锁在 `check_user_spam_info` 之后才建立，用户重复点击入群请求可绕过去重，重复触发 CAS/状态/AI 检测
+- **修复**：
+  - 新增 `_verification_inflight_lock`（`SET NX EX` + owner token，Lua compare-and-delete 释放），覆盖 CAS/状态/AI 整段处理窗口，上次未处理完则拒绝重入
+  - `on_join_request` / `on_user_join` 前移 pending/approved 快速路径到昂贵检测之前，已建立验证后不再重复调用 AI
+  - 两入口使用独立 inflight 键，避免批准加入后正常入群事件被误锁
+  - 新增配置 `VERIFICATION_INFLIGHT_TTL_SECONDS`（默认 300s）
+- 新增 11 项锁单元测试与入口集成测试
+
+#### 群消息中管理员/操作者名称改为完整显示 🔧
+- **问题**：管理员邀请入群欢迎消息、反垃圾确认/反馈提示中，管理员与操作者名称误用脱敏函数 `format_user_mention`，显示为「由管理员 `张**三` 邀请」「操作者: `李**四`」
+- **修复**：新增 `format_trusted_user_mention()`（`src/core/utils.py`）作为可信用户名称的统一不脱敏入口（完整显示名 + @username|ID，仅 `escape_html`），替换 `verification.py` 邀请者、`antispam.py` 两处操作者共 3 处误用；被邀请/被处理的普通用户仍走 `format_user_mention` 脱敏
+- 补 `format_trusted_user_mention` 单元测试（完整显示 / 无 username 回退 / HTML 转义）
+
+#### CAS API 失败日志记录异常类型与超时阶段 🔧
+- **问题**：CAS 服务用 `str(e)` 记录请求失败原因，而 httpx 超时/网络异常的 `str(e)` 为空，导致「CAS API 请求失败」日志丢失原因，无法判断是超时还是其他网络错误
+- **修复**：
+  - 新增 `src/core/http_errors.py` 公共 httpx 异常格式化模块：始终输出异常类名、细分超时阶段（connect/read/write/pool）与有效秒数、HTTP 状态码；safe 模式安全提取响应体白名单字段并脱敏 URL
+  - CAS 接入格式化：失败日志现输出 `[error_type=X] [phase=Y] [timeout_seconds=Z]` 并附带 `__cause__`；AI `_format_error` 委托公共函数（输出与改造前等价）
+- 补充 http_errors / CAS 超时 / AI 格式化回归测试
+
+### 代码质量
+
+- 📝 CLAUDE.md 同步入群处理 in-flight 互斥锁机制：补充三层去重（dedup/inflight/pending）说明、核心函数、Redis 键示例、`VERIFICATION_INFLIGHT_TTL_SECONDS` 配置项与陷阱条目
+
 ## [1.6.3] - 2026-07-19
 
 ### Bug 修复

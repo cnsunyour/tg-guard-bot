@@ -234,6 +234,15 @@ class Settings(BaseSettings):
 
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
+    verification_inflight_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        description=(
+            "入群请求/入群事件处理中锁的 TTL（秒）。正常处理结束后立即释放；"
+            "此值仅用于进程异常退出等场景的死锁兜底，应大于单次处理的最坏耗时"
+            "（AI 检测主备链路串行 × 重试）。默认 300 秒。"
+        ),
+    )
     verification_joining_window_seconds: int = Field(
         default=3,
         ge=1,

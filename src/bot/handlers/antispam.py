@@ -22,6 +22,7 @@ from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和�
 from src.core.utils import (
     auto_delete_message,
     check_admin_permission,
+    format_trusted_user_mention,
     format_user_mention,
     get_chat_administrators_mention,
     should_skip_sender,
@@ -660,7 +661,7 @@ async def _handle_spam_confirm_ban(
     )
 
     # 4. 更新提示消息
-    operator_mention = format_user_mention(callback.from_user)
+    operator_mention = format_trusted_user_mention(callback.from_user)
     updated_text = (
         f"{message.text}\n\n"
         f"✅ 已确认为垃圾消息并处理\n"
@@ -2947,9 +2948,8 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         # 更新消息
         feedback_text = "✅ 确认为正常消息" if not is_spam else "❌ 确认为垃圾信息"
         message_text = message.text if message.text else ""
-        await message.edit_text(
-            message_text + f"\n\n{feedback_text} (by {format_user_mention(callback.from_user)})"
-        )
+        operator_mention = format_trusted_user_mention(callback.from_user)
+        await message.edit_text(message_text + f"\n\n{feedback_text} (by {operator_mention})")
 
         # 自动删除提示消息
         await auto_delete_message(message, delay=30)

@@ -262,6 +262,26 @@ class RedisKeys:
         return f"join_request_dedup:{chat_id}:{user_id}"
 
     @staticmethod
+    def join_request_inflight(chat_id: int, user_id: int) -> str:
+        """加入请求处理中锁键名
+
+        防止同一用户的加入请求处理流程并发重入，覆盖 CAS/Telethon 状态/AI 等
+        慢检测整段窗口（这些步骤耗时可能远超 60 秒 dedup）。与 join_inflight
+        使用独立键，避免批准加入后紧随触发的正常入群事件被误拦截。
+        TTL: settings.verification_inflight_ttl_seconds（默认 300 秒）
+        """
+        return f"join_request_inflight:{chat_id}:{user_id}"
+
+    @staticmethod
+    def join_inflight(chat_id: int, user_id: int) -> str:
+        """用户入群事件处理中锁键名
+
+        防止同一用户的入群事件（chat_member 更新）处理流程并发重入。
+        TTL: settings.verification_inflight_ttl_seconds（默认 300 秒）
+        """
+        return f"join_inflight:{chat_id}:{user_id}"
+
+    @staticmethod
     def user_status_result(user_id: int) -> str:
         """用户状态检查结果缓存键名
 

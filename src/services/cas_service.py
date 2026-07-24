@@ -11,6 +11,7 @@ import httpx
 from loguru import logger
 
 from src.core.config import settings
+from src.core.http_errors import format_httpx_error
 from src.core.redis import RedisKeys, get_redis
 
 
@@ -106,7 +107,7 @@ class CASService:
         try:
             # 指数退避重试策略（参考 AI 检测器）
             max_retries = settings.cas_max_retries
-            last_error: Exception | None = None
+            last_error: str | None = None
 
             for attempt in range(max_retries + 1):
                 try:
@@ -129,23 +130,34 @@ class CASService:
                     return result
 
                 except (httpx.HTTPStatusError, httpx.RequestError) as e:
-                    last_error = e
+                    # 格式化错误摘要（异常类型/超时阶段/有效秒数/底层 cause），
+                    # 避免 httpx 超时或网络异常 str(e) 为空导致日志丢失失败原因
+                    timeout_config: httpx.Timeout | None = None
+                    if isinstance(e, httpx.TimeoutException) and self._client is not None:
+                        timeout_config = self._client.timeout
+                    formatted = format_httpx_error(
+                        e,
+                        response_body_mode="safe",
+                        timeout=timeout_config,
+                        include_cause=True,
+                    )
+                    last_error = formatted
                     if attempt < max_retries:
                         # 指数退避重试
                         wait_time = 0.5 * (2**attempt)
                         logger.warning(
                             f"CAS API 请求失败 [用户:{user_id}] "
                             f"[attempt={attempt + 1}/{max_retries + 1}] "
-                            f"[wait={wait_time}s] [error={e!s}]"
+                            f"[wait={wait_time}s] {formatted}"
                         )
                         await asyncio.sleep(wait_time)
                     else:
                         # 最后一次重试也失败，降级放行
                         logger.error(
                             f"CAS API 请求失败，已达最大重试次数 [用户:{user_id}] "
-                            f"[error={e!s}]，降级放行"
+                            f"{formatted}，降级放行"
                         )
-                        return CASCheckResult(is_banned=False, user_id=user_id, error=str(e))
+                        return CASCheckResult(is_banned=False, user_id=user_id, error=formatted)
 
                 except Exception as e:
                     # 其他异常不重试，直接降级放行
@@ -154,7 +166,7 @@ class CASService:
 
             # 理论上不会到达这里（所有重试都失败）
             if last_error:
-                return CASCheckResult(is_banned=False, user_id=user_id, error=str(last_error))
+                return CASCheckResult(is_banned=False, user_id=user_id, error=last_error)
             return CASCheckResult(is_banned=False, user_id=user_id, error="unknown")
 
         finally:

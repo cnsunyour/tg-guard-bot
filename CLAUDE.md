@@ -78,8 +78,25 @@ make train-model     # 训练反垃圾 ML 模型
 
 **关键文件**: `src/bot/handlers/verification.py`
 
+**入群处理去重（三层保护）**:
+
+为防止用户重复点击入群、以及 AI 反垃圾慢请求/超时期间绕过去重导致重复触发检测，入群处理采用三层去重：
+
+| 层级 | 键名 | 作用 | TTL |
+|------|------|------|-----|
+| 1. 事件去抖 | `join_request_dedup:{chat}:{user}` | 60 秒内同一加入请求只处理一次 | 60s |
+| 2. 处理中互斥 | `join_request_inflight:{chat}:{user}` / `join_inflight:{chat}:{user}` | 覆盖 CAS/状态/AI 整段处理窗口，上次未处理完则拒绝重入 | `VERIFICATION_INFLIGHT_TTL_SECONDS`（默认 300s）|
+| 3. 验证去重 | `verification:{chat}:{user}` | 已有进行中的验证则跳过 | 验证超时 |
+
+- `on_join_request`（加入请求模式）与 `on_user_join`（直接入群）使用**独立 inflight 键**，避免批准加入后紧随的正常入群事件被误锁。
+- inflight 锁用 `SET NX EX` + 随机 owner token 取锁，Lua compare-and-delete 释放（防止处理耗时超过 TTL 后旧协程误删新协程的锁）；由 `@contextlib.asynccontextmanager` 封装，所有 return/异常路径经 `finally` 释放。
+- pending/approved 快速路径**前移**到 CAS/状态/AI 之前，已建立验证后不再重复调用 AI API。
+
 **核心函数**:
-- `on_user_join()` - 处理用户加入事件
+- `on_user_join()` - 处理用户加入事件（直接入群）
+- `on_join_request()` - 处理加入请求事件（Approve New Members 模式）
+- `_verification_inflight_lock()` - 入群处理 in-flight 互斥锁（owner token + Lua 释放）
+- `_process_join_request()` / `_process_user_join()` - 取得锁后执行的实际处理流程
 - `handle_verification_success()` - 验证成功处理
 - `handle_verification_timeout()` - 验证超时处理
 - `handle_user_not_started_bot()` - 未启动 Bot 处理
@@ -264,6 +281,11 @@ class RedisKeys:
     @staticmethod
     def verification_hint(chat_id: int) -> str:
         return f"verification_hint:{chat_id}"
+
+    # 入群处理去重键（见「私聊验证系统」）
+    @staticmethod
+    def join_request_inflight(chat_id: int, user_id: int) -> str:
+        return f"join_request_inflight:{chat_id}:{user_id}"
 ```
 
 **TTL 延长模式**:
@@ -457,6 +479,7 @@ ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD=0     # 跳过垃圾检测全局阈值
 
 # 验证配置
 VERIFICATION_TIMEOUT=120  # 私聊验证超时时间 (秒)
+VERIFICATION_INFLIGHT_TTL_SECONDS=300  # 入群处理 in-flight 锁 TTL（秒；正常结束立即释放，仅作异常兜底，应大于 AI 检测最坏耗时）
 ```
 
 ### 数据库迁移
@@ -534,6 +557,7 @@ tail -f logs/error_*.log  # 查看错误日志
 6. **代码提交前运行 `make check`**: 确保通过格式化、检查和测试
 7. **上下文检测需要AI检测**: `CONTEXT_ENABLED` 需要 `AI_SPAM_ENABLED=true` 才能工作
 8. **上下文一致性可独立使用**: `CONTEXT_CONSISTENCY_ENABLED` 即使没有AI也能通过Embedding工作
+9. **入群 inflight 锁 TTL 须大于检测最坏耗时**: `VERIFICATION_INFLIGHT_TTL_SECONDS` 应覆盖 AI 主备链路串行×重试的总时长；正常处理结束锁立即释放，TTL 仅作进程异常退出的死锁兜底
 
 ---
 
@@ -649,6 +673,6 @@ grep "Stage [1-3] 检测到垃圾" logs/bot_*.log | wc -l
 
 ---
 
-**最后更新**: 2026-02-12
+**最后更新**: 2026-07-23
 **版本**: v1.2.0
 **适用于**: tg-guard-bot 多层反垃圾检测版本

@@ -2,6 +2,8 @@
 
 import asyncio
 import contextlib
+import secrets
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 
 from aiogram import Bot, F, Router
@@ -28,6 +30,7 @@ from src.core.retry import retry_async_call
 from src.core.utils import (
     auto_delete_message,
     escape_html,
+    format_trusted_user_mention,
     format_user_mention,
     masked_mention_html,
 )
@@ -40,6 +43,44 @@ from src.services.username_mapping import UsernameMappingService
 from src.services.verification import VerificationService
 
 router = Router(name="verification")
+
+# 安全释放 in-flight 锁的 Lua 脚本：仅当键值等于 owner token 时才删除，
+# 避免「单次处理耗时超过 TTL → 旧协程 finally 误删新协程刚取得的锁」。
+_INFLIGHT_RELEASE_SCRIPT = (
+    'if redis.call("get", KEYS[1]) == ARGV[1] then '
+    'return redis.call("del", KEYS[1]) '
+    "end "
+    "return 0"
+)
+
+
+@contextlib.asynccontextmanager
+async def _verification_inflight_lock(lock_key: str) -> AsyncIterator[bool]:
+    """获取带 owner token 校验的 Redis in-flight 锁。
+
+    用 ``SET NX EX`` 取锁，随机 token 作为值；离开上下文时用 Lua compare-and-delete
+    释放，确保只删除自己持有的锁。TTL 由 ``settings.verification_inflight_ttl_seconds``
+    控制，仅作进程异常退出时的死锁兜底，正常路径在 yield 结束后立即释放。
+
+    Yields:
+        是否成功取得锁；为 ``False`` 表示已有处理在进行，调用方应直接返回。
+    """
+    redis = get_redis()
+    lock_token = secrets.token_hex(16)
+    acquired = bool(
+        await redis.set(
+            lock_key,
+            lock_token,
+            nx=True,
+            ex=settings.verification_inflight_ttl_seconds,
+        )
+    )
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(Exception):
+                await redis.eval(_INFLIGHT_RELEASE_SCRIPT, 1, lock_key, lock_token)
 
 
 async def decline_join_request(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -416,12 +457,74 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
 
     # 记录 username 映射
     if user.username:
-        from src.services.username_mapping import UsernameMappingService
-
         await UsernameMappingService.update_mapping(
             user_id=user_id,
             username=user.username,
         )
+
+    # 处理中互斥锁：覆盖 CAS/Telethon 状态/AI 等慢检测整段窗口（耗时可能远超 60 秒
+    # dedup），防止用户在 dedup 过期后重复点击触发重复 AI 请求。锁在离开上下文时
+    # 立即释放（owner token 校验），TTL 仅作异常兜底。
+    async with _verification_inflight_lock(
+        RedisKeys.join_request_inflight(chat_id, user_id)
+    ) as lock_acquired:
+        if not lock_acquired:
+            logger.debug(f"用户 {user_id} 在群组 {chat_id} 的加入请求仍在处理中，跳过重复请求")
+            return
+
+        # 异常处理保持与重构前一致：前置阶段（CAS/状态/AI）的未预期异常向上冒泡
+        # 至全局错误处理器（记录堆栈 + Sentry 上报），仅 group/challenge/发送阶段
+        # 的异常在 _process_join_request 内部捕获。锁始终由 async with 的 finally 释放。
+        await _process_join_request(event, bot, chat_id, user_id, username)
+
+
+async def _handle_approved_join_request(bot: Bot, chat_id: int, user_id: int) -> None:
+    """处理已通过验证后重新提交的加入请求：直接批准并私聊通知。"""
+    logger.info(f"用户 {user_id} 已通过验证，直接批准加入请求")
+
+    chat_title = "群组"
+    with contextlib.suppress(Exception):
+        chat = await bot.get_chat(chat_id)
+        chat_title = escape_html(chat.title) if chat.title else "群组"
+
+    if await approve_join_request(bot, chat_id, user_id):
+        logger.info(f"已批准用户 {user_id} 的加入请求（已验证用户）")
+        # 不删除 approved_key：用户随后加入群组时由 on_user_join 恢复权限并消费此标记
+        with contextlib.suppress(Exception):
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"✅ <b>加入成功！</b>\n\n您的加入请求已批准，欢迎加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
+                parse_mode="HTML",
+            )
+        return
+
+    # 批准失败（重试耗尽）：保留 approved_key 以便用户重新提交加入请求时自动批准
+    with contextlib.suppress(Exception):
+        await send_verification_success_message(bot, user_id, chat_title, "approve_failed")
+
+
+async def _process_join_request(
+    event: ChatJoinRequest,
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    username: str,
+) -> None:
+    """执行已取得 in-flight 锁的加入请求处理流程。"""
+    redis = get_redis()
+    verification_service = VerificationService()
+
+    # 快速路径：已有进行中的验证则直接返回，避免再次执行 CAS/状态/AI 检测
+    if await verification_service.is_verification_pending(chat_id, user_id):
+        logger.debug(
+            f"用户 {user_id} 在群组 {chat_id} 已有进行中的验证（加入请求模式），忽略重复请求"
+        )
+        return
+
+    # 已验证通过（如此前批准失败）则直接重试批准，跳过昂贵的前置检测
+    if await redis.get(RedisKeys.verification_approved(chat_id, user_id)):
+        await _handle_approved_join_request(bot, chat_id, user_id)
+        return
 
     # ========== CAS 黑名单检查（优先级最高）==========
     if settings.cas_enabled:
@@ -496,50 +599,8 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
     # ==================== 用户信息反垃圾检测结束 ====================
 
     try:
-        # ✅ 检查用户是否已通过验证（例如之前验证成功但批准失败）
-        redis = get_redis()
-        approved_key = RedisKeys.verification_approved(chat_id, user_id)
-        is_approved = await redis.get(approved_key)
-
-        if is_approved:
-            # 用户已通过验证，直接批准加入请求
-            logger.info(f"用户 {user_id} 已通过验证，直接批准加入请求")
-
-            chat_title = "群组"
-            with contextlib.suppress(Exception):
-                chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "群组"
-
-            if await approve_join_request(bot, chat_id, user_id):
-                logger.info(f"已批准用户 {user_id} 的加入请求（已验证用户）")
-
-                # 不删除 approved_key：用户随后加入群组时由 on_user_join 恢复权限并消费此标记
-
-                # 在私聊中通知用户
-                with contextlib.suppress(Exception):
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=f"✅ <b>加入成功！</b>\n\n您的加入请求已批准，欢迎加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
-                        parse_mode="HTML",
-                    )
-
-                return  # 已处理，直接返回
-
-            # 批准失败（重试耗尽）：保留 approved_key 以便用户重新提交加入请求时自动批准
-            with contextlib.suppress(Exception):
-                await send_verification_success_message(bot, user_id, chat_title, "approve_failed")
-            return
-
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
-
-        # ✅ 防止重复验证请求：检查是否已有进行中的验证
-        verification_service = VerificationService()
-        if await verification_service.is_verification_pending(chat_id, user_id):
-            logger.debug(
-                f"用户 {user_id} 在群组 {chat_id} 已有进行中的验证（加入请求模式），忽略重复请求"
-            )
-            return
 
         # 根据验证类型生成挑战
         challenge = await generate_verification_challenge(group, chat_id, user_id, username)
@@ -547,7 +608,6 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
         # 尝试私聊发送验证消息
         try:
             # 标记验证类型为加入请求验证
-            redis = get_redis()
             type_key = RedisKeys.verification_type(chat_id, user_id)
             await redis.setex(type_key, group.verification_timeout + 10, "join_request")
 
@@ -576,7 +636,6 @@ async def on_join_request(event: ChatJoinRequest, bot: Bot) -> None:
             await decline_join_request(bot, chat_id, user_id)
 
             # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
-            verification_service = VerificationService()
             await verification_service.clear_verification(chat_id, user_id)
 
     except Exception as e:
@@ -617,6 +676,72 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             username=user.username,
         )
 
+    # 处理中互斥锁：防止 chat_member 事件重复投递导致并发重入（覆盖 restrict/
+    # CAS/状态/AI 整段窗口）。锁在离开上下文时立即释放。
+    async with _verification_inflight_lock(
+        RedisKeys.join_inflight(chat_id, user_id)
+    ) as lock_acquired:
+        if not lock_acquired:
+            logger.debug(f"用户 {user_id} 在群组 {chat_id} 的入群事件仍在处理中，跳过重复事件")
+            return
+
+        # 异常处理保持与重构前一致：前置阶段（restrict/CAS/状态/AI）的未预期异常
+        # 向上冒泡至全局错误处理器，仅 group/challenge/发送阶段的异常在
+        # _process_user_join 内部捕获。锁始终由 async with 的 finally 释放。
+        await _process_user_join(event, bot, chat_id, user_id, username)
+
+
+async def _handle_approved_user_join(
+    event: ChatMemberUpdated,
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    approved_key: str,
+) -> None:
+    """处理已通过加入请求验证的用户正式入群：恢复权限并欢迎。"""
+    user = event.new_chat_member.user
+    logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
+
+    chat_title = escape_html(event.chat.title) if event.chat.title else "群组"
+
+    # ✅ 恢复用户权限（内部含重试，失败时降级通知）
+    if not await restore_user_permissions(bot, chat_id, user_id):
+        # 恢复失败：保留 approved_key，以便用户重新入群时再次尝试
+        with contextlib.suppress(Exception):
+            await send_verification_success_message(bot, user_id, chat_title, "restore_failed")
+        return
+
+    # 恢复成功：清除验证标记
+    await get_redis().delete(approved_key)
+
+    # 在私聊中通知用户
+    with contextlib.suppress(Exception):
+        await send_verification_success_message(bot, user_id, chat_title, "success")
+
+    # 在群内发送欢迎消息
+    welcome_msg = await bot.send_message(
+        chat_id=chat_id,
+        text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！",
+    )
+
+    # 5秒后删除欢迎消息
+    await asyncio.sleep(5)
+    with contextlib.suppress(Exception):
+        await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
+
+
+async def _process_user_join(
+    event: ChatMemberUpdated,
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    username: str,
+) -> None:
+    """执行已取得 in-flight 锁的正式入群处理流程。"""
+    user = event.new_chat_member.user
+    redis = get_redis()
+    verification_service = VerificationService()
+
     # ✅ 检查是否为管理员邀请（from_user 是邀请者）
     if event.from_user:
         inviter_id = event.from_user.id
@@ -631,19 +756,18 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
             )
 
             # ✅ 清除可能存在的待验证状态（管理员批准加入请求场景）
-            verification_service = VerificationService()
             if await verification_service.is_verification_pending(chat_id, user_id):
                 await verification_service.clear_verification(chat_id, user_id)
                 logger.info(f"用户 {user_id} 由管理员邀请，已清除待验证状态")
 
             # 消费可能残留的 approved_key（管理员邀请/批准与 Bot 验证竞争时），使命已完成
-            await get_redis().delete(RedisKeys.verification_approved(chat_id, user_id))
+            await redis.delete(RedisKeys.verification_approved(chat_id, user_id))
 
             # 直接发送欢迎消息（不需要限制权限）
             welcome_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！\n\n"
-                f"由管理员 {format_user_mention(event.from_user)} 邀请加入。",
+                f"由管理员 {format_trusted_user_mention(event.from_user)} 邀请加入。",
             )
 
             # 5秒后删除欢迎消息
@@ -680,6 +804,20 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     except Exception as e:
         logger.error(f"限制用户权限失败: {e}")
         # 权限限制失败，可能是 Bot 没有管理权限，记录日志但继续流程
+
+    # 快速路径（restrict 之后）：已有进行中的验证则保持受限并返回，避免再次执行
+    # CAS/状态/AI 检测。放在 restrict 之后是为了确保待验证用户保持无发言权限。
+    if await verification_service.is_verification_pending(chat_id, user_id):
+        logger.debug(
+            f"用户 {user_id} 在群组 {chat_id} 已有进行中的验证（直接加入模式），忽略重复请求"
+        )
+        return
+
+    # 已通过加入请求验证则恢复权限，避免再次执行 CAS/状态/AI 检测
+    approved_key = RedisKeys.verification_approved(chat_id, user_id)
+    if await redis.get(approved_key):
+        await _handle_approved_user_join(event, bot, chat_id, user_id, approved_key)
+        return
 
     # ========== CAS 黑名单检查 ==========
     if settings.cas_enabled:
@@ -770,57 +908,9 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot) -> None:
     # ==================== 用户信息反垃圾检测结束 ====================
 
     try:
-        # 检查用户是否已通过加入请求验证
-        redis = get_redis()
-        approved_key = RedisKeys.verification_approved(chat_id, user_id)
-        is_approved = await redis.get(approved_key)
-
-        if is_approved:
-            # 用户已通过验证，恢复权限
-            logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
-
-            chat_title = escape_html(event.chat.title) if event.chat.title else "群组"
-
-            # ✅ 恢复用户权限（内部含重试，失败时降级通知）
-            if not await restore_user_permissions(bot, chat_id, user_id):
-                # 恢复失败：保留 approved_key，以便用户重新入群时再次尝试
-                with contextlib.suppress(Exception):
-                    await send_verification_success_message(
-                        bot, user_id, chat_title, "restore_failed"
-                    )
-                return
-
-            # 恢复成功：清除验证标记
-            await redis.delete(approved_key)
-
-            # 在私聊中通知用户
-            with contextlib.suppress(Exception):
-                await send_verification_success_message(bot, user_id, chat_title, "success")
-
-            # 在群内发送欢迎消息
-            welcome_msg = await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！",
-            )
-
-            # 5秒后删除欢迎消息
-            await asyncio.sleep(5)
-            with contextlib.suppress(Exception):
-                await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
-
-            return
-
         # 用户未通过加入请求验证（未启用 Approve New Members），执行正常验证流程
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
-
-        # ✅ 防止重复验证请求：检查是否已有进行中的验证
-        verification_service = VerificationService()
-        if await verification_service.is_verification_pending(chat_id, user_id):
-            logger.debug(
-                f"用户 {user_id} 在群组 {chat_id} 已有进行中的验证（直接加入模式），忽略重复请求"
-            )
-            return
 
         # 根据验证类型生成挑战
         challenge = await generate_verification_challenge(group, chat_id, user_id, username)
