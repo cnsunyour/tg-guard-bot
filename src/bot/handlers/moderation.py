@@ -12,6 +12,7 @@ from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
 from src.core.utils import (
     auto_delete_message,
+    check_admin_permission_strict,
     check_admin_permission_strict_message,
     escape_html,
     get_chat_administrators_mention,
@@ -1795,7 +1796,9 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
         report_id = int(report_id_str)
 
         # 权限验证：只有管理员可以接受
-        if not await check_admin_permission_strict_message(message, bot):
+        # ⚠️ 校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
+        # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
+        if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
             await callback.answer("❌ 只有管理员可以接受举报", show_alert=True)
             return
 
@@ -1853,7 +1856,9 @@ async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
         report_id = int(report_id_str)
 
         # 权限验证：只有管理员可以拒绝
-        if not await check_admin_permission_strict_message(message, bot):
+        # ⚠️ 校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
+        # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
+        if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
             await callback.answer("❌ 只有管理员可以拒绝举报", show_alert=True)
             return
 
