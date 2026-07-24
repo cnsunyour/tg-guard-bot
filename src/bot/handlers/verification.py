@@ -30,6 +30,7 @@ from src.core.retry import retry_async_call
 from src.core.utils import (
     auto_delete_message,
     escape_html,
+    format_trusted_user_mention,
     format_user_mention,
     masked_mention_html,
 )
@@ -766,7 +767,7 @@ async def _process_user_join(
             welcome_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！\n\n"
-                f"由管理员 {format_user_mention(event.from_user)} 邀请加入。",
+                f"由管理员 {format_trusted_user_mention(event.from_user)} 邀请加入。",
             )
 
             # 5秒后删除欢迎消息

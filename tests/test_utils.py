@@ -114,6 +114,40 @@ def test_format_user_mention():
 
 
 @pytest.mark.unit
+def test_format_trusted_user_mention():
+    """测试可信用户（管理员/操作者）提及格式化：完整显示名称但仍转义 HTML
+
+    与 :func:`format_user_mention` 对称，区别在于显示名与 @username
+    **不脱敏**（管理员/操作者名称需完整可见），但 HTML 特殊字符仍转义，
+    防止注入与格式破坏。
+    """
+    from src.core.utils import format_trusted_user_mention
+
+    class MockUser:
+        def __init__(self, user_id, first_name, full_name=None, username=None):
+            self.id = user_id
+            self.first_name = first_name
+            self.full_name = full_name
+            self.username = username
+
+    # 有 username 的可信用户：显示名与 @username 完整显示（不脱敏）
+    admin1 = MockUser(123456, "John", "John Doe", "johndoe")
+    result1 = format_trusted_user_mention(admin1)
+    assert result1 == "John Doe (@johndoe)"
+
+    # 无 username 的可信用户：完整名 + 数字 ID（ID 无需脱敏）
+    admin2 = MockUser(789012, "Jane", "Jane Smith", None)
+    result2 = format_trusted_user_mention(admin2)
+    assert result2 == "Jane Smith (ID:789012)"
+
+    # HTML 特殊字符的名字：完整显示但必须转义，禁止原样标签注入
+    admin3 = MockUser(111222, "Test", "<script>alert('xss')</script>", "test")
+    result3 = format_trusted_user_mention(admin3)
+    assert "<script>" not in result3
+    assert "&lt;script&gt;" in result3  # HTML 已转义，名称内容保留
+
+
+@pytest.mark.unit
 def test_parse_time_to_seconds():
     """测试时间解析函数"""
     from src.core.utils import parse_time_to_seconds
