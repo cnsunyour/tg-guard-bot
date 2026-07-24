@@ -290,6 +290,29 @@ def format_user_mention(user) -> str:
     return f"{name} ({identifier})"
 
 
+def format_trusted_user_mention(user) -> str:
+    """格式化可信用户（管理员/操作者）的纯文本提及，完整显示名称
+
+    与 :func:`format_user_mention` 相反，本函数**不脱敏**显示名与
+    @username，适用于已通过权限守卫确认可信的管理员/操作者/邀请者。
+    显示名与 @username 仍统一经过 :func:`escape_html`，防止 HTML 注入
+    及名称内的格式破坏字符。
+
+    保留独立 API 而不向 :func:`format_user_mention` 添加 ``mask`` 开关，
+    使所有「不脱敏」调用路径可被检索审计，避免误传开关导致名称泄露。
+
+    Args:
+        user: 已确认可信的 Telegram User 对象（管理员/操作者/邀请者）
+
+    Returns:
+        完整用户提及字符串，形如 ``显示名 (@username)``
+        或 ``显示名 (ID:用户ID)``
+    """
+    name = escape_html(user.full_name or user.first_name or "Unknown")
+    identifier = f"@{escape_html(user.username)}" if user.username else f"ID:{user.id}"
+    return f"{name} ({identifier})"
+
+
 def masked_mention_html(user) -> str:
     """生成显示名脱敏的可点击 HTML 用户提及
 
