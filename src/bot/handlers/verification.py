@@ -25,6 +25,7 @@ from loguru import logger
 
 from src.core.cache import PermissionCache
 from src.core.config import settings
+from src.core.i18n import get_resolver, get_translator
 from src.core.redis import RedisKeys, get_redis
 from src.core.retry import retry_async_call
 from src.core.utils import (
@@ -195,6 +196,8 @@ async def send_verification_success_message(
     user_id: int,
     chat_title: str,
     message_type: str = "success",
+    *,
+    group_chat_id: int | None = None,
 ) -> None:
     """发送验证结果消息（纯文本）。
 
@@ -211,8 +214,19 @@ async def send_verification_success_message(
             - "success_join_request": 验证成功，加入请求已批准
             - "restore_failed": 验证已通过，但权限恢复失败（用户仍在群内）
             - "approve_failed": 验证已通过，但加入请求批准失败（用户尚未入群）
+        group_chat_id: 来源群 ID。传入时按「用户偏好 → 来源群 locale」渲染
+            （math 验证）；不传则保留中文文案（其他验证类型 POC 阶段）。
     """
-    if message_type == "success":
+    if group_chat_id is not None:
+        locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=group_chat_id
+        )
+        localizer = get_translator().for_locale(locale)
+        text = localizer.t(
+            f"verification.math.success.private.{message_type}.message",
+            chat_title=chat_title,
+        )
+    elif message_type == "success":
         text = f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！"
     elif message_type == "success_join_request":
         text = f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！"
@@ -393,7 +407,13 @@ async def generate_verification_challenge(group, chat_id: int, user_id: int, use
 
 
 async def send_verification_message(
-    bot: Bot, chat_id: int, user_id: int, challenge, message_title: str, message_prefix: str
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    challenge,
+    flow: str,
+    username: str,
+    timeout: int,
 ):
     """发送验证消息到用户私聊
 
@@ -402,8 +422,9 @@ async def send_verification_message(
         chat_id: 群组 ID
         user_id: 用户 ID
         challenge: 验证挑战对象
-        message_title: 消息标题（如 "加入请求验证" 或 "群组验证通知"）
-        message_prefix: 消息前缀（如 "您请求加入群组" 或 "您加入了群组"）
+        flow: 验证流程，"join"（已入群）或 "join_request"（加入请求）
+        username: 用户显示名（未转义）
+        timeout: 验证超时时间（秒）
 
     Returns:
         发送的消息对象
@@ -412,8 +433,32 @@ async def send_verification_message(
     chat = await bot.get_chat(chat_id)
     chat_title = escape_html(chat.title) if chat.title else "群组"
 
-    # 构造消息文本（使用 HTML 格式以防注入）
-    message_text = f"📢 <b>{message_title}</b>\n\n{message_prefix}：<b>{chat_title}</b>\n\n{challenge.question}"
+    if challenge.challenge_type == "math":
+        # 数学验证：展示文案用 catalog 按「用户偏好 → 来源群 locale」渲染
+        if not challenge.expression:
+            raise ValueError("数学验证挑战缺少 expression")
+        locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
+        localizer = get_translator().for_locale(locale)
+        message_text = localizer.t(
+            f"verification.math.challenge.{flow}.message",
+            chat_title=chat_title,
+            username=escape_html(username),
+            expression=escape_html(challenge.expression),
+            timeout=timeout,
+        )
+    else:
+        # 非 math 验证暂保留原硬编码文案（POC 只迁移 math）
+        if flow == "join_request":
+            message_title = "加入请求验证"
+            message_prefix = "您请求加入群组"
+        else:
+            message_title = "群组验证通知"
+            message_prefix = "您加入了群组"
+        message_text = (
+            f"📢 <b>{message_title}</b>\n\n"
+            f"{message_prefix}：<b>{chat_title}</b>\n\n"
+            f"{challenge.question}"
+        )
 
     # 根据是否有图片选择发送方式
     if challenge.photo:
@@ -425,14 +470,13 @@ async def send_verification_message(
             reply_markup=challenge.keyboard,
             parse_mode="HTML",
         )
-    else:
-        # 其他验证：发送文本消息
-        return await bot.send_message(
-            chat_id=user_id,
-            text=message_text,
-            reply_markup=challenge.keyboard,
-            parse_mode="HTML",
-        )
+    # 其他验证：发送文本消息
+    return await bot.send_message(
+        chat_id=user_id,
+        text=message_text,
+        reply_markup=challenge.keyboard,
+        parse_mode="HTML",
+    )
 
 
 @router.chat_join_request()
@@ -613,7 +657,13 @@ async def _process_join_request(
 
             # 发送验证消息
             sent_message = await send_verification_message(
-                bot, chat_id, user_id, challenge, "加入请求验证", "您请求加入群组"
+                bot,
+                chat_id,
+                user_id,
+                challenge,
+                flow="join_request",
+                username=username,
+                timeout=group.verification_timeout,
             )
 
             logger.info(f"已向用户 {user_id} 私聊发送加入请求验证消息")
@@ -919,7 +969,13 @@ async def _process_user_join(
         try:
             # 发送验证消息
             sent_message = await send_verification_message(
-                bot, chat_id, user_id, challenge, "群组验证通知", "您加入了群组"
+                bot,
+                chat_id,
+                user_id,
+                challenge,
+                flow="join",
+                username=username,
+                timeout=group.verification_timeout,
             )
 
             logger.info(f"已向用户 {user_id} 私聊发送验证消息")
@@ -972,40 +1028,58 @@ async def on_user_leave(event: ChatMemberUpdated) -> None:
         )
 
 
+async def _answer_default_toast(callback: CallbackQuery, key: str) -> None:
+    """callback_data 无效（无法定位来源群）时用默认语言弹窗"""
+    localizer = get_translator().for_locale(get_resolver().default_locale)
+    await callback.answer(localizer.t(key), show_alert=True)
+
+
 @router.callback_query(F.data.startswith("verify_math:"))
 async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
     """处理数学验证 - 私聊模式"""
-    try:
-        # 类型检查
-        if not callback.data or not callback.message:
-            await callback.answer("❌ 验证数据错误", show_alert=True)
-            return
+    if not callback.data or not callback.message:
+        await _answer_default_toast(callback, "verification.math.callback.invalid_data.toast")
+        return
 
-        _, chat_id_str, user_id_str, answer = callback.data.split(":")
+    # 解析 callback_data（chat_id 仅作来源群候选，后续 is_verification_pending 隐式校验）
+    try:
+        parts = callback.data.split(":")
+        if len(parts) != 4 or parts[0] != "verify_math":
+            raise ValueError("数学验证 callback 字段错误")
+        _, chat_id_str, user_id_str, answer = parts
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
+    except (TypeError, ValueError):
+        await _answer_default_toast(callback, "verification.math.callback.invalid_data.toast")
+        return
 
+    # 私聊 callback 展示语言按「用户偏好 → 来源群 locale」解析（选项 B）
+    private_locale = await get_resolver().for_private_from_group(
+        user_id=user_id, group_chat_id=chat_id
+    )
+    localizer = get_translator().for_locale(private_locale)
+
+    try:
         # 检查是否是本人点击
         if callback.from_user.id != user_id:
-            await callback.answer("❌ 这不是你的验证消息", show_alert=True)
+            await callback.answer(
+                localizer.t("verification.math.callback.not_yours.toast"), show_alert=True
+            )
             return
 
         # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
         if not await verification_service.is_verification_pending(chat_id, user_id):
-            # 验证状态不存在，可能是：
-            # 1. 用户已验证通过（点击了其他验证消息）
-            # 2. 用户已超时被踢
-            # 3. 用户点击了过期的验证消息
-            await callback.answer("✅ 此验证消息已失效", show_alert=False)
-            # 尝试删除过期的验证消息
+            # 验证状态不存在：已通过 / 已超时被踢 / 点击过期消息
+            await callback.answer(
+                localizer.t("verification.math.callback.expired.toast"), show_alert=False
+            )
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
             return
 
         # 验证答案
         if await verification_service.verify_answer(chat_id, user_id, answer):
-            # 检查验证类型
             redis = get_redis()
             type_key = RedisKeys.verification_type(chat_id, user_id)
             verification_type = await redis.get(type_key)
@@ -1016,7 +1090,9 @@ async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
 
             await handle_verification_success(bot, callback, chat_id, user_id, is_join_request)
         else:
-            await callback.answer("❌ 答案错误", show_alert=True)
+            await callback.answer(
+                localizer.t("verification.math.callback.wrong_answer.toast"), show_alert=True
+            )
             # 根据验证类型决定踢出或拒绝
             redis = get_redis()
             type_key = RedisKeys.verification_type(chat_id, user_id)
@@ -1049,7 +1125,9 @@ async def on_math_verify(callback: CallbackQuery, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"处理数学验证失败: {e}")
-        await callback.answer("❌ 验证失败，请联系管理员", show_alert=True)
+        await callback.answer(
+            localizer.t("verification.math.callback.failed.toast"), show_alert=True
+        )
 
 
 @router.callback_query(F.data.startswith("verify_slider:"))
@@ -1997,7 +2075,21 @@ async def handle_verification_success(
 
     Args:
         is_join_request: 是否为加入请求验证（True: 批准请求, False: 恢复权限）
+
+    math 验证走 i18n（私聊按「用户偏好 → 来源群 locale」、群欢迎按群 locale）；
+    其他验证类型暂保留中文文案（POC 只迁移 math，通过 callback_data 前缀区分）。
     """
+    is_math = bool(callback.data and callback.data.startswith("verify_math:"))
+    private_localizer = None
+    if is_math:
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        private_localizer = get_translator().for_locale(private_locale)
+
+    def _toast(key: str, fallback: str) -> str:
+        return private_localizer.t(key) if private_localizer else fallback
+
     try:
         # 获取群组信息
         chat = await bot.get_chat(chat_id)
@@ -2024,10 +2116,17 @@ async def handle_verification_success(
             if not await approve_join_request(bot, chat_id, user_id):
                 with contextlib.suppress(Exception):
                     await send_verification_success_message(
-                        bot, user_id, chat_title, "approve_failed"
+                        bot,
+                        user_id,
+                        chat_title,
+                        "approve_failed",
+                        group_chat_id=chat_id if is_math else None,
                     )
                 await callback.answer(
-                    "⚠️ 验证已通过，但暂时无法批准加入请求，请稍后重试或联系管理员",
+                    _toast(
+                        "verification.math.callback.approve_failed.toast",
+                        "⚠️ 验证已通过，但暂时无法批准加入请求，请稍后重试或联系管理员",
+                    ),
                     show_alert=True,
                 )
                 return
@@ -2035,10 +2134,16 @@ async def handle_verification_success(
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
                 await send_verification_success_message(
-                    bot, user_id, chat_title, "success_join_request"
+                    bot,
+                    user_id,
+                    chat_title,
+                    "success_join_request",
+                    group_chat_id=chat_id if is_math else None,
                 )
 
-            await callback.answer("✅ 验证成功！")
+            await callback.answer(
+                _toast("verification.math.callback.success.toast", "✅ 验证成功！")
+            )
             logger.info(f"用户 {user_id} 加入请求验证成功，已批准加入群组 {chat_id}")
 
         else:
@@ -2052,10 +2157,17 @@ async def handle_verification_success(
             if not await restore_user_permissions(bot, chat_id, user_id):
                 with contextlib.suppress(Exception):
                     await send_verification_success_message(
-                        bot, user_id, chat_title, "restore_failed"
+                        bot,
+                        user_id,
+                        chat_title,
+                        "restore_failed",
+                        group_chat_id=chat_id if is_math else None,
                     )
                 await callback.answer(
-                    "⚠️ 验证已通过，但暂时无法恢复发言权限，请稍后重试或联系管理员",
+                    _toast(
+                        "verification.math.callback.restore_failed.toast",
+                        "⚠️ 验证已通过，但暂时无法恢复发言权限，请稍后重试或联系管理员",
+                    ),
                     show_alert=True,
                 )
                 return
@@ -2065,26 +2177,48 @@ async def handle_verification_success(
 
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
-                await send_verification_success_message(bot, user_id, chat_title, "success")
+                await send_verification_success_message(
+                    bot,
+                    user_id,
+                    chat_title,
+                    "success",
+                    group_chat_id=chat_id if is_math else None,
+                )
 
-            # 在群内发送欢迎消息（仅此一条群内消息）
-            welcome_msg = await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ 欢迎 {format_user_mention(callback.from_user)} 加入群组！",
+            # ✅ 先结束 Telegram callback spinner，再发群欢迎并等待删除（避免 spinner 拖慢 5 秒）
+            await callback.answer(
+                _toast("verification.math.callback.success.toast", "✅ 验证成功！")
             )
+
+            # 在群内发送欢迎消息（仅此一条群内消息）：math 按群 locale，其他保持中文
+            if is_math:
+                group_locale = await get_resolver().for_group(chat_id)
+                welcome_text = (
+                    get_translator()
+                    .for_locale(group_locale)
+                    .t(
+                        "verification.join.group.welcome",
+                        user=format_user_mention(callback.from_user),
+                    )
+                )
+            else:
+                welcome_text = f"✅ 欢迎 {format_user_mention(callback.from_user)} 加入群组！"
+            welcome_msg = await bot.send_message(chat_id=chat_id, text=welcome_text)
 
             # 5秒后删除欢迎消息
             await asyncio.sleep(5)
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
 
-            await callback.answer("✅ 验证成功！")
             logger.info(f"用户 {user_id} 私聊验证成功，已加入群组 {chat_id}")
 
     except Exception as e:
         logger.error(f"处理验证成功失败: {e}")
         with contextlib.suppress(Exception):
-            await callback.answer("❌ 处理失败，请联系管理员", show_alert=True)
+            await callback.answer(
+                _toast("verification.math.callback.failed.toast", "❌ 处理失败，请联系管理员"),
+                show_alert=True,
+            )
 
 
 async def handle_verification_timeout(
@@ -2122,9 +2256,21 @@ async def handle_verification_timeout(
                 chat_title = (
                     escape_html(chat.title) if chat.title else "群组"
                 )  # ✅ 安全修复：转义 HTML
+                timeout_locale = await get_resolver().for_private_from_group(
+                    user_id=user_id, group_chat_id=chat_id
+                )
+                timeout_text = (
+                    get_translator()
+                    .for_locale(timeout_locale)
+                    .t(
+                        "verification.math.timeout.private.join.message",
+                        chat_title=chat_title,
+                        timeout=timeout,
+                    )
+                )
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时（超过 {timeout} 秒）。请重新加入并在规定时间内完成验证。",
+                    text=timeout_text,
                     parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
                 )
 
@@ -2295,9 +2441,21 @@ async def handle_join_request_timeout(
                 chat_title = (
                     escape_html(chat.title) if chat.title else "群组"
                 )  # ✅ 安全修复：转义 HTML
+                timeout_locale = await get_resolver().for_private_from_group(
+                    user_id=user_id, group_chat_id=chat_id
+                )
+                timeout_text = (
+                    get_translator()
+                    .for_locale(timeout_locale)
+                    .t(
+                        "verification.math.timeout.private.join_request.message",
+                        chat_title=chat_title,
+                        timeout=timeout,
+                    )
+                )
                 await bot.send_message(
                     chat_id=user_id,
-                    text=f"❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时（超过 {timeout} 秒）。请重新发送加入请求并在规定时间内完成验证。",
+                    text=timeout_text,
                     parse_mode="HTML",
                 )
 

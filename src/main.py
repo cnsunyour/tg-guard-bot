@@ -89,7 +89,20 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     bot.session.middleware(RetryAfterMiddleware(max_retries=3))
 
+    # ✅ 加载 i18n catalog 并注册语言上下文中间件
+    # catalog 在 Dispatcher 接收 update 前一次性加载到内存；
+    # 源语言损坏时 init_i18n 会直接抛异常并阻止启动。
+    from src.bot.middlewares import LocaleMiddleware
+    from src.core.i18n import get_resolver, init_i18n
+
+    translator = init_i18n()
+    locale_resolver = get_resolver()
+
     dp = Dispatcher()
+
+    # update outer middleware 包围所有具体事件 middleware，
+    # 因此 whitelist、throttle、CAS 等提前返回路径也能取得 locale。
+    dp.update.outer_middleware(LocaleMiddleware(locale_resolver, translator))
 
     # 注册路由器
     from src.bot.handlers import (
@@ -98,6 +111,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         cleanup,
         curfew,
         events,
+        lang,
         moderation,
         start,
         verification,
@@ -110,6 +124,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(curfew.router)  # 宵禁模式
     dp.include_router(verification.router)  # 入群验证
+    dp.include_router(lang.router)  # 语言设置
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
 
     # ✅ 自动提取所有已注册的命令并设置到反垃圾白名单

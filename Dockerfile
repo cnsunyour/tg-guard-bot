@@ -40,6 +40,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 COPY migrations/ ./migrations/
+COPY locales/ ./locales/
 
 # 创建日志、数据和缓存目录
 RUN mkdir -p /app/logs /app/data/models /app/data/.cache/fastembed /app/data/.cache/huggingface

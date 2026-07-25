@@ -71,6 +71,25 @@ class RedisKeys:
         return f"group_config:{chat_id}"
 
     @staticmethod
+    def locale_group(chat_id: int) -> str:
+        """群组语言缓存键名
+
+        存储 BCP 47 语言代码（如 zh-CN/zh-TW/zh-HK/en）。
+        TTL: settings.locale_cache_ttl_seconds。
+        """
+        return f"locale:group:{chat_id}"
+
+    @staticmethod
+    def locale_user(user_id: int) -> str:
+        """用户语言缓存键名
+
+        存储用户私聊语言解析结果。即使数据库无显式设置，也会缓存默认
+        语言（或无记录哨兵）以避免持续穿透数据库。
+        TTL: settings.locale_cache_ttl_seconds。
+        """
+        return f"locale:user:{user_id}"
+
+    @staticmethod
     def user_warnings(chat_id: int, user_id: int) -> str:
         """用户警告计数键名"""
         return f"warnings:{chat_id}:{user_id}"

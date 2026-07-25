@@ -27,6 +27,8 @@ class VerificationChallenge:
     answer: str
     keyboard: InlineKeyboardMarkup | ReplyKeyboardMarkup
     photo: BufferedInputFile | None = None  # 用于 captcha 验证
+    # 数学验证只返回结构化表达式，展示文案由 handler 按 locale 生成
+    expression: str | None = None
 
 
 class VerificationService:
@@ -34,14 +36,14 @@ class VerificationService:
 
     @staticmethod
     async def generate_math_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
+        chat_id: int, user_id: int, _username: str, timeout: int = 60
     ) -> VerificationChallenge:
         """生成数学验证码挑战 - 支持四则运算，最多两步
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
+            _username: 用户名（保留以对齐其他 challenge 签名；展示文案由 handler 按 locale 拼）
             timeout: 验证超时时间(秒)
         """
         # 50% 概率生成 1 步或 2 步运算
@@ -101,12 +103,6 @@ class VerificationService:
             ]
         )
 
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内回答问题：\n\n"
-            f"❓ {expression} = ?"
-        )
-
         # 存储验证状态和答案到 Redis
         redis = get_redis()
         key = RedisKeys.verification(chat_id, user_id)
@@ -116,11 +112,14 @@ class VerificationService:
             f"math:{correct_answer}",
         )
 
+        # question 留空：展示文案由 handler 用 catalog 按 locale 拼装，
+        # 避免翻译文字参与业务（expression 是结构化数据）
         return VerificationChallenge(
             challenge_type="math",
-            question=question,
+            question="",
             answer=str(correct_answer),
             keyboard=keyboard,
+            expression=expression,
         )
 
     @staticmethod

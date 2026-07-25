@@ -197,3 +197,23 @@ class GroupRepository:
                 await session.commit()
                 return True
             return False
+
+    @staticmethod
+    async def update_locale(chat_id: int, locale: str) -> bool:
+        """更新群组消息语言
+
+        Args:
+            chat_id: Telegram 群组 ID
+            locale: 已通过应用层校验的语言代码（BCP 47）
+
+        Returns:
+            是否找到并更新了群组
+        """
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+            if group is None:
+                return False
+            group.locale = locale
+            await session.commit()
+            return True

@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0, description="Redis 数据库")
     redis_password: str | None = Field(default=None, description="Redis 密码")
 
+    # i18n 多语言配置
+    default_locale: str = Field(default="zh-CN", description="Bot 默认语言（BCP 47）")
+    supported_locales: list[str] = Field(
+        default_factory=lambda: ["zh-CN", "zh-TW", "zh-HK", "en"],
+        description="Bot 支持的语言列表",
+    )
+    locale_cache_ttl_seconds: int = Field(
+        default=3600, ge=1, description="群组和用户语言偏好缓存时间（秒）"
+    )
+
     # 应用配置
     log_level: str = Field(default="INFO", description="日志级别")
     debug: bool = Field(default=False, description="调试模式")
