@@ -1543,8 +1543,12 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
 
         challenge = await verification_service.generate_captcha_challenge(chat_id, user_id, timeout)
 
-        # 刷新后仅更新题面与按钮（保持原行为：不重复信封标题）
-        rendered = render_captcha_for_refresh(challenge, chat_id, user_id, username, timeout)
+        # 刷新后仅更新题面与按钮（保持原行为：不重复信封标题），按 locale 渲染
+        locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
+        localizer = get_translator().for_locale(locale)
+        rendered = render_captcha_for_refresh(
+            challenge, localizer, chat_id, user_id, username, timeout
+        )
 
         # 检查 photo 是否存在
         if rendered.photo is None:

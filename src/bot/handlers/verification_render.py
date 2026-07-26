@@ -1,13 +1,17 @@
 """验证挑战展示层
 
 将 ``VerificationService`` 返回的结构化挑战按 locale 渲染为 Telegram 可发送的
-``(text, keyboard, photo)``。service 只产业务数据，本模块负责展示：
+``(text, keyboard, photo)``。所有类型文案走 catalog：
 
-- math：文案走 catalog（已 i18n），按 flow 取 ``verification.math.challenge.<flow>.message``
-- 其余类型：3a-1 暂保留中文硬编码（从原 service 搬运，行为不变），3a-2 再迁 catalog
+- math：完整 message（``verification.math.challenge.<flow>.message``，含 expression）
+- 其余：body（``verification.<type>.challenge.body.message``）+ 共享信封
+  （``verification.challenge.envelope.<flow>.message``）
+- 题库：QA 文案 ``verification.qa.bank.<id>.*``，Emoji 描述
+  ``verification.emoji.bank.<id>.description``
+- 按钮：captcha / honeypot / webapp 按钮文案各自 catalog key
 
 所有用户可控文本（username / chat_title / expression）在此统一 ``escape_html``，
-避免双重转义——调用方传入原始文本即可。
+调用方传入原始文本即可。题库文案来自受信任 catalog，原样插入不转义。
 """
 
 from dataclasses import dataclass
@@ -28,7 +32,6 @@ from src.services.verification import (
     CaptchaChallenge,
     EmojiChallenge,
     HoneypotChallenge,
-    HoneypotDecoy,
     MathChallenge,
     PuzzleChallenge,
     QAChallenge,
@@ -40,12 +43,8 @@ from src.services.verification import (
 type VerificationFlow = Literal["join", "join_request"]
 type VerificationKeyboard = InlineKeyboardMarkup | ReplyKeyboardMarkup
 
-# 蜜罐诱饵 code → 展示文本（3a-1 中文硬编码，3a-2 迁 catalog）
-_HONEYPOT_DECOY_TEXT: dict[HoneypotDecoy, str] = {
-    "skip": "✅ 跳过验证",
-    "direct": "✅ 直接通过",
-    "human": "✅ 我是人类",
-}
+# QA 选项 token（a/b/c/d 对应按钮位置 0-3，与题库 correct_index 对齐）
+_QA_OPTION_TOKENS: tuple[str, ...] = ("a", "b", "c", "d")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,32 +85,30 @@ def _inline_choices(
     )
 
 
-def _envelope(flow: VerificationFlow, chat_title: str, body: str) -> str:
-    """非 math 验证的信封：标题 + 来源群 + body（3a-1 保持原中文行为）"""
-    if flow == "join_request":
-        title = "加入请求验证"
-        prefix = "您请求加入群组"
-    elif flow == "join":
-        title = "群组验证通知"
-        prefix = "您加入了群组"
-    else:
-        raise ValueError(f"不支持的验证流程: {flow}")
-    return f"📢 <b>{title}</b>\n\n{prefix}：<b>{chat_title}</b>\n\n{body}"
+def _envelope(localizer: BoundLocalizer, flow: VerificationFlow, chat_title: str, body: str) -> str:
+    """非 math 验证的共享信封：标题 + 来源群 + body（body 已是可信 HTML）"""
+    return localizer.t(
+        f"verification.challenge.envelope.{flow}.message",
+        chat_title=chat_title,
+        body=body,
+    )
 
 
-def _captcha_keyboard(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
-    """captcha 两个操作按钮"""
+def _captcha_keyboard(
+    localizer: BoundLocalizer, chat_id: int, user_id: int
+) -> InlineKeyboardMarkup:
+    """captcha 两个操作按钮（文案走 catalog）"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✏️ 输入验证码",
+                    text=localizer.t("verification.captcha.challenge.input.button"),
                     callback_data=f"verify_captcha_input:{chat_id}:{user_id}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🔄 换一张",
+                    text=localizer.t("verification.captcha.challenge.refresh.button"),
                     callback_data=f"verify_captcha_refresh:{chat_id}:{user_id}",
                 )
             ],
@@ -119,16 +116,9 @@ def _captcha_keyboard(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def _captcha_body(username: str, timeout: int) -> str:
-    """captcha body 文案（不含信封，刷新时单独使用）"""
-    return (
-        f"👋 欢迎 {escape_html(username)}！\n\n"
-        f"请在 {timeout} 秒内输入图片中的验证码（不区分大小写）："
-    )
-
-
 def render_captcha_for_refresh(
     challenge: CaptchaChallenge,
+    localizer: BoundLocalizer,
     chat_id: int,
     user_id: int,
     username: str,
@@ -138,9 +128,14 @@ def render_captcha_for_refresh(
 
     与初次发送不同，刷新后不重复信封标题，仅更新题面与按钮。
     """
+    body = localizer.t(
+        "verification.captcha.challenge.body.message",
+        username=escape_html(username),
+        timeout=timeout,
+    )
     return RenderedChallenge(
-        text=_captcha_body(username, timeout),
-        keyboard=_captcha_keyboard(chat_id, user_id),
+        text=body,
+        keyboard=_captcha_keyboard(localizer, chat_id, user_id),
         photo=challenge.photo,
     )
 
@@ -158,8 +153,8 @@ def render_verification_challenge(
 ) -> RenderedChallenge:
     """按 locale 渲染验证挑战为可发送消息
 
-    math 走 catalog（已 i18n）；其余类型 3a-1 暂保留中文硬编码，3a-2 迁 catalog。
-    username / chat_title / expression 在此统一 escape_html，调用方传原始文本。
+    math 用完整 catalog message；其余类型 body + 共享信封。username / chat_title
+    / expression 在此统一 escape_html，调用方传原始文本。
     """
     safe_username = escape_html(username)
     safe_chat_title = escape_html(chat_title)
@@ -183,50 +178,69 @@ def render_verification_challenge(
     if isinstance(challenge, SliderChallenge):
         if len(challenge.cells) != 4:
             raise ValueError("滑块验证必须包含 4 个位置")
-        body = (
-            f"👋 欢迎 {safe_username}！\n\n"
-            f"请在 {timeout} 秒内点击绿色方块：\n\n{''.join(challenge.cells)}"
+        body = localizer.t(
+            "verification.slider.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+            cells="".join(challenge.cells),
         )
         keyboard = _inline_choices(
             "verify_slider", chat_id, user_id, challenge.cells, ("0", "1", "2", "3"), row_size=4
         )
-        return RenderedChallenge(text=_envelope(flow, safe_chat_title, body), keyboard=keyboard)
+        return RenderedChallenge(
+            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        )
 
     if isinstance(challenge, QAChallenge):
-        if len(challenge.options) != 4:
-            raise ValueError("问答验证必须包含 4 个选项")
-        body = (
-            f"👋 欢迎 {safe_username}！\n\n"
-            f"请在 {timeout} 秒内回答问题：\n\n❓ {challenge.question}"
+        base = f"verification.qa.bank.{challenge.question_id}"
+        question = localizer.t(f"{base}.question")
+        options = tuple(localizer.t(f"{base}.option_{token}") for token in _QA_OPTION_TOKENS)
+        body = localizer.t(
+            "verification.qa.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+            question=question,
         )
         keyboard = _inline_choices(
-            "verify_qa", chat_id, user_id, challenge.options, ("0", "1", "2", "3"), row_size=2
+            "verify_qa", chat_id, user_id, options, ("0", "1", "2", "3"), row_size=2
         )
-        return RenderedChallenge(text=_envelope(flow, safe_chat_title, body), keyboard=keyboard)
+        return RenderedChallenge(
+            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        )
 
     if isinstance(challenge, EmojiChallenge):
         if len(challenge.emojis) != 4:
             raise ValueError("Emoji 验证必须包含 4 个选项")
-        body = (
-            f"👋 欢迎 {safe_username}！\n\n"
-            f"请在 {timeout} 秒内选择对应的表情：\n\n❓ {challenge.description}"
+        description = localizer.t(f"verification.emoji.bank.{challenge.description_id}.description")
+        body = localizer.t(
+            "verification.emoji.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+            description=description,
         )
         keyboard = _inline_choices(
             "verify_emoji", chat_id, user_id, challenge.emojis, ("0", "1", "2", "3"), row_size=2
         )
-        return RenderedChallenge(text=_envelope(flow, safe_chat_title, body), keyboard=keyboard)
+        return RenderedChallenge(
+            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        )
 
     if isinstance(challenge, CaptchaChallenge):
+        body = localizer.t(
+            "verification.captcha.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+        )
         return RenderedChallenge(
-            text=_envelope(flow, safe_chat_title, _captcha_body(username, timeout)),
-            keyboard=_captcha_keyboard(chat_id, user_id),
+            text=_envelope(localizer, flow, safe_chat_title, body),
+            keyboard=_captcha_keyboard(localizer, chat_id, user_id),
             photo=challenge.photo,
         )
 
     if isinstance(challenge, HoneypotChallenge):
         if len(challenge.choices) != 3:
             raise ValueError("蜜罐验证必须包含 3 个真实选项")
-        decoy_text = _HONEYPOT_DECOY_TEXT[challenge.decoy]
+        decoy_text = localizer.t(f"verification.honeypot.challenge.decoy.{challenge.decoy}.button")
         answer_buttons = [
             InlineKeyboardButton(
                 text=str(choice),
@@ -245,12 +259,15 @@ def render_verification_challenge(
                 answer_buttons,
             ]
         )
-        body = (
-            f"👋 欢迎 {safe_username}！\n\n"
-            f"请在 {timeout} 秒内回答问题：\n\n"
-            f"❓ {escape_html(challenge.expression)} = ?"
+        body = localizer.t(
+            "verification.honeypot.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+            expression=escape_html(challenge.expression),
         )
-        return RenderedChallenge(text=_envelope(flow, safe_chat_title, body), keyboard=keyboard)
+        return RenderedChallenge(
+            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        )
 
     if isinstance(challenge, PuzzleChallenge):
         keyboard = _inline_choices(
@@ -261,9 +278,15 @@ def render_verification_challenge(
             ("0", "1", "2", "3"),
             row_size=4,
         )
-        body = f"👋 欢迎 {safe_username}！\n\n请在 {timeout} 秒内选择灰色缺口的位置："
+        body = localizer.t(
+            "verification.puzzle.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+        )
         return RenderedChallenge(
-            text=_envelope(flow, safe_chat_title, body), keyboard=keyboard, photo=challenge.photo
+            text=_envelope(localizer, flow, safe_chat_title, body),
+            keyboard=keyboard,
+            photo=challenge.photo,
         )
 
     if isinstance(challenge, WebAppChallenge):
@@ -271,7 +294,7 @@ def render_verification_challenge(
             keyboard=[
                 [
                     KeyboardButton(
-                        text="🔐 开始验证",
+                        text=localizer.t("verification.webapp.challenge.start.button"),
                         web_app=WebAppInfo(url=challenge.webapp_url),
                     )
                 ]
@@ -279,7 +302,13 @@ def render_verification_challenge(
             resize_keyboard=True,
             one_time_keyboard=True,
         )
-        body = f"👋 欢迎 {safe_username}！\n\n请在 {timeout} 秒内点击下方按钮完成验证："
-        return RenderedChallenge(text=_envelope(flow, safe_chat_title, body), keyboard=keyboard)
+        body = localizer.t(
+            "verification.webapp.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+        )
+        return RenderedChallenge(
+            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        )
 
     assert_never(challenge)

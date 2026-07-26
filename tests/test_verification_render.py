@@ -1,12 +1,16 @@
 """验证挑战渲染层测试。
 
-覆盖 3a-1 重构核心契约：
-- 8 种 challenge 类型渲染（math 走 catalog，其余中文硬编码）
+覆盖 3a-1/3a-2a 核心契约：
+- 8 种 challenge 类型渲染（math 完整 message，其余 body + 共享信封）
+- 题库文案走 catalog（QA option_a/b/c/d 对应按钮 0-3；Emoji description）
 - callback_data 格式与原实现一致
 - escape_html 正确（无双重转义、无遗漏）
 - captcha refresh 独立 body（不含信封）
 - flow（join/join_request）影响信封标题
 """
+
+import json
+from pathlib import Path
 
 import pytest
 from aiogram.types import BufferedInputFile, ReplyKeyboardMarkup
@@ -16,6 +20,8 @@ from src.bot.handlers.verification_render import (
     render_verification_challenge,
 )
 from src.core.i18n.translator import Translator
+from src.data.verification.emoji_mapping import EMOJI_MAPPINGS
+from src.data.verification.qa_questions import QA_QUESTIONS
 from src.services.verification import (
     CaptchaChallenge,
     EmojiChallenge,
@@ -35,20 +41,9 @@ _TIMEOUT = 120
 
 
 def _make_translator() -> Translator:
-    """含 math 挑战文案的小 catalog（zh-Hans）"""
-    return Translator(
-        {
-            "zh-Hans": {
-                "verification.math.challenge.join.message": (
-                    "join | {username} | {chat_title} | {timeout} | {expression}"
-                ),
-                "verification.math.challenge.join_request.message": (
-                    "join_request | {username} | {chat_title} | {timeout} | {expression}"
-                ),
-            }
-        },
-        default_locale="zh-Hans",
-    )
+    """加载真实 zh-Hans catalog，覆盖全部验证文案 key"""
+    catalog = json.loads(Path("locales/zh-Hans.json").read_text(encoding="utf-8"))
+    return Translator({"zh-Hans": catalog}, default_locale="zh-Hans")
 
 
 def _render(challenge, *, flow="join", username="Alice", chat_title="TestGroup"):
@@ -78,7 +73,10 @@ def _photo() -> BufferedInputFile:
 
 def test_math_render_uses_catalog_and_four_buttons() -> None:
     rendered = _render(MathChallenge(expression="3 + 5", choices=(8, 3, 12, 7)))
-    assert rendered.text == "join | Alice | TestGroup | 120 | 3 + 5"
+    assert "3 + 5" in rendered.text
+    assert "Alice" in rendered.text
+    assert "TestGroup" in rendered.text
+    assert "120" in rendered.text
     assert rendered.photo is None
     buttons = _buttons(rendered)
     assert [b.text for b in buttons] == ["8", "3", "12", "7"]
@@ -118,17 +116,18 @@ def test_slider_render_join_request_envelope() -> None:
     assert "您请求加入群组" in rendered.text
 
 
-# ===== qa / emoji =====
+# ===== qa / emoji（题库走 catalog） =====
 
 
-def test_qa_render_shows_question_and_buttons() -> None:
-    rendered = _render(QAChallenge(question="一年几个月？", options=("10", "11", "12", "13")))
-    assert "一年几个月？" in rendered.text
-    assert [b.text for b in _buttons(rendered)] == ["10", "11", "12", "13"]
+def test_qa_render_shows_question_and_options_from_catalog() -> None:
+    rendered = _render(QAChallenge(question_id="months_in_year"))
+    assert "一年有多少个月？" in rendered.text
+    # option_a/b/c/d 对应按钮 0-3
+    assert [b.text for b in _buttons(rendered)] == ["10个月", "11个月", "12个月", "13个月"]
 
 
-def test_emoji_render_shows_description_and_buttons() -> None:
-    rendered = _render(EmojiChallenge(description="开心", emojis=("😊", "😢", "😡", "😴")))
+def test_emoji_render_shows_description_from_catalog() -> None:
+    rendered = _render(EmojiChallenge(description_id="happy", emojis=("😊", "😢", "😡", "😴")))
     assert "开心" in rendered.text
     assert [b.text for b in _buttons(rendered)] == ["😊", "😢", "😡", "😴"]
 
@@ -141,15 +140,18 @@ def test_captcha_render_has_photo_and_two_buttons() -> None:
     rendered = _render(CaptchaChallenge(photo=photo))
     assert rendered.photo is photo
     assert "群组验证通知" in rendered.text  # 初次发送含信封
-    assert [b.callback_data for b in _buttons(rendered)] == [
+    buttons = _buttons(rendered)
+    assert [b.callback_data for b in buttons] == [
         f"verify_captcha_input:{_CHAT_ID}:{_USER_ID}",
         f"verify_captcha_refresh:{_CHAT_ID}:{_USER_ID}",
     ]
+    assert [b.text for b in buttons] == ["✏️ 输入验证码", "🔄 换一张"]
 
 
 def test_captcha_refresh_render_body_only_without_envelope() -> None:
     rendered = render_captcha_for_refresh(
         CaptchaChallenge(photo=_photo()),
+        localizer=_make_translator().for_locale("zh-Hans"),
         chat_id=_CHAT_ID,
         user_id=_USER_ID,
         username="Alice",
@@ -220,3 +222,43 @@ def test_math_invalid_choice_count_raises() -> None:
 def test_slider_invalid_cell_count_raises() -> None:
     with pytest.raises(ValueError):
         _render(SliderChallenge(cells=("🟩", "⬜")))
+
+
+# ===== 题库 / catalog 引用完整性（防题库加 id 但漏 catalog key，反之亦然） =====
+
+
+def _zh_hans_catalog() -> dict:
+    return json.loads(Path("locales/zh-Hans.json").read_text(encoding="utf-8"))
+
+
+def test_qa_bank_keys_complete_in_catalog() -> None:
+    catalog = _zh_hans_catalog()
+    for qa in QA_QUESTIONS:
+        assert f"verification.qa.bank.{qa.id}.question" in catalog, f"QA 缺 question: {qa.id}"
+        for token in ("a", "b", "c", "d"):
+            key = f"verification.qa.bank.{qa.id}.option_{token}"
+            assert key in catalog, f"QA 缺 option_{token}: {qa.id}"
+        assert 0 <= qa.correct_index <= 3, f"QA correct_index 越界: {qa.id}"
+
+
+def test_emoji_bank_keys_complete_in_catalog() -> None:
+    catalog = _zh_hans_catalog()
+    for mapping in EMOJI_MAPPINGS:
+        key = f"verification.emoji.bank.{mapping.id}.description"
+        assert key in catalog, f"Emoji 缺 description: {mapping.id}"
+        # correct + 3 decoys 互异
+        assert len({mapping.correct, *mapping.decoys}) == 4, f"Emoji 选项重复: {mapping.id}"
+
+
+def test_no_orphan_bank_keys_in_catalog() -> None:
+    """catalog 不应残留题库已删除的 bank key"""
+    catalog = _zh_hans_catalog()
+    qa_ids = {qa.id for qa in QA_QUESTIONS}
+    emoji_ids = {m.id for m in EMOJI_MAPPINGS}
+    for key in catalog:
+        if key.startswith("verification.qa.bank."):
+            qid = key.split(".")[3]
+            assert qid in qa_ids, f"孤立 QA bank key: {key}"
+        elif key.startswith("verification.emoji.bank."):
+            eid = key.split(".")[3]
+            assert eid in emoji_ids, f"孤立 Emoji bank key: {key}"

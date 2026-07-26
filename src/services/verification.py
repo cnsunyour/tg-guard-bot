@@ -47,23 +47,16 @@ class SliderChallenge:
 
 @dataclass(frozen=True, slots=True)
 class QAChallenge:
-    """问答验证：题面 + 4 个选项（顺序即按钮顺序）
+    """问答验证：题面 + 选项文案走 catalog（verification.qa.bank.<id>.*）"""
 
-    3a-1 暂保留中文题面/选项（从题库原样搬运）；3a-2 改为 question_id + catalog。
-    """
-
-    question: str
-    options: tuple[str, ...]
+    question_id: str
 
 
 @dataclass(frozen=True, slots=True)
 class EmojiChallenge:
-    """表情验证：描述 + 4 个表情（顺序即按钮顺序）
+    """表情验证：描述文案走 catalog（verification.emoji.bank.<id>.description）"""
 
-    3a-1 暂保留中文 description；3a-2 改为 description_id + catalog。
-    """
-
-    description: str
+    description_id: str
     emojis: tuple[str, ...]
 
 
@@ -303,9 +296,7 @@ class VerificationService:
         """
         # 从题库随机选择一题
         qa = secrets.choice(QA_QUESTIONS)
-        question_text = qa["question"]
-        options = list(qa["options"])
-        correct_index = qa["answer"]
+        correct_index = qa.correct_index
 
         # 存储验证状态和答案到 Redis
         redis = get_redis()
@@ -316,8 +307,8 @@ class VerificationService:
             f"qa:{correct_index}",
         )
 
-        # options 顺序即按钮顺序（2行2列），题面/选项文案由 render 层按 locale 渲染
-        return QAChallenge(question=question_text, options=tuple(options))
+        # 题面/选项文案由 render 层用 question_id 按 locale 从 catalog 取（a/b/c/d 对应按钮 0-3）
+        return QAChallenge(question_id=qa.id)
 
     @staticmethod
     async def generate_emoji_challenge(
@@ -332,9 +323,8 @@ class VerificationService:
         """
         # 从映射表随机选择一个
         mapping = secrets.choice(EMOJI_MAPPINGS)
-        description = mapping["description"]
-        correct_emoji = mapping["correct"]
-        decoys = mapping["decoys"]
+        correct_emoji = mapping.correct
+        decoys = mapping.decoys
 
         # 组合所有选项并打乱
         all_emojis = [correct_emoji, *decoys]
@@ -354,7 +344,8 @@ class VerificationService:
             f"emoji:{correct_index}",
         )
 
-        return EmojiChallenge(description=description, emojis=tuple(all_emojis))
+        # 描述文案由 render 层用 description_id 按 locale 从 catalog 取
+        return EmojiChallenge(description_id=mapping.id, emojis=tuple(all_emojis))
 
     @staticmethod
     async def generate_captcha_challenge(
