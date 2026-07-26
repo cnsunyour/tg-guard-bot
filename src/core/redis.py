@@ -74,7 +74,7 @@ class RedisKeys:
     def locale_group(chat_id: int) -> str:
         """群组语言缓存键名
 
-        存储 BCP 47 语言代码（如 zh-CN/zh-TW/zh-HK/en）。
+        存储 BCP 47 语言代码（如 zh-Hans/zh-Hant/en）。
         TTL: settings.locale_cache_ttl_seconds。
         """
         return f"locale:group:{chat_id}"

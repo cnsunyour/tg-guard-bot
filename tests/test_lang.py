@@ -19,16 +19,16 @@ _TEST_TTL = 123
 def _make_resolver() -> LocaleResolver:
     """不依赖运行环境 locale 配置的 resolver"""
     resolver = LocaleResolver(LocalePreferenceCache(ttl_seconds=_TEST_TTL))
-    resolver.default_locale = "zh-CN"
-    resolver.supported_locales = {"zh-CN", "zh-Hant", "en"}
+    resolver.default_locale = "zh-Hans"
+    resolver.supported_locales = {"zh-Hans", "zh-Hant", "en"}
     return resolver
 
 
 def _make_translator() -> Translator:
-    """含 /lang 所需 key 的小 catalog（zh-CN + en）"""
+    """含 /lang 所需 key 的小 catalog（zh-Hans + en）"""
     base_keys = {
         "lang.menu.current.message": "当前：{locale_name}",
-        "lang.locale.zh_cn.button": "简体中文",
+        "lang.locale.zh_hans.button": "简体中文",
         "lang.locale.zh_hant.button": "繁体中文",
         "lang.locale.en.button": "英语",
         "lang.option.selected.button": "✅ {locale_name}",
@@ -41,7 +41,7 @@ def _make_translator() -> Translator:
     }
     en_keys = {
         "lang.menu.current.message": "Current: {locale_name}",
-        "lang.locale.zh_cn.button": "Simplified Chinese",
+        "lang.locale.zh_hans.button": "Simplified Chinese",
         "lang.locale.zh_hant.button": "Traditional Chinese",
         "lang.locale.en.button": "English",
         "lang.option.selected.button": "✅ {locale_name}",
@@ -52,7 +52,7 @@ def _make_translator() -> Translator:
         "lang.change.save_failed.toast": "❌ Failed",
         "lang.change.message_unavailable.toast": "❌ Unavailable",
     }
-    return Translator({"zh-CN": base_keys, "en": en_keys}, default_locale="zh-CN")
+    return Translator({"zh-Hans": base_keys, "en": en_keys}, default_locale="zh-Hans")
 
 
 # ==================== LocalePreferenceService 写穿语义 ====================
@@ -124,14 +124,14 @@ async def test_read_group_locale_queries_db(mocker) -> None:
 
 async def test_read_group_locale_missing_group_returns_default(mocker) -> None:
     mocker.patch.object(lang_module.GroupRepository, "get", new=AsyncMock(return_value=None))
-    assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-CN"
+    assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-Hans"
 
 
 async def test_read_user_locale_missing_record_returns_default(mocker) -> None:
     mocker.patch.object(
         lang_module.UserSettingsRepository, "get_locale", new=AsyncMock(return_value=None)
     )
-    assert await lang_module._read_user_locale(42, _make_resolver()) == "zh-CN"
+    assert await lang_module._read_user_locale(42, _make_resolver()) == "zh-Hans"
 
 
 # ==================== on_lang_callback 主链与拒绝路径 ====================
@@ -168,8 +168,8 @@ async def test_on_lang_callback_group_writes_through_and_rerenders_new_locale(mo
     resolver = _make_resolver()
     resolver.cache.set_group = AsyncMock(return_value=True)
     translator = _make_translator()
-    # middleware 注入的是旧 locale（zh-CN），handler 不应依赖它
-    old_localizer = translator.for_locale("zh-CN")
+    # middleware 注入的是旧 locale（zh-Hans），handler 不应依赖它
+    old_localizer = translator.for_locale("zh-Hans")
     callback = _make_group_callback(locale="en")
 
     await lang_module.on_lang_callback(callback, MagicMock(), resolver, translator, old_localizer)
@@ -196,7 +196,7 @@ async def test_on_lang_callback_group_chat_mismatch_rejected(mocker) -> None:
 
     resolver = _make_resolver()
     translator = _make_translator()
-    old_localizer = translator.for_locale("zh-CN")
+    old_localizer = translator.for_locale("zh-Hans")
     # callback_data 声称 chat=-200，但消息实际 chat=-100
     callback = _make_group_callback(chat_id=-200, locale="en")
     callback.message.chat.id = -100
@@ -218,7 +218,7 @@ async def test_on_lang_callback_group_non_admin_rejected(mocker) -> None:
 
     resolver = _make_resolver()
     translator = _make_translator()
-    old_localizer = translator.for_locale("zh-CN")
+    old_localizer = translator.for_locale("zh-Hans")
     callback = _make_group_callback(locale="en")
 
     await lang_module.on_lang_callback(callback, MagicMock(), resolver, translator, old_localizer)

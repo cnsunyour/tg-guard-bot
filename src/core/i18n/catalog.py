@@ -7,7 +7,7 @@ catalog 采用扁平点分 key（如 ``verification.join.group.welcome``），
 - 校验 key 命名、占位符（仅允许简单命名占位）、Telegram HTML 子集；
 - 跨语言 key/占位符一致性（parity）校验。
 
-源语言（zh-CN）缺失或损坏将抛出异常以阻止 Bot 启动。
+源语言（zh-Hans）缺失或损坏将抛出异常以阻止 Bot 启动。
 """
 
 import json

@@ -25,9 +25,9 @@ class UserSettings(Base):
     )
     locale: Mapped[str] = mapped_column(
         String(16),
-        default="zh-CN",
+        default="zh-Hans",
         nullable=False,
-        comment="用户私聊语言偏好（BCP 47，如 zh-CN/zh-TW/zh-HK/en）",
+        comment="用户私聊语言偏好（BCP 47，如 zh-Hans/zh-Hant/en）",
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

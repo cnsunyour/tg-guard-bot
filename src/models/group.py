@@ -70,7 +70,7 @@ class Group(Base):
 
     # i18n 多语言配置
     locale: Mapped[str] = mapped_column(
-        String(16), default="zh-CN", comment="群组消息语言（BCP 47，如 zh-CN/zh-TW/zh-HK/en）"
+        String(16), default="zh-Hans", comment="群组消息语言（BCP 47，如 zh-Hans/zh-Hant/en）"
     )
 
     # 白名单配置

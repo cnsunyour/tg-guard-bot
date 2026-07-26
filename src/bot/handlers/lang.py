@@ -34,7 +34,7 @@ _GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 
 
 def _locale_key(locale: str) -> str:
-    """BCP 47 locale → catalog key 后缀（zh-CN → zh_cn）"""
+    """BCP 47 locale → catalog key 后缀（zh-Hans → zh_hans）"""
     return locale.lower().replace("-", "_")
 
 

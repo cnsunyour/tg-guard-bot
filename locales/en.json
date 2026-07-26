@@ -10,7 +10,7 @@
   "lang.change.saved.toast": "✅ Switched to {locale_name}",
   "lang.current.message": "🌐 Current language: <b>{locale_name}</b>",
   "lang.locale.en.button": "English",
-  "lang.locale.zh_cn.button": "Simplified Chinese",
+  "lang.locale.zh_hans.button": "Simplified Chinese",
   "lang.locale.zh_hant.button": "Traditional Chinese",
   "lang.menu.current.message": "🌐 <b>Language settings</b>\n\nCurrent language: <b>{locale_name}</b>\nChoose a language:",
   "lang.option.selected.button": "✅ {locale_name}",

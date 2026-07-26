@@ -34,7 +34,7 @@ class Translator:
     def __init__(
         self,
         catalogs: Mapping[str, Mapping[str, str]],
-        default_locale: str = "zh-CN",
+        default_locale: str = "zh-Hans",
         strict: bool = False,
     ) -> None:
         if default_locale not in catalogs:

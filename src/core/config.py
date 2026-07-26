@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     redis_password: str | None = Field(default=None, description="Redis 密码")
 
     # i18n 多语言配置
-    default_locale: str = Field(default="zh-CN", description="Bot 默认语言（BCP 47）")
+    default_locale: str = Field(default="zh-Hans", description="Bot 默认语言（BCP 47）")
     supported_locales: list[str] = Field(
-        default_factory=lambda: ["zh-CN", "zh-Hant", "en"],
+        default_factory=lambda: ["zh-Hans", "zh-Hant", "en"],
         description="Bot 支持的语言列表",
     )
     locale_cache_ttl_seconds: int = Field(

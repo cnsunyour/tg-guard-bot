@@ -2,7 +2,7 @@
 
 覆盖 codex review 指出的核心风险点：
 - catalog 校验（重复 key / parity / HTML 子集 / 占位符安全）
-- translator 降级链（requested → zh-CN → key）与复数、严格模式、渲染兜底
+- translator 降级链（requested → zh-Hans → key）与复数、严格模式、渲染兜底
 - resolver 显式偏好三态语义（FOUND / ABSENT / QUERY_ERROR）与 NX 防竞态
 - middleware ContextVar 嵌套 reset 与各类事件的目的地解析
 """
@@ -33,7 +33,7 @@ from src.repositories.user_settings_repo import UserSettingsRepository
 pytestmark = pytest.mark.unit
 
 _TEST_TTL_SECONDS = 123
-_SUPPORTED_LOCALES = {"zh-CN", "zh-Hant", "en"}
+_SUPPORTED_LOCALES = {"zh-Hans", "zh-Hant", "en"}
 
 
 class _BrokenFormat:
@@ -50,7 +50,7 @@ def _write_catalog(path: Path, catalog: object) -> None:
 def _make_resolver() -> LocaleResolver:
     """构造不依赖运行环境 locale 配置的 resolver"""
     resolver = LocaleResolver(LocalePreferenceCache(ttl_seconds=_TEST_TTL_SECONDS))
-    resolver.default_locale = "zh-CN"
+    resolver.default_locale = "zh-Hans"
     resolver.supported_locales = set(_SUPPORTED_LOCALES)
     return resolver
 
@@ -58,7 +58,7 @@ def _make_resolver() -> LocaleResolver:
 def _make_translator(*, strict: bool = False) -> Translator:
     return Translator(
         {
-            "zh-CN": {
+            "zh-Hans": {
                 "common.hello": "你好",
                 "common.greeting": "你好，{name}",
                 "moderation.warnings.count.one": "{count} 次警告（单数占位）",
@@ -141,7 +141,7 @@ def redis(mocker) -> AsyncMock:
 
 def test_load_catalog_rejects_duplicate_keys(tmp_path: Path) -> None:
     """重复 key 必须被 object_pairs_hook 拦截"""
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     path.write_text('{"common.ok":"一","common.ok":"二"}', encoding="utf-8")
 
     with pytest.raises(CatalogError, match="重复 key"):
@@ -151,7 +151,7 @@ def test_load_catalog_rejects_duplicate_keys(tmp_path: Path) -> None:
 @pytest.mark.parametrize("key", ["message", "Common.message"])
 def test_load_catalog_rejects_invalid_key(tmp_path: Path, key: str) -> None:
     """key 必须是小写点分、至少两段"""
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     _write_catalog(path, {key: "文案"})
 
     with pytest.raises(CatalogError, match="非法翻译 key"):
@@ -159,7 +159,7 @@ def test_load_catalog_rejects_invalid_key(tmp_path: Path, key: str) -> None:
 
 
 def test_load_catalog_rejects_non_string_value(tmp_path: Path) -> None:
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     _write_catalog(path, {"common.count": 1})
 
     with pytest.raises(CatalogError, match="值必须是字符串"):
@@ -169,7 +169,7 @@ def test_load_catalog_rejects_non_string_value(tmp_path: Path) -> None:
 @pytest.mark.parametrize("template", ["{obj.attr}", "{x!r}", "{n:02d}"])
 def test_load_catalog_rejects_unsafe_placeholder(tmp_path: Path, template: str) -> None:
     """占位符仅允许简单命名，禁止属性访问 / conversion / format spec"""
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     _write_catalog(path, {"common.value": template})
 
     with pytest.raises(CatalogError):
@@ -184,7 +184,7 @@ def test_load_catalog_rejects_disallowed_html_tag_or_attribute(
     tmp_path: Path,
     template: str,
 ) -> None:
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     _write_catalog(path, {"common.value": template})
 
     with pytest.raises(CatalogError):
@@ -192,7 +192,7 @@ def test_load_catalog_rejects_disallowed_html_tag_or_attribute(
 
 
 def test_load_catalog_rejects_non_telegram_spoiler_class(tmp_path: Path) -> None:
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     _write_catalog(path, {"common.value": '<span class="spoiler">内容</span>'})
 
     with pytest.raises(CatalogError, match="tg-spoiler"):
@@ -200,7 +200,7 @@ def test_load_catalog_rejects_non_telegram_spoiler_class(tmp_path: Path) -> None
 
 
 def test_load_catalog_rejects_code_class_without_language_prefix(tmp_path: Path) -> None:
-    path = tmp_path / "zh-CN.json"
+    path = tmp_path / "zh-Hans.json"
     _write_catalog(path, {"common.value": '<code class="python">print()</code>'})
 
     with pytest.raises(CatalogError, match="language-"):
@@ -209,49 +209,49 @@ def test_load_catalog_rejects_code_class_without_language_prefix(tmp_path: Path)
 
 def test_validate_catalog_parity_rejects_missing_key() -> None:
     catalogs = {
-        "zh-CN": {"common.first": "一", "common.second": "二"},
+        "zh-Hans": {"common.first": "一", "common.second": "二"},
         "en": {"common.first": "one"},
     }
 
     with pytest.raises(CatalogError, match="缺失"):
-        validate_catalog_parity(catalogs, "zh-CN")
+        validate_catalog_parity(catalogs, "zh-Hans")
 
 
 def test_validate_catalog_parity_rejects_extra_key() -> None:
     catalogs = {
-        "zh-CN": {"common.first": "一"},
+        "zh-Hans": {"common.first": "一"},
         "en": {"common.first": "one", "common.second": "two"},
     }
 
     with pytest.raises(CatalogError, match="多余"):
-        validate_catalog_parity(catalogs, "zh-CN")
+        validate_catalog_parity(catalogs, "zh-Hans")
 
 
 def test_validate_catalog_parity_rejects_placeholder_mismatch() -> None:
     catalogs = {
-        "zh-CN": {"common.greeting": "你好，{name}"},
+        "zh-Hans": {"common.greeting": "你好，{name}"},
         "en": {"common.greeting": "Hello, {username}"},
     }
 
     with pytest.raises(CatalogError, match="占位符"):
-        validate_catalog_parity(catalogs, "zh-CN")
+        validate_catalog_parity(catalogs, "zh-Hans")
 
 
 def test_load_catalogs_rejects_missing_source_catalog(tmp_path: Path) -> None:
     _write_catalog(tmp_path / "en.json", {"common.ready": "ready"})
 
     with pytest.raises(CatalogError, match="缺少翻译目录文件"):
-        load_catalogs(tmp_path, ["zh-CN", "en"], "zh-CN")
+        load_catalogs(tmp_path, ["zh-Hans", "en"], "zh-Hans")
 
 
 def test_load_catalogs_rejects_default_outside_supported_locales(tmp_path: Path) -> None:
     with pytest.raises(CatalogError, match="default_locale"):
-        load_catalogs(tmp_path, ["en"], "zh-CN")
+        load_catalogs(tmp_path, ["en"], "zh-Hans")
 
 
 def test_load_catalogs_loads_source_locale_first(tmp_path: Path, mocker) -> None:
     """源语言必须最先加载，其损坏应立即暴露"""
-    locales = ["en", "zh-CN", "zh-Hant"]
+    locales = ["en", "zh-Hans", "zh-Hant"]
     for locale in locales:
         _write_catalog(tmp_path / f"{locale}.json", {})
 
@@ -263,10 +263,10 @@ def test_load_catalogs_loads_source_locale_first(tmp_path: Path, mocker) -> None
 
     mocker.patch("src.core.i18n.catalog.load_catalog", side_effect=fake_load_catalog)
 
-    catalogs = load_catalogs(tmp_path, locales, "zh-CN")
+    catalogs = load_catalogs(tmp_path, locales, "zh-Hans")
 
-    assert list(catalogs) == ["zh-CN", "en", "zh-Hant"]
-    assert loaded == ["zh-CN.json", "en.json", "zh-Hant.json"]
+    assert list(catalogs) == ["zh-Hans", "en", "zh-Hant"]
+    assert loaded == ["zh-Hans.json", "en.json", "zh-Hant.json"]
 
 
 # ==================== translator ====================
@@ -277,7 +277,7 @@ def test_translator_returns_requested_translation() -> None:
 
 
 def test_translator_falls_back_to_default_when_requested_key_is_missing() -> None:
-    translator = Translator({"zh-CN": {"common.only": "默认文案"}, "en": {}}, strict=False)
+    translator = Translator({"zh-Hans": {"common.only": "默认文案"}, "en": {}}, strict=False)
 
     assert translator.t("common.only", locale="en") == "默认文案"
 
@@ -303,7 +303,7 @@ def test_translator_plural_english_other(count: int) -> None:
 
 
 def test_translator_plural_chinese_always_uses_other() -> None:
-    assert _make_translator().tp("moderation.warnings.count", 1, locale="zh-CN") == "共 1 次警告"
+    assert _make_translator().tp("moderation.warnings.count", 1, locale="zh-Hans") == "共 1 次警告"
 
 
 def test_translator_plural_injects_count_automatically() -> None:
@@ -328,7 +328,7 @@ def test_translator_strict_mode_raises_for_unsupported_locale() -> None:
 def test_translator_non_strict_missing_variable_falls_back_to_default() -> None:
     """非严格模式下缺变量应降级到默认语言，而非抛异常"""
     translator = Translator(
-        {"zh-CN": {"common.value": "默认文案"}, "en": {"common.value": "Value: {value}"}},
+        {"zh-Hans": {"common.value": "默认文案"}, "en": {"common.value": "Value: {value}"}},
         strict=False,
     )
 
@@ -338,7 +338,7 @@ def test_translator_non_strict_missing_variable_falls_back_to_default() -> None:
 def test_translator_non_strict_render_error_falls_back_to_default() -> None:
     """__format__ 抛错时非严格模式应兜底降级，不向调用方传播"""
     translator = Translator(
-        {"zh-CN": {"common.value": "默认文案"}, "en": {"common.value": "Value: {value}"}},
+        {"zh-Hans": {"common.value": "默认文案"}, "en": {"common.value": "Value: {value}"}},
         strict=False,
     )
 
@@ -403,17 +403,17 @@ async def test_resolver_group_missing_in_db_falls_back_to_default(redis: AsyncMo
     redis.get.return_value = None
     mocker.patch.object(GroupRepository, "get", new=AsyncMock(return_value=None))
 
-    assert await _make_resolver().for_group(-100) == "zh-CN"
+    assert await _make_resolver().for_group(-100) == "zh-Hans"
 
 
 async def test_resolver_user_without_record_returns_default(redis: AsyncMock, mocker) -> None:
     redis.get.return_value = None
     mocker.patch.object(UserSettingsRepository, "get_locale", new=AsyncMock(return_value=None))
 
-    assert await _make_resolver().for_user(42) == "zh-CN"
+    assert await _make_resolver().for_user(42) == "zh-Hans"
 
 
-@pytest.mark.parametrize("locale", ["zh-CN", "zh-Hant"])
+@pytest.mark.parametrize("locale", ["zh-Hans", "zh-Hant"])
 async def test_resolver_user_returns_explicit_supported_locale(
     locale: str, redis: AsyncMock, mocker
 ) -> None:
@@ -446,25 +446,25 @@ async def test_resolver_user_explicit_returns_none_for_missing_record(
 async def test_resolver_user_explicit_preserves_explicit_default_locale(
     redis: AsyncMock, mocker
 ) -> None:
-    """显式选择默认语言（zh-CN）不得被当作无记录"""
+    """显式选择默认语言（zh-Hans）不得被当作无记录"""
     redis.get.return_value = None
     mocker.patch.object(
         UserSettingsRepository,
         "get_locale",
-        new=AsyncMock(return_value="zh-CN"),
+        new=AsyncMock(return_value="zh-Hans"),
     )
 
-    assert await _make_resolver().for_user_explicit(42) == "zh-CN"
+    assert await _make_resolver().for_user_explicit(42) == "zh-Hans"
 
 
 async def test_private_from_group_explicit_default_wins_group_locale(
     redis: AsyncMock, mocker
 ) -> None:
-    """选项 B 核心：用户显式 zh-CN 不得被英文群语言覆盖"""
-    redis.get.side_effect = lambda key: "zh-CN" if key == RedisKeys.locale_user(42) else "en"
+    """选项 B 核心：用户显式 zh-Hans 不得被英文群语言覆盖"""
+    redis.get.side_effect = lambda key: "zh-Hans" if key == RedisKeys.locale_user(42) else "en"
     group_get = mocker.patch.object(GroupRepository, "get", new=AsyncMock())
 
-    assert await _make_resolver().for_private_from_group(42, -100) == "zh-CN"
+    assert await _make_resolver().for_private_from_group(42, -100) == "zh-Hans"
     group_get.assert_not_awaited()
 
 
@@ -507,7 +507,7 @@ async def test_private_from_group_user_db_failure_falls_back_to_default(
         new=AsyncMock(return_value=SimpleNamespace(locale="en")),
     )
 
-    assert await _make_resolver().for_private_from_group(42, -100) == "zh-CN"
+    assert await _make_resolver().for_private_from_group(42, -100) == "zh-Hans"
 
 
 async def test_resolver_redis_and_db_failures_fall_back_to_default(
@@ -521,7 +521,7 @@ async def test_resolver_redis_and_db_failures_fall_back_to_default(
     )
     mocker.patch.object(GroupRepository, "get", new=AsyncMock(side_effect=RuntimeError("db down")))
 
-    assert await _make_resolver().for_private_from_group(42, -100) == "zh-CN"
+    assert await _make_resolver().for_private_from_group(42, -100) == "zh-Hans"
 
 
 async def test_locale_cache_authoritative_write_uses_setex(redis: AsyncMock) -> None:
@@ -689,7 +689,7 @@ async def test_resolver_user_db_illegal_locale_treated_as_query_failure(
         new=AsyncMock(return_value="fr"),
     )
 
-    assert await _make_resolver().for_user(42) == "zh-CN"
+    assert await _make_resolver().for_user(42) == "zh-Hans"
     # 不写任何缓存（既不写哨兵也不写非法值）
     redis.set.assert_not_awaited()
     redis.setex.assert_not_awaited()
@@ -706,7 +706,7 @@ async def test_resolver_user_explicit_db_failure_returns_default_without_caching
         new=AsyncMock(side_effect=RuntimeError("db down")),
     )
 
-    assert await _make_resolver().for_user_explicit(42) == "zh-CN"
+    assert await _make_resolver().for_user_explicit(42) == "zh-Hans"
     redis.set.assert_not_awaited()
     redis.setex.assert_not_awaited()
 

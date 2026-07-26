@@ -10,7 +10,7 @@
   "lang.change.saved.toast": "✅ 已切換為 {locale_name}",
   "lang.current.message": "🌐 目前語言：<b>{locale_name}</b>",
   "lang.locale.en.button": "英文",
-  "lang.locale.zh_cn.button": "簡體中文",
+  "lang.locale.zh_hans.button": "簡體中文",
   "lang.locale.zh_hant.button": "繁體中文",
   "lang.menu.current.message": "🌐 <b>語言設定</b>\n\n目前語言：<b>{locale_name}</b>\n請選擇要使用的語言：",
   "lang.option.selected.button": "✅ {locale_name}",
