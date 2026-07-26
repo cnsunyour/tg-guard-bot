@@ -133,7 +133,7 @@ async def _send_menu(
     scope: str,
     chat_id: int | None,
     current_locale: str,
-) -> None:
+) -> Message:
     localizer = translator.for_locale(current_locale)
     text, keyboard = _render_menu(
         localizer=localizer,
@@ -142,7 +142,7 @@ async def _send_menu(
         chat_id=chat_id,
         current_locale=current_locale,
     )
-    await message.answer(text, reply_markup=keyboard)
+    return await message.answer(text, reply_markup=keyboard)
 
 
 @router.message(Command("lang"))
@@ -152,16 +152,19 @@ async def cmd_lang(
     locale_resolver: LocaleResolver,
     translator: Translator,
     localizer: BoundLocalizer,
-) -> None:
-    """显示语言设置菜单"""
+) -> Message | None:
+    """显示语言设置菜单
+
+    返回发出的消息对象，使 AutoDeleteMiddleware 能在群组中自动删除命令响应。
+    """
     if message.from_user is None:
-        return
+        return None
 
     # 私聊：用户自助
     if message.chat.type == ChatType.PRIVATE:
         try:
             current = await _read_user_locale(message.from_user.id, locale_resolver)
-            await _send_menu(
+            return await _send_menu(
                 message,
                 locale_resolver,
                 translator,
@@ -171,24 +174,21 @@ async def cmd_lang(
             )
         except Exception as exc:
             logger.error(f"读取用户语言设置失败 [用户:{message.from_user.id}]: {exc}")
-            await message.answer(localizer.t("lang.change.save_failed.toast"))
-        return
+            return await message.answer(localizer.t("lang.change.save_failed.toast"))
 
     # 非群聊类型不支持
     if message.chat.type not in _GROUP_TYPES:
-        await message.answer(localizer.t("lang.change.invalid_data.toast"))
-        return
+        return await message.answer(localizer.t("lang.change.invalid_data.toast"))
 
     chat_id = message.chat.id
     if not await _is_group_admin(bot, chat_id, message.from_user.id):
-        await message.answer(localizer.t("lang.change.permission_denied.toast"))
-        return
+        return await message.answer(localizer.t("lang.change.permission_denied.toast"))
 
     try:
         # 确保群记录存在（update_locale 需既有记录）
         await GroupRepository.get_or_create(chat_id, message.chat.title)
         current = await _read_group_locale(chat_id, locale_resolver)
-        await _send_menu(
+        return await _send_menu(
             message,
             locale_resolver,
             translator,
@@ -198,7 +198,7 @@ async def cmd_lang(
         )
     except Exception as exc:
         logger.error(f"读取群组语言设置失败 [群组:{chat_id}]: {exc}")
-        await message.answer(localizer.t("lang.change.save_failed.toast"))
+        return await message.answer(localizer.t("lang.change.save_failed.toast"))
 
 
 async def _answer_invalid_data(callback: CallbackQuery, localizer: BoundLocalizer) -> None:
