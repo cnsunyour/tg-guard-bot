@@ -12,6 +12,7 @@ services:
       - ./src:/app/src:ro           # 只读挂载源代码
       - ./scripts:/app/scripts:ro   # 只读挂载脚本
       - ./migrations:/app/migrations:ro  # 只读挂载迁移脚本
+      - ./locales:/app/locales:ro   # 只读挂载 i18n catalog（修改后需重启 bot）
       - ./pyproject.toml:/app/pyproject.toml:ro  # 只读挂载版本号来源（Sentry release 随版本即时同步）
       - ./data:/app/data            # 挂载整个 data 目录（包含 models 和 session 文件）
       - ./logs:/app/logs
