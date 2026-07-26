@@ -29,6 +29,9 @@ type WebAppProvider = Literal["turnstile", "friendly", "hcaptcha", "mtcaptcha", 
 type HoneypotDecoy = Literal["skip", "direct", "human"]
 _HONEYPOT_DECOYS: tuple[HoneypotDecoy, ...] = ("skip", "direct", "human")
 
+# 选项类验证的校验结果：correct 正确 / wrong 错误（含 honeypot 陷阱）/ expired 已过期或类型不匹配
+type ChoiceAnswerResult = Literal["correct", "wrong", "expired"]
+
 
 @dataclass(frozen=True, slots=True)
 class MathChallenge:
@@ -790,6 +793,33 @@ class VerificationService:
             "altcha": VerificationService.generate_altcha_challenge,
         }
         return await generators[selected_type](chat_id, user_id, timeout)
+
+    @staticmethod
+    async def verify_choice_answer(
+        chat_id: int, user_id: int, expected_type: str, answer: str
+    ) -> ChoiceAnswerResult:
+        """一次 Redis GET 完成 pending、类型及答案校验（消除 TOCTOU）。
+
+        类型不匹配视为过期消息（旧类型按钮点击当前挑战），避免跨类型旧消息
+        碰巧通过当前挑战的 stored 答案。返回 correct / wrong / expired 三态。
+        """
+        redis = get_redis()
+        stored_value = await redis.get(RedisKeys.verification(chat_id, user_id))
+        if not stored_value:
+            return "expired"
+
+        # partition 校验：type 与 answer 均非空，且 answer 不含冒号
+        # （防损坏值如 qa: / :2 / qa:2:extra 误判）
+        challenge_type, sep, correct_answer = stored_value.partition(":")
+        if not sep or not challenge_type or not correct_answer or ":" in correct_answer:
+            return "expired"
+
+        if challenge_type != expected_type:
+            return "expired"
+
+        if answer == "trap":
+            return "wrong"
+        return "correct" if answer == correct_answer else "wrong"
 
     @staticmethod
     async def verify_answer(chat_id: int, user_id: int, answer: str) -> bool:

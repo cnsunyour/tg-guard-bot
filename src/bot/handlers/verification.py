@@ -993,10 +993,21 @@ async def on_user_leave(event: ChatMemberUpdated) -> None:
 
 
 async def _answer_default_toast(callback: CallbackQuery, key: str) -> None:
-    """callback_data 无效（无法定位来源群）时用默认语言弹窗"""
-    localizer = get_translator().for_locale(get_resolver().default_locale)
+    """callback_data 无法定位来源群时，仍尊重点击者的显式语言偏好"""
+    locale = await get_resolver().for_user(callback.from_user.id)
+    localizer = get_translator().for_locale(locale)
     await callback.answer(localizer.t(key), show_alert=True)
 
+
+# callback_data 前缀 → Redis stored challenge_type（校验防跨类型旧消息重放）
+_CHOICE_TYPES: dict[str, str] = {
+    "verify_math": "math",
+    "verify_slider": "slider",
+    "verify_qa": "qa",
+    "verify_emoji": "emoji",
+    "verify_honeypot": "honeypot",
+    "verify_puzzle": "puzzle",
+}
 
 # 各验证类型答错时的 toast key
 # math/qa/honeypot 是答案错误，slider/emoji/puzzle 是选择错误
@@ -1030,27 +1041,33 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
         prefix, chat_id_str, user_id_str, answer = parts
         chat_id = int(chat_id_str)
         user_id = int(user_id_str)
-    except (TypeError, ValueError):
+        expected_type = _CHOICE_TYPES[prefix]
+    except (KeyError, TypeError, ValueError):
         await _answer_default_toast(callback, "verification.callback.invalid_data.toast")
         return
 
-    # 私聊 callback 展示语言按「用户偏好 → 来源群 locale」解析（选项 B）
-    private_locale = await get_resolver().for_private_from_group(
-        user_id=user_id, group_chat_id=chat_id
-    )
-    localizer = get_translator().for_locale(private_locale)
-
     try:
-        # 检查是否是本人点击
+        # not_yours：先身份判断，toast 用点击者显式偏好（避免提前查询目标 user locale）
         if callback.from_user.id != user_id:
+            clicker_locale = await get_resolver().for_user(callback.from_user.id)
+            clicker_localizer = get_translator().for_locale(clicker_locale)
             await callback.answer(
-                localizer.t("verification.callback.not_yours.toast"), show_alert=True
+                clicker_localizer.t("verification.callback.not_yours.toast"), show_alert=True
             )
             return
 
-        # ✅ 检查验证状态是否还存在（已通过 / 已超时被踢 / 点击过期消息）
+        # 身份确认后才解析 owner 私聊 locale（选项 B：用户偏好 → 来源群）
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
+
+        # 一次 GET 校验 pending + 类型 + 答案（消除 TOCTOU，防跨类型旧消息重放）
         verification_service = VerificationService()
-        if not await verification_service.is_verification_pending(chat_id, user_id):
+        answer_result = await verification_service.verify_choice_answer(
+            chat_id, user_id, expected_type, answer
+        )
+        if answer_result == "expired":
             await callback.answer(
                 localizer.t("verification.callback.expired.toast"), show_alert=False
             )
@@ -1058,8 +1075,7 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
             return
 
-        # 验证答案
-        if await verification_service.verify_answer(chat_id, user_id, answer):
+        if answer_result == "correct":
             redis = get_redis()
             type_key = RedisKeys.verification_type(chat_id, user_id)
             is_join_request = (await redis.get(type_key)) == "join_request"
