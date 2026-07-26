@@ -33,7 +33,7 @@ from src.repositories.user_settings_repo import UserSettingsRepository
 pytestmark = pytest.mark.unit
 
 _TEST_TTL_SECONDS = 123
-_SUPPORTED_LOCALES = {"zh-CN", "zh-TW", "zh-HK", "en"}
+_SUPPORTED_LOCALES = {"zh-CN", "zh-Hant", "en"}
 
 
 class _BrokenFormat:
@@ -64,7 +64,7 @@ def _make_translator(*, strict: bool = False) -> Translator:
                 "moderation.warnings.count.one": "{count} 次警告（单数占位）",
                 "moderation.warnings.count.other": "共 {count} 次警告",
             },
-            "zh-TW": {
+            "zh-Hant": {
                 "common.hello": "你好",
                 "common.greeting": "你好，{name}",
                 "moderation.warnings.count.one": "{count} 次警告（單數佔位）",
@@ -84,7 +84,7 @@ def _make_translator(*, strict: bool = False) -> Translator:
 def _make_middleware() -> tuple[LocaleMiddleware, MagicMock]:
     resolver = MagicMock(spec=LocaleResolver)
     resolver.for_group = AsyncMock(return_value="en")
-    resolver.for_user = AsyncMock(return_value="zh-TW")
+    resolver.for_user = AsyncMock(return_value="zh-Hant")
     middleware = LocaleMiddleware(resolver, _make_translator())
     return middleware, resolver
 
@@ -251,7 +251,7 @@ def test_load_catalogs_rejects_default_outside_supported_locales(tmp_path: Path)
 
 def test_load_catalogs_loads_source_locale_first(tmp_path: Path, mocker) -> None:
     """源语言必须最先加载，其损坏应立即暴露"""
-    locales = ["en", "zh-CN", "zh-TW"]
+    locales = ["en", "zh-CN", "zh-Hant"]
     for locale in locales:
         _write_catalog(tmp_path / f"{locale}.json", {})
 
@@ -265,8 +265,8 @@ def test_load_catalogs_loads_source_locale_first(tmp_path: Path, mocker) -> None
 
     catalogs = load_catalogs(tmp_path, locales, "zh-CN")
 
-    assert list(catalogs) == ["zh-CN", "en", "zh-TW"]
-    assert loaded == ["zh-CN.json", "en.json", "zh-TW.json"]
+    assert list(catalogs) == ["zh-CN", "en", "zh-Hant"]
+    assert loaded == ["zh-CN.json", "en.json", "zh-Hant.json"]
 
 
 # ==================== translator ====================
@@ -346,7 +346,7 @@ def test_translator_non_strict_render_error_falls_back_to_default() -> None:
 
 
 def test_bound_localizer_uses_bound_locale() -> None:
-    localizer = _make_translator().for_locale("zh-TW")
+    localizer = _make_translator().for_locale("zh-Hant")
 
     assert localizer.t("common.greeting", name="Alice") == "你好，Alice"
     assert isinstance(localizer, BoundLocalizer)
@@ -372,10 +372,10 @@ async def test_resolver_group_invalid_cache_is_invalidated_and_reloaded(
     group_get = mocker.patch.object(
         GroupRepository,
         "get",
-        new=AsyncMock(return_value=SimpleNamespace(locale="zh-TW")),
+        new=AsyncMock(return_value=SimpleNamespace(locale="zh-Hant")),
     )
 
-    assert await _make_resolver().for_group(-100) == "zh-TW"
+    assert await _make_resolver().for_group(-100) == "zh-Hant"
     redis.delete.assert_awaited_once_with(RedisKeys.locale_group(-100))
     group_get.assert_awaited_once_with(-100)
 
@@ -413,7 +413,7 @@ async def test_resolver_user_without_record_returns_default(redis: AsyncMock, mo
     assert await _make_resolver().for_user(42) == "zh-CN"
 
 
-@pytest.mark.parametrize("locale", ["zh-CN", "zh-TW"])
+@pytest.mark.parametrize("locale", ["zh-CN", "zh-Hant"])
 async def test_resolver_user_returns_explicit_supported_locale(
     locale: str, redis: AsyncMock, mocker
 ) -> None:
@@ -484,10 +484,10 @@ async def test_private_from_group_without_user_record_uses_group_locale(
 async def test_private_from_group_explicit_non_default_wins_group_locale(
     redis: AsyncMock, mocker
 ) -> None:
-    redis.get.side_effect = lambda key: "zh-TW" if key == RedisKeys.locale_user(42) else "en"
+    redis.get.side_effect = lambda key: "zh-Hant" if key == RedisKeys.locale_user(42) else "en"
     group_get = mocker.patch.object(GroupRepository, "get", new=AsyncMock())
 
-    assert await _make_resolver().for_private_from_group(42, -100) == "zh-TW"
+    assert await _make_resolver().for_private_from_group(42, -100) == "zh-Hant"
     group_get.assert_not_awaited()
 
 
@@ -541,10 +541,10 @@ async def test_resolver_user_invalid_cache_is_invalidated_and_reloaded(
     user_get = mocker.patch.object(
         UserSettingsRepository,
         "get_locale",
-        new=AsyncMock(return_value="zh-HK"),
+        new=AsyncMock(return_value="zh-Hant"),
     )
 
-    assert await _make_resolver().for_user(42) == "zh-HK"
+    assert await _make_resolver().for_user(42) == "zh-Hant"
     redis.delete.assert_awaited_once_with(RedisKeys.locale_user(42))
     user_get.assert_awaited_once_with(42)
 
@@ -572,11 +572,11 @@ async def test_middleware_resets_nested_context_even_when_handler_raises() -> No
         assert get_current_locale() == "en"
         raise RuntimeError("handler boom")
 
-    outer_token = current_locale.set("zh-TW")
+    outer_token = current_locale.set("zh-Hant")
     try:
         with pytest.raises(RuntimeError, match="handler boom"):
             await middleware(failing_handler, message, {})
-        assert get_current_locale() == "zh-TW"
+        assert get_current_locale() == "zh-Hant"
     finally:
         current_locale.reset(outer_token)
 

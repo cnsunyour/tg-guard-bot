@@ -20,7 +20,7 @@ def _make_resolver() -> LocaleResolver:
     """不依赖运行环境 locale 配置的 resolver"""
     resolver = LocaleResolver(LocalePreferenceCache(ttl_seconds=_TEST_TTL))
     resolver.default_locale = "zh-CN"
-    resolver.supported_locales = {"zh-CN", "zh-TW", "zh-HK", "en"}
+    resolver.supported_locales = {"zh-CN", "zh-Hant", "en"}
     return resolver
 
 
@@ -29,8 +29,7 @@ def _make_translator() -> Translator:
     base_keys = {
         "lang.menu.current.message": "当前：{locale_name}",
         "lang.locale.zh_cn.button": "简体中文",
-        "lang.locale.zh_tw.button": "繁体中文（台湾）",
-        "lang.locale.zh_hk.button": "繁体中文（香港）",
+        "lang.locale.zh_hant.button": "繁体中文",
         "lang.locale.en.button": "英语",
         "lang.option.selected.button": "✅ {locale_name}",
         "lang.change.permission_denied.toast": "❌ 无权限",
@@ -43,8 +42,7 @@ def _make_translator() -> Translator:
     en_keys = {
         "lang.menu.current.message": "Current: {locale_name}",
         "lang.locale.zh_cn.button": "Simplified Chinese",
-        "lang.locale.zh_tw.button": "Traditional Chinese (Taiwan)",
-        "lang.locale.zh_hk.button": "Traditional Chinese (Hong Kong)",
+        "lang.locale.zh_hant.button": "Traditional Chinese",
         "lang.locale.en.button": "English",
         "lang.option.selected.button": "✅ {locale_name}",
         "lang.change.permission_denied.toast": "❌ No permission",
@@ -108,8 +106,8 @@ async def test_service_set_user_locale_success_returns_true(mocker) -> None:
     resolver = _make_resolver()
     resolver.cache.set_user = AsyncMock(return_value=True)
 
-    assert await LocalePreferenceService(resolver).set_user_locale(42, "zh-TW") is True
-    upsert.assert_awaited_once_with(42, "zh-TW")
+    assert await LocalePreferenceService(resolver).set_user_locale(42, "zh-Hant") is True
+    upsert.assert_awaited_once_with(42, "zh-Hant")
 
 
 # ==================== 选中态直接查 DB ====================
@@ -119,9 +117,9 @@ async def test_read_group_locale_queries_db(mocker) -> None:
     mocker.patch.object(
         lang_module.GroupRepository,
         "get",
-        new=AsyncMock(return_value=SimpleNamespace(locale="zh-TW")),
+        new=AsyncMock(return_value=SimpleNamespace(locale="zh-Hant")),
     )
-    assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-TW"
+    assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-Hant"
 
 
 async def test_read_group_locale_missing_group_returns_default(mocker) -> None:

@@ -123,7 +123,9 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(curfew.router)  # 宵禁模式
-    dp.include_router(lang.router)  # 语言设置（须在 verification 之前：verification 有私聊文本兜底会拦截 /lang）
+    dp.include_router(
+        lang.router
+    )  # 语言设置（须在 verification 之前：verification 有私聊文本兜底会拦截 /lang）
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
 
