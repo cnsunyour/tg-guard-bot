@@ -5,6 +5,7 @@ import contextlib
 import secrets
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
@@ -23,6 +24,11 @@ from aiogram.types import (
 )
 from loguru import logger
 
+from src.bot.handlers.verification_render import (
+    VerificationFlow,
+    render_captcha_for_refresh,
+    render_verification_challenge,
+)
 from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.i18n import get_resolver, get_translator
@@ -41,7 +47,10 @@ from src.services.cas_service import get_cas_service
 from src.services.spam_detector import SpamDetector
 from src.services.user_status_service import get_user_status_service
 from src.services.username_mapping import UsernameMappingService
-from src.services.verification import VerificationService
+from src.services.verification import VerificationChallenge, VerificationService
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 router = Router(name="verification")
 
@@ -334,147 +343,102 @@ async def check_user_spam_info(
     return False  # 通过检测
 
 
-async def generate_verification_challenge(group, chat_id: int, user_id: int, username: str):
+async def generate_verification_challenge(
+    group, chat_id: int, user_id: int
+) -> VerificationChallenge:
     """根据群组配置生成验证挑战
 
     Args:
         group: 群组配置对象
         chat_id: 群组 ID
         user_id: 用户 ID
-        username: 用户名
 
     Returns:
-        验证挑战对象
+        验证挑战对象（discriminated union）
     """
     verification_service = VerificationService()
+    timeout = group.verification_timeout
 
-    if group.verification_type == "math":
-        return await verification_service.generate_math_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "slider":
-        return await verification_service.generate_slider_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "qa":
-        return await verification_service.generate_qa_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "emoji":
-        return await verification_service.generate_emoji_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "captcha":
-        return await verification_service.generate_captcha_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "honeypot":
-        return await verification_service.generate_honeypot_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "puzzle":
-        return await verification_service.generate_puzzle_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "turnstile":
-        return await verification_service.generate_turnstile_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "friendly":
-        return await verification_service.generate_friendly_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "hcaptcha":
-        return await verification_service.generate_hcaptcha_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "mtcaptcha":
-        return await verification_service.generate_mtcaptcha_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "altcha":
-        return await verification_service.generate_altcha_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    elif group.verification_type == "random":
-        return await verification_service.generate_random_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
-    else:  # 默认数学验证
-        return await verification_service.generate_math_challenge(
-            chat_id, user_id, username, group.verification_timeout
-        )
+    generators: dict[str, Callable[[int, int, int], Awaitable[VerificationChallenge]]] = {
+        "math": verification_service.generate_math_challenge,
+        "slider": verification_service.generate_slider_challenge,
+        "qa": verification_service.generate_qa_challenge,
+        "emoji": verification_service.generate_emoji_challenge,
+        "captcha": verification_service.generate_captcha_challenge,
+        "honeypot": verification_service.generate_honeypot_challenge,
+        "puzzle": verification_service.generate_puzzle_challenge,
+        "turnstile": verification_service.generate_turnstile_challenge,
+        "friendly": verification_service.generate_friendly_challenge,
+        "hcaptcha": verification_service.generate_hcaptcha_challenge,
+        "mtcaptcha": verification_service.generate_mtcaptcha_challenge,
+        "altcha": verification_service.generate_altcha_challenge,
+        "random": verification_service.generate_random_challenge,
+    }
+    # 未知类型默认数学验证
+    generator = generators.get(
+        group.verification_type, verification_service.generate_math_challenge
+    )
+    return await generator(chat_id, user_id, timeout)
 
 
 async def send_verification_message(
     bot: Bot,
     chat_id: int,
     user_id: int,
-    challenge,
-    flow: str,
+    challenge: VerificationChallenge,
+    flow: VerificationFlow,
     username: str,
     timeout: int,
 ):
     """发送验证消息到用户私聊
 
+    按「用户偏好 → 来源群 locale」解析语言，交由 render 层渲染文案与 keyboard。
+
     Args:
         bot: Bot 实例
         chat_id: 群组 ID
         user_id: 用户 ID
-        challenge: 验证挑战对象
+        challenge: 验证挑战对象（discriminated union）
         flow: 验证流程，"join"（已入群）或 "join_request"（加入请求）
-        username: 用户显示名（未转义）
+        username: 用户显示名（未转义，render 层统一 escape）
         timeout: 验证超时时间（秒）
 
     Returns:
         发送的消息对象
     """
-    # 获取群组信息
+    # 获取群组信息（chat_title 传原始文本，render 层统一 escape_html）
     chat = await bot.get_chat(chat_id)
-    chat_title = escape_html(chat.title) if chat.title else "群组"
+    chat_title = chat.title or "群组"
 
-    if challenge.challenge_type == "math":
-        # 数学验证：展示文案用 catalog 按「用户偏好 → 来源群 locale」渲染
-        if not challenge.expression:
-            raise ValueError("数学验证挑战缺少 expression")
-        locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
-        localizer = get_translator().for_locale(locale)
-        message_text = localizer.t(
-            f"verification.math.challenge.{flow}.message",
-            chat_title=chat_title,
-            username=escape_html(username),
-            expression=escape_html(challenge.expression),
-            timeout=timeout,
-        )
-    else:
-        # 非 math 验证暂保留原硬编码文案（POC 只迁移 math）
-        if flow == "join_request":
-            message_title = "加入请求验证"
-            message_prefix = "您请求加入群组"
-        else:
-            message_title = "群组验证通知"
-            message_prefix = "您加入了群组"
-        message_text = (
-            f"📢 <b>{message_title}</b>\n\n"
-            f"{message_prefix}：<b>{chat_title}</b>\n\n"
-            f"{challenge.question}"
-        )
+    # 私聊验证消息按「用户偏好 → 来源群 locale」渲染
+    locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
+    localizer = get_translator().for_locale(locale)
+    rendered = render_verification_challenge(
+        challenge,
+        localizer,
+        chat_id=chat_id,
+        user_id=user_id,
+        flow=flow,
+        timeout=timeout,
+        username=username,
+        chat_title=chat_title,
+    )
 
     # 根据是否有图片选择发送方式
-    if challenge.photo:
-        # captcha 验证：发送图片
+    if rendered.photo is not None:
+        # captcha / puzzle 验证：发送图片
         return await bot.send_photo(
             chat_id=user_id,
-            photo=challenge.photo,
-            caption=message_text,
-            reply_markup=challenge.keyboard,
+            photo=rendered.photo,
+            caption=rendered.text,
+            reply_markup=rendered.keyboard,
             parse_mode="HTML",
         )
     # 其他验证：发送文本消息
     return await bot.send_message(
         chat_id=user_id,
-        text=message_text,
-        reply_markup=challenge.keyboard,
+        text=rendered.text,
+        reply_markup=rendered.keyboard,
         parse_mode="HTML",
     )
 
@@ -647,7 +611,7 @@ async def _process_join_request(
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
         # 根据验证类型生成挑战
-        challenge = await generate_verification_challenge(group, chat_id, user_id, username)
+        challenge = await generate_verification_challenge(group, chat_id, user_id)
 
         # 尝试私聊发送验证消息
         try:
@@ -963,7 +927,7 @@ async def _process_user_join(
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
         # 根据验证类型生成挑战
-        challenge = await generate_verification_challenge(group, chat_id, user_id, username)
+        challenge = await generate_verification_challenge(group, chat_id, user_id)
 
         # ✅ 尝试私聊发送验证消息
         try:
@@ -1577,12 +1541,13 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         group_config = await group_repo.get(chat_id)
         timeout = group_config.verification_timeout if group_config else 120
 
-        challenge = await verification_service.generate_captcha_challenge(
-            chat_id, user_id, username, timeout
-        )
+        challenge = await verification_service.generate_captcha_challenge(chat_id, user_id, timeout)
+
+        # 刷新后仅更新题面与按钮（保持原行为：不重复信封标题）
+        rendered = render_captcha_for_refresh(challenge, chat_id, user_id, username, timeout)
 
         # 检查 photo 是否存在
-        if not challenge.photo:
+        if rendered.photo is None:
             await callback.answer("❌ 生成验证码失败", show_alert=True)
             return
 
@@ -1590,14 +1555,14 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         await bot.edit_message_media(
             chat_id=user_id,
             message_id=callback.message.message_id,
-            media=InputMediaPhoto(media=challenge.photo),
+            media=InputMediaPhoto(media=rendered.photo),
         )
         await bot.edit_message_caption(
             chat_id=user_id,
             message_id=callback.message.message_id,
-            caption=challenge.question,
+            caption=rendered.text,
             reply_markup=(
-                challenge.keyboard if isinstance(challenge.keyboard, InlineKeyboardMarkup) else None
+                rendered.keyboard if isinstance(rendered.keyboard, InlineKeyboardMarkup) else None
             ),
         )
         await callback.answer("🔄 已刷新验证码", show_alert=False)

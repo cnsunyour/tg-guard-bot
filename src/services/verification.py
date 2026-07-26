@@ -1,34 +1,113 @@
-"""验证服务模块"""
+"""验证服务模块
+
+领域模型采用 discriminated union：每个 generate_* 只返回该类型挑战的纯业务数据
+（题面、选项、答案载体），不接收 username、不构建带文案的 Telegram keyboard、不拼装
+展示文本。展示层（文案 + keyboard）由 verification_render 按 locale 渲染，从而支持 i18n。
+所有可变集合字段用 tuple，配合 frozen=True 保证不可变。
+"""
+
+from __future__ import annotations
 
 import io
 import secrets
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
-from aiogram.types import (
-    BufferedInputFile,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-)
+from aiogram.types import BufferedInputFile
 from captcha.image import ImageCaptcha
 
 from src.core.redis import RedisKeys, get_redis
-from src.core.utils import escape_html
 from src.data.verification.emoji_mapping import EMOJI_MAPPINGS
 from src.data.verification.qa_questions import QA_QUESTIONS
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
-@dataclass
-class VerificationChallenge:
-    """验证挑战数据"""
+# WebApp 验证的 5 个 provider 共用 WebAppChallenge，用 provider 字段区分
+type WebAppProvider = Literal["turnstile", "friendly", "hcaptcha", "mtcaptcha", "altcha"]
+# 蜜罐诱饵用稳定 code（非中文文案），renderer 按 locale 映射展示文本
+type HoneypotDecoy = Literal["skip", "direct", "human"]
+_HONEYPOT_DECOYS: tuple[HoneypotDecoy, ...] = ("skip", "direct", "human")
 
-    challenge_type: str  # math, slider, qa, emoji, captcha, honeypot, random
+
+@dataclass(frozen=True, slots=True)
+class MathChallenge:
+    """数学验证：结构化表达式 + 4 个选项（顺序即按钮顺序）"""
+
+    expression: str
+    choices: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SliderChallenge:
+    """滑块验证：4 个方格，绿色方格为正确位置"""
+
+    cells: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class QAChallenge:
+    """问答验证：题面 + 4 个选项（顺序即按钮顺序）
+
+    3a-1 暂保留中文题面/选项（从题库原样搬运）；3a-2 改为 question_id + catalog。
+    """
+
     question: str
-    answer: str
-    keyboard: InlineKeyboardMarkup | ReplyKeyboardMarkup
-    photo: BufferedInputFile | None = None  # 用于 captcha 验证
-    # 数学验证只返回结构化表达式，展示文案由 handler 按 locale 生成
-    expression: str | None = None
+    options: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EmojiChallenge:
+    """表情验证：描述 + 4 个表情（顺序即按钮顺序）
+
+    3a-1 暂保留中文 description；3a-2 改为 description_id + catalog。
+    """
+
+    description: str
+    emojis: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CaptchaChallenge:
+    """图片验证码：仅携带生成的图片，文案/按钮由 renderer 渲染"""
+
+    photo: BufferedInputFile
+
+
+@dataclass(frozen=True, slots=True)
+class HoneypotChallenge:
+    """蜜罐验证：表达式 + 3 个真实选项 + 诱饵 code"""
+
+    expression: str
+    choices: tuple[int, ...]
+    decoy: HoneypotDecoy
+
+
+@dataclass(frozen=True, slots=True)
+class PuzzleChallenge:
+    """拼图验证：仅携带生成的图片，选项为固定 4 个位置"""
+
+    photo: BufferedInputFile
+
+
+@dataclass(frozen=True, slots=True)
+class WebAppChallenge:
+    """WebApp 验证（turnstile/friendly/hcaptcha/mtcaptcha/altcha）"""
+
+    provider: WebAppProvider
+    webapp_url: str
+
+
+type VerificationChallenge = (
+    MathChallenge
+    | SliderChallenge
+    | QAChallenge
+    | EmojiChallenge
+    | CaptchaChallenge
+    | HoneypotChallenge
+    | PuzzleChallenge
+    | WebAppChallenge
+)
 
 
 class VerificationService:
@@ -36,14 +115,13 @@ class VerificationService:
 
     @staticmethod
     async def generate_math_challenge(
-        chat_id: int, user_id: int, _username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> MathChallenge:
         """生成数学验证码挑战 - 支持四则运算，最多两步
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            _username: 用户名（保留以对齐其他 challenge 签名；展示文案由 handler 按 locale 拼）
             timeout: 验证超时时间(秒)
         """
         # 50% 概率生成 1 步或 2 步运算
@@ -77,32 +155,6 @@ class VerificationService:
             j = secrets.randbelow(i + 1)
             options[i], options[j] = options[j], options[i]
 
-        # 创建按钮
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=str(options[0]),
-                        callback_data=f"verify_math:{chat_id}:{user_id}:{options[0]}",
-                    ),
-                    InlineKeyboardButton(
-                        text=str(options[1]),
-                        callback_data=f"verify_math:{chat_id}:{user_id}:{options[1]}",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=str(options[2]),
-                        callback_data=f"verify_math:{chat_id}:{user_id}:{options[2]}",
-                    ),
-                    InlineKeyboardButton(
-                        text=str(options[3]),
-                        callback_data=f"verify_math:{chat_id}:{user_id}:{options[3]}",
-                    ),
-                ],
-            ]
-        )
-
         # 存储验证状态和答案到 Redis
         redis = get_redis()
         key = RedisKeys.verification(chat_id, user_id)
@@ -112,15 +164,8 @@ class VerificationService:
             f"math:{correct_answer}",
         )
 
-        # question 留空：展示文案由 handler 用 catalog 按 locale 拼装，
-        # 避免翻译文字参与业务（expression 是结构化数据）
-        return VerificationChallenge(
-            challenge_type="math",
-            question="",
-            answer=str(correct_answer),
-            keyboard=keyboard,
-            expression=expression,
-        )
+        # choices 顺序即按钮顺序，展示文案由 render 层按 locale 渲染
+        return MathChallenge(expression=expression, choices=tuple(options))
 
     @staticmethod
     def _generate_one_step_math() -> tuple[str, int]:
@@ -222,50 +267,19 @@ class VerificationService:
 
     @staticmethod
     async def generate_slider_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> SliderChallenge:
         """生成滑块验证挑战
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
-            timeout: 验证超时时间(秒)，✅ P1-7: 使用群组配置
+            timeout: 验证超时时间(秒)
         """
         # 生成4个位置，只有一个是正确的（使用密码学安全的随机数）
         correct_position = secrets.randbelow(4)  # 0-3
-        emojis = ["⬜", "⬜", "⬜", "⬜"]
-        emojis[correct_position] = "🟩"
-
-        # 创建按钮
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=emojis[0],
-                        callback_data=f"verify_slider:{chat_id}:{user_id}:0",
-                    ),
-                    InlineKeyboardButton(
-                        text=emojis[1],
-                        callback_data=f"verify_slider:{chat_id}:{user_id}:1",
-                    ),
-                    InlineKeyboardButton(
-                        text=emojis[2],
-                        callback_data=f"verify_slider:{chat_id}:{user_id}:2",
-                    ),
-                    InlineKeyboardButton(
-                        text=emojis[3],
-                        callback_data=f"verify_slider:{chat_id}:{user_id}:3",
-                    ),
-                ],
-            ]
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内点击绿色方块：\n\n"  # ✅ P1-7: 使用传入的超时参数
-            f"{''.join(emojis)}"
-        )
+        cells = ["⬜", "⬜", "⬜", "⬜"]
+        cells[correct_position] = "🟩"
 
         # 存储验证状态和答案到 Redis
         redis = get_redis()
@@ -276,62 +290,22 @@ class VerificationService:
             f"slider:{correct_position}",  # 格式: slider:位置
         )
 
-        return VerificationChallenge(
-            challenge_type="slider",
-            question=question,
-            answer=str(correct_position),
-            keyboard=keyboard,
-        )
+        return SliderChallenge(cells=tuple(cells))
 
     @staticmethod
-    async def generate_qa_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+    async def generate_qa_challenge(chat_id: int, user_id: int, timeout: int = 60) -> QAChallenge:
         """生成问答验证挑战
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
         """
         # 从题库随机选择一题
         qa = secrets.choice(QA_QUESTIONS)
         question_text = qa["question"]
-        options = qa["options"]
+        options = list(qa["options"])
         correct_index = qa["answer"]
-
-        # 创建按钮（2行2列）
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=options[0],
-                        callback_data=f"verify_qa:{chat_id}:{user_id}:0",
-                    ),
-                    InlineKeyboardButton(
-                        text=options[1],
-                        callback_data=f"verify_qa:{chat_id}:{user_id}:1",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=options[2],
-                        callback_data=f"verify_qa:{chat_id}:{user_id}:2",
-                    ),
-                    InlineKeyboardButton(
-                        text=options[3],
-                        callback_data=f"verify_qa:{chat_id}:{user_id}:3",
-                    ),
-                ],
-            ]
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内回答问题：\n\n"
-            f"❓ {question_text}"
-        )
 
         # 存储验证状态和答案到 Redis
         redis = get_redis()
@@ -342,23 +316,18 @@ class VerificationService:
             f"qa:{correct_index}",
         )
 
-        return VerificationChallenge(
-            challenge_type="qa",
-            question=question,
-            answer=str(correct_index),
-            keyboard=keyboard,
-        )
+        # options 顺序即按钮顺序（2行2列），题面/选项文案由 render 层按 locale 渲染
+        return QAChallenge(question=question_text, options=tuple(options))
 
     @staticmethod
     async def generate_emoji_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> EmojiChallenge:
         """生成表情验证挑战
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
         """
         # 从映射表随机选择一个
@@ -376,38 +345,6 @@ class VerificationService:
         # 找到正确答案的新位置
         correct_index = all_emojis.index(correct_emoji)
 
-        # 创建按钮
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=all_emojis[0],
-                        callback_data=f"verify_emoji:{chat_id}:{user_id}:0",
-                    ),
-                    InlineKeyboardButton(
-                        text=all_emojis[1],
-                        callback_data=f"verify_emoji:{chat_id}:{user_id}:1",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=all_emojis[2],
-                        callback_data=f"verify_emoji:{chat_id}:{user_id}:2",
-                    ),
-                    InlineKeyboardButton(
-                        text=all_emojis[3],
-                        callback_data=f"verify_emoji:{chat_id}:{user_id}:3",
-                    ),
-                ],
-            ]
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内选择对应的表情：\n\n"
-            f"❓ {description}"
-        )
-
         # 存储验证状态和答案到 Redis
         redis = get_redis()
         key = RedisKeys.verification(chat_id, user_id)
@@ -417,23 +354,17 @@ class VerificationService:
             f"emoji:{correct_index}",
         )
 
-        return VerificationChallenge(
-            challenge_type="emoji",
-            question=question,
-            answer=str(correct_index),
-            keyboard=keyboard,
-        )
+        return EmojiChallenge(description=description, emojis=tuple(all_emojis))
 
     @staticmethod
     async def generate_captcha_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> CaptchaChallenge:
         """生成图片验证码挑战
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
         """
         # 生成随机验证码（4位数字+字母）
@@ -450,29 +381,6 @@ class VerificationService:
         image_bytes.seek(0)
         photo = BufferedInputFile(image_bytes.read(), filename="captcha.png")
 
-        # 创建按钮
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✏️ 输入验证码",
-                        callback_data=f"verify_captcha_input:{chat_id}:{user_id}",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🔄 换一张",
-                        callback_data=f"verify_captcha_refresh:{chat_id}:{user_id}",
-                    ),
-                ],
-            ]
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内输入图片中的验证码（不区分大小写）："
-        )
-
         # 存储验证状态和答案到 Redis
         redis = get_redis()
         key = RedisKeys.verification(chat_id, user_id)
@@ -482,18 +390,12 @@ class VerificationService:
             f"captcha:{captcha_text.upper()}",
         )
 
-        return VerificationChallenge(
-            challenge_type="captcha",
-            question=question,
-            answer=captcha_text.upper(),
-            keyboard=keyboard,
-            photo=photo,
-        )
+        return CaptchaChallenge(photo=photo)
 
     @staticmethod
     async def generate_honeypot_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> HoneypotChallenge:
         """生成蜜罐验证挑战
 
         蜜罐验证包含一个数学题和诱饵按钮，机器人可能会点击诱饵
@@ -501,7 +403,6 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
         """
         # 生成简单的加法题
@@ -509,9 +410,8 @@ class VerificationService:
         num2 = secrets.randbelow(10) + 1
         correct_answer = num1 + num2
 
-        # 生成诱饵按钮文本（看起来像"跳过"或"通过"）
-        decoy_texts = ["✅ 跳过验证", "✅ 直接通过", "✅ 我是人类"]
-        decoy_text = secrets.choice(decoy_texts)
+        # 诱饵用稳定 code，renderer 按 locale 映射展示文本（如"✅ 跳过验证"）
+        decoy = secrets.choice(_HONEYPOT_DECOYS)
 
         # 生成错误答案
         wrong_answers: list[int] = []
@@ -519,38 +419,6 @@ class VerificationService:
             wrong = secrets.randbelow(20) + 1
             if wrong != correct_answer and wrong not in wrong_answers:
                 wrong_answers.append(wrong)
-
-        # 创建按钮布局：第一行是诱饵，第二行是真实选项
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=decoy_text,
-                        callback_data=f"verify_honeypot:{chat_id}:{user_id}:trap",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=str(wrong_answers[0]),
-                        callback_data=f"verify_honeypot:{chat_id}:{user_id}:{wrong_answers[0]}",
-                    ),
-                    InlineKeyboardButton(
-                        text=str(correct_answer),
-                        callback_data=f"verify_honeypot:{chat_id}:{user_id}:{correct_answer}",
-                    ),
-                    InlineKeyboardButton(
-                        text=str(wrong_answers[1]),
-                        callback_data=f"verify_honeypot:{chat_id}:{user_id}:{wrong_answers[1]}",
-                    ),
-                ],
-            ]
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n"
-            f"请在 {timeout} 秒内回答问题：\n\n"
-            f"❓ {num1} + {num2} = ?"
-        )
 
         # 存储验证状态和答案到 Redis
         redis = get_redis()
@@ -561,17 +429,17 @@ class VerificationService:
             f"honeypot:{correct_answer}",
         )
 
-        return VerificationChallenge(
-            challenge_type="honeypot",
-            question=question,
-            answer=str(correct_answer),
-            keyboard=keyboard,
+        # 选项顺序即按钮顺序（第二行三个真实选项）
+        return HoneypotChallenge(
+            expression=f"{num1} + {num2}",
+            choices=(wrong_answers[0], correct_answer, wrong_answers[1]),
+            decoy=decoy,
         )
 
     @staticmethod
     async def generate_puzzle_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> PuzzleChallenge:
         """生成拼图验证挑战
 
         用户需要选择灰色缺口的正确位置
@@ -579,7 +447,6 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
         """
         from PIL import Image, ImageDraw
@@ -645,47 +512,17 @@ class VerificationService:
         img_bytes.seek(0)
         photo = BufferedInputFile(img_bytes.read(), filename="puzzle.png")
 
-        # 7. 创建按钮
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="1️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:0"
-                    ),
-                    InlineKeyboardButton(
-                        text="2️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:1"
-                    ),
-                    InlineKeyboardButton(
-                        text="3️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:2"
-                    ),
-                    InlineKeyboardButton(
-                        text="4️⃣", callback_data=f"verify_puzzle:{chat_id}:{user_id}:3"
-                    ),
-                ],
-            ]
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内选择灰色缺口的位置："
-        )
-
-        # 8. 存储答案到 Redis
+        # 7. 存储答案到 Redis（选项为固定 4 个位置，由 renderer 渲染按钮）
         redis = get_redis()
         key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(key, timeout + 10, f"puzzle:{correct_idx}")  # ✅ TTL 比超时时间多 10 秒
 
-        return VerificationChallenge(
-            challenge_type="puzzle",
-            question=question,
-            answer=str(correct_idx),
-            keyboard=keyboard,
-            photo=photo,
-        )
+        return PuzzleChallenge(photo=photo)
 
     @staticmethod
     async def generate_turnstile_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> WebAppChallenge:
         """生成 Turnstile 验证挑战
 
         使用统一 CAPTCHA WebApp 完成 Cloudflare Turnstile 人机验证
@@ -693,17 +530,11 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
-
-        Returns:
-            VerificationChallenge 对象,包含 WebApp 按钮
 
         Raises:
             ValueError: 未配置 CAPTCHA_WEBAPP_URL
         """
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
-
         from src.core.config import settings
 
         if not settings.captcha_webapp_url:
@@ -732,32 +563,12 @@ class VerificationService:
         verify_key = RedisKeys.verification(chat_id, user_id)
         await redis.setex(verify_key, timeout + 10, "turnstile:pending")
 
-        # 创建 WebApp 按钮（使用 KeyboardButton 以支持 tg.sendData()）
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [
-                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
-                ],
-            ],
-            resize_keyboard=True,  # 自动调整按钮大小
-            one_time_keyboard=True,  # 点击后自动隐藏键盘
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
-        )
-
-        return VerificationChallenge(
-            challenge_type="turnstile",
-            question=question,
-            answer="turnstile",
-            keyboard=keyboard,
-        )
+        return WebAppChallenge(provider="turnstile", webapp_url=webapp_url)
 
     @staticmethod
     async def generate_friendly_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> WebAppChallenge:
         """生成 Friendly Captcha 验证挑战
 
         使用 Friendly Captcha 进行隐私友好的人机验证
@@ -766,14 +577,11 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
 
-        Returns:
-            VerificationChallenge 对象,包含 WebApp 按钮
+        Raises:
+            ValueError: Friendly Captcha 未配置或未启用
         """
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
-
         from src.core.config import settings
 
         # 验证配置
@@ -804,32 +612,12 @@ class VerificationService:
             f"&token={verify_token}&key_index={key_index}"
         )
 
-        # 创建 WebApp 按钮
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [
-                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
-                ],
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
-        )
-
-        return VerificationChallenge(
-            challenge_type="friendly",
-            question=question,
-            answer="friendly",
-            keyboard=keyboard,
-        )
+        return WebAppChallenge(provider="friendly", webapp_url=webapp_url)
 
     @staticmethod
     async def generate_hcaptcha_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> WebAppChallenge:
         """生成 hCaptcha 验证挑战
 
         使用 hCaptcha 进行图片验证
@@ -838,14 +626,11 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
 
-        Returns:
-            VerificationChallenge 对象,包含 WebApp 按钮
+        Raises:
+            ValueError: hCaptcha 未配置或未启用
         """
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
-
         from src.core.config import settings
 
         # 验证配置
@@ -871,32 +656,12 @@ class VerificationService:
             f"&token={verify_token}"
         )
 
-        # 创建 WebApp 按钮
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [
-                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
-                ],
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
-        )
-
-        return VerificationChallenge(
-            challenge_type="hcaptcha",
-            question=question,
-            answer="hcaptcha",
-            keyboard=keyboard,
-        )
+        return WebAppChallenge(provider="hcaptcha", webapp_url=webapp_url)
 
     @staticmethod
     async def generate_mtcaptcha_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> WebAppChallenge:
         """生成 MTCaptcha 验证挑战
 
         使用 MTCaptcha 进行自适应无感验证
@@ -904,14 +669,11 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
 
-        Returns:
-            VerificationChallenge 对象,包含 WebApp 按钮
+        Raises:
+            ValueError: MTCaptcha 未配置或未启用
         """
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
-
         from src.core.config import settings
 
         # 验证配置
@@ -937,32 +699,12 @@ class VerificationService:
             f"&token={verify_token}"
         )
 
-        # 创建 WebApp 按钮
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [
-                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
-                ],
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
-        )
-
-        return VerificationChallenge(
-            challenge_type="mtcaptcha",
-            question=question,
-            answer="mtcaptcha",
-            keyboard=keyboard,
-        )
+        return WebAppChallenge(provider="mtcaptcha", webapp_url=webapp_url)
 
     @staticmethod
     async def generate_altcha_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
-    ) -> VerificationChallenge:
+        chat_id: int, user_id: int, timeout: int = 60
+    ) -> WebAppChallenge:
         """生成 ALTCHA 验证挑战
 
         使用 ALTCHA 进行开源 Proof-of-Work 验证
@@ -971,14 +713,11 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
 
-        Returns:
-            VerificationChallenge 对象,包含 WebApp 按钮
+        Raises:
+            ValueError: ALTCHA 未配置或未启用
         """
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
-
         from src.core.config import settings
 
         # 验证配置
@@ -1004,31 +743,11 @@ class VerificationService:
             f"&token={verify_token}"
         )
 
-        # 创建 WebApp 按钮
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [
-                    KeyboardButton(text="🔐 开始验证", web_app=WebAppInfo(url=webapp_url)),
-                ],
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-
-        question = (
-            f"👋 欢迎 {escape_html(username)}！\n\n" f"请在 {timeout} 秒内点击下方按钮完成验证："
-        )
-
-        return VerificationChallenge(
-            challenge_type="altcha",
-            question=question,
-            answer="altcha",
-            keyboard=keyboard,
-        )
+        return WebAppChallenge(provider="altcha", webapp_url=webapp_url)
 
     @staticmethod
     async def generate_random_challenge(
-        chat_id: int, user_id: int, username: str, timeout: int = 60
+        chat_id: int, user_id: int, timeout: int = 60
     ) -> VerificationChallenge:
         """生成随机类型的验证挑战
 
@@ -1038,7 +757,6 @@ class VerificationService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
-            username: 用户名
             timeout: 验证超时时间(秒)
         """
         from src.core.config import settings
@@ -1066,54 +784,21 @@ class VerificationService:
         selected_type = secrets.choice(available_types)
 
         # 根据选择的类型生成对应的挑战
-        if selected_type == "math":
-            return await VerificationService.generate_math_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "slider":
-            return await VerificationService.generate_slider_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "qa":
-            return await VerificationService.generate_qa_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "emoji":
-            return await VerificationService.generate_emoji_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "captcha":
-            return await VerificationService.generate_captcha_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "puzzle":
-            return await VerificationService.generate_puzzle_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "honeypot":
-            return await VerificationService.generate_honeypot_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "turnstile":
-            return await VerificationService.generate_turnstile_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "friendly":
-            return await VerificationService.generate_friendly_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "hcaptcha":
-            return await VerificationService.generate_hcaptcha_challenge(
-                chat_id, user_id, username, timeout
-            )
-        elif selected_type == "mtcaptcha":
-            return await VerificationService.generate_mtcaptcha_challenge(
-                chat_id, user_id, username, timeout
-            )
-        else:  # altcha
-            return await VerificationService.generate_altcha_challenge(
-                chat_id, user_id, username, timeout
-            )
+        generators: dict[str, Callable[[int, int, int], Awaitable[VerificationChallenge]]] = {
+            "math": VerificationService.generate_math_challenge,
+            "slider": VerificationService.generate_slider_challenge,
+            "qa": VerificationService.generate_qa_challenge,
+            "emoji": VerificationService.generate_emoji_challenge,
+            "captcha": VerificationService.generate_captcha_challenge,
+            "puzzle": VerificationService.generate_puzzle_challenge,
+            "honeypot": VerificationService.generate_honeypot_challenge,
+            "turnstile": VerificationService.generate_turnstile_challenge,
+            "friendly": VerificationService.generate_friendly_challenge,
+            "hcaptcha": VerificationService.generate_hcaptcha_challenge,
+            "mtcaptcha": VerificationService.generate_mtcaptcha_challenge,
+            "altcha": VerificationService.generate_altcha_challenge,
+        }
+        return await generators[selected_type](chat_id, user_id, timeout)
 
     @staticmethod
     async def verify_answer(chat_id: int, user_id: int, answer: str) -> bool:
