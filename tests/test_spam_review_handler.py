@@ -391,3 +391,180 @@ async def test_ban_user_default_rejects_a_left_member() -> None:
     assert success is False
     assert error == "用户不在群组中"
     bot.ban_chat_member.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    (
+        "confidence",
+        "service_name",
+        "other_service_name",
+        "duration",
+        "punishment_key",
+        "expected_reason",
+    ),
+    [
+        (
+            0.95,
+            "ban_user_temporarily",
+            "mute_user",
+            60,
+            "temporary_ban",
+            "垃圾信息（高置信度）: rule:url",
+        ),
+        (
+            0.5,
+            "mute_user",
+            "ban_user_temporarily",
+            10,
+            "mute",
+            "垃圾信息: rule:url",
+        ),
+    ],
+)
+async def test_apply_immediate_punishment_selects_action_and_records_feedback(
+    mocker,
+    localizer,
+    confidence,
+    service_name,
+    other_service_name,
+    duration,
+    punishment_key,
+    expected_reason,
+) -> None:
+    message = _message()
+    bot = SimpleNamespace(id=999)
+    result = {"confidence": confidence, "reasons": ["rule:url"]}
+    mocker.patch.object(antispam.settings, "spam_high_confidence_threshold", 0.8)
+    selected_service = mocker.patch.object(
+        antispam.ModerationService, service_name, new=AsyncMock(return_value=(True, None))
+    )
+    other_service = mocker.patch.object(
+        antispam.ModerationService, other_service_name, new=AsyncMock()
+    )
+    redis = SimpleNamespace(setex=AsyncMock())
+    mocker.patch.object(antispam, "get_redis", return_value=redis)
+    detector = SimpleNamespace(add_feedback=AsyncMock())
+    mocker.patch.object(antispam, "get_detector", return_value=detector)
+    mocker.patch.object(
+        antispam, "get_chat_administrators_mention", new=AsyncMock(return_value="@admins")
+    )
+    mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
+    render = mocker.patch.object(antispam, "build_immediate_processed", return_value="processed")
+    keyboard = mocker.patch.object(antispam, "build_immediate_keyboard", return_value="keyboard")
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
+
+    await antispam._apply_immediate_punishment(
+        message,
+        bot,
+        result,
+        message_type=SpamMessageType.photo,
+        recognized_text="recognized text",
+    )
+
+    message.delete.assert_awaited_once()
+    selected_service.assert_awaited_once_with(
+        bot=bot,
+        chat_id=CHAT_ID,
+        user_id=OFFENDER_ID,
+        operator_id=999,
+        duration=duration,
+        reason=expected_reason,
+    )
+    other_service.assert_not_awaited()
+    redis.setex.assert_awaited_once_with(
+        antispam.RedisKeys.spam_message_text(CHAT_ID, ORIG_MSG_ID), 86400, "recognized text"
+    )
+    render.assert_called_once_with(
+        localizer,
+        message_type=SpamMessageType.photo,
+        offender_mention="Offender",
+        reason_codes=("rule:url",),
+        confidence=confidence,
+        punishment_key=punishment_key,
+        message_id=ORIG_MSG_ID,
+    )
+    keyboard.assert_called_once_with(localizer, OFFENDER_ID, ORIG_MSG_ID)
+    message.answer.assert_awaited_once_with("🔔 @admins\n\nprocessed", reply_markup="keyboard")
+    auto_delete.assert_awaited_once_with(message.answer.return_value)
+    detector.add_feedback.assert_awaited_once_with(
+        text="recognized text", is_spam=True, labeled_by=999, confidence=confidence
+    )
+
+
+async def test_apply_immediate_punishment_stops_when_action_fails(mocker) -> None:
+    message = _message()
+    bot = SimpleNamespace(id=999)
+    mocker.patch.object(antispam.settings, "spam_high_confidence_threshold", 0.8)
+    ban = mocker.patch.object(
+        antispam.ModerationService,
+        "ban_user_temporarily",
+        new=AsyncMock(return_value=(False, "permission denied")),
+    )
+    mute = mocker.patch.object(antispam.ModerationService, "mute_user", new=AsyncMock())
+    get_redis = mocker.patch.object(antispam, "get_redis")
+    get_detector = mocker.patch.object(antispam, "get_detector")
+    log_error = mocker.patch.object(antispam.logger, "error")
+
+    await antispam._apply_immediate_punishment(
+        message,
+        bot,
+        {"confidence": 0.95, "reasons": ["rule:url"]},
+        message_type=SpamMessageType.text,
+    )
+
+    message.delete.assert_awaited_once()
+    ban.assert_awaited_once()
+    mute.assert_not_awaited()
+    log_error.assert_called_once_with("处罚垃圾用户失败: permission denied")
+    get_redis.assert_not_called()
+    get_detector.assert_not_called()
+    message.answer.assert_not_awaited()
+
+
+async def test_route_spam_detection_uses_review_when_enabled(mocker) -> None:
+    message = _message()
+    bot = MagicMock()
+    result = {"confidence": 0.91, "reasons": ["rule:url"]}
+    group = SimpleNamespace(spam_confirm_enabled=True)
+    review = mocker.patch.object(antispam, "_handle_spam_with_review", new=AsyncMock())
+    immediate = mocker.patch.object(antispam, "_apply_immediate_punishment", new=AsyncMock())
+
+    await antispam._route_spam_detection(
+        message,
+        bot,
+        result,
+        group,
+        message_type=SpamMessageType.sticker,
+        recognized_text="recognized text",
+    )
+
+    review.assert_awaited_once_with(
+        message,
+        bot,
+        result,
+        message_type=SpamMessageType.sticker,
+        recognized_text="recognized text",
+    )
+    immediate.assert_not_awaited()
+
+
+async def test_route_spam_detection_uses_immediate_when_disabled(mocker) -> None:
+    message = _message()
+    bot = MagicMock()
+    result = {"confidence": 0.91, "reasons": ["rule:url"]}
+    group = SimpleNamespace(spam_confirm_enabled=False)
+    review = mocker.patch.object(antispam, "_handle_spam_with_review", new=AsyncMock())
+    immediate = mocker.patch.object(antispam, "_apply_immediate_punishment", new=AsyncMock())
+
+    await antispam._route_spam_detection(
+        message, bot, result, group, message_type=SpamMessageType.edited_text
+    )
+
+    immediate.assert_awaited_once_with(
+        message,
+        bot,
+        result,
+        message_type=SpamMessageType.edited_text,
+        recognized_text=None,
+    )
+    review.assert_not_awaited()

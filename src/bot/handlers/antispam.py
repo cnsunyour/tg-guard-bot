@@ -23,6 +23,10 @@ from loguru import logger
 from PIL import Image
 
 from src.bot.handlers.antispam_render import (
+    PunishmentKey,
+    build_feedback_result,
+    build_immediate_keyboard,
+    build_immediate_processed,
     build_review_ban_result,
     build_review_false_positive_result,
     build_review_keyboard,
@@ -460,119 +464,119 @@ async def _handle_spam_with_review(
     )
 
 
-async def _handle_spam_immediately(
+async def _apply_immediate_punishment(
     message: Message,
     bot: Bot,
     result: dict[str, Any],
-    _group: Group,
+    *,
+    message_type: SpamMessageType,
+    recognized_text: str | None = None,
 ) -> None:
-    """立即处罚模式处理（现有流程）
+    """删除垃圾消息、立即处罚，并发送可反馈的本地化通知。
 
-    流程：
-    1. 删除垃圾消息
-    2. 根据置信度决定处罚措施（高置信度：踢出封禁，低置信度：禁言）
-    3. 发送提示消息（包含反馈按钮）
-    4. 入库正样本
-
-    Args:
-        message: 原消息对象
-        bot: Bot 实例
-        result: 检测结果
-        _group: 群组配置
+    提取自原 _handle_spam_immediately + sticker / edited 内联处罚：按置信度选
+    ban_user_temporarily / mute_user，缓存样本文本供 spam_feedback，按群 locale
+    渲染通知（含反馈按钮）+ auto_delete，入库正样本。
     """
-    # 检查消息发送者
     if not message.from_user:
         logger.warning("消息缺少发送者信息，跳过处理")
         return
 
     try:
-        # 删除垃圾消息
         await message.delete()
+        reasons = ", ".join(str(reason) for reason in result["reasons"])
 
-        # 根据置信度决定处罚措施
+        punishment_key: PunishmentKey
         if result["confidence"] >= settings.spam_high_confidence_threshold:
-            # 高置信度：踢出并封禁 1 小时
             success, error_msg = await ModerationService.ban_user_temporarily(
                 bot=bot,
                 chat_id=message.chat.id,
                 user_id=message.from_user.id,
                 operator_id=bot.id,
-                duration=60,  # 60 分钟 = 1 小时
-                reason=f"垃圾信息（高置信度）: {', '.join(result['reasons'])}",
+                duration=60,
+                reason=f"垃圾信息（高置信度）: {reasons}",
             )
-            punishment_text = "踢出并封禁 1 小时"
+            punishment_key = "temporary_ban"
         else:
-            # 低置信度：禁言 10 分钟
             success, error_msg = await ModerationService.mute_user(
                 bot=bot,
                 chat_id=message.chat.id,
                 user_id=message.from_user.id,
-                operator_id=bot.id,  # Bot 作为操作者
-                duration=10,  # 10分钟
-                reason=f"垃圾信息: {', '.join(result['reasons'])}",
+                operator_id=bot.id,
+                duration=10,
+                reason=f"垃圾信息: {reasons}",
             )
-            punishment_text = "禁言 10 分钟"
+            punishment_key = "mute"
 
-        if success:
-            # 缓存原始消息文本，用于管理员反馈
-            # TTL 1天，给管理员充足的时间进行反馈
-            redis = get_redis()
-            text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
-            await redis.setex(text_cache_key, 86400, message.text or "")
+        if not success:
+            logger.error(f"处罚垃圾用户失败: {error_msg}")
+            return
 
-            # 获取管理员 mention
-            admin_mentions = await get_chat_administrators_mention(
-                bot=bot,
-                chat_id=message.chat.id,
-            )
+        sample_text = recognized_text or message.text or message.caption or ""
+        await get_redis().setex(
+            RedisKeys.spam_message_text(message.chat.id, message.message_id),
+            86400,
+            sample_text,
+        )
 
-            # 发送提示消息（包含管理员反馈按钮）
-            message_id_str = str(message.message_id)
+        admin_mentions = await get_chat_administrators_mention(bot, message.chat.id)
+        group_locale = await get_resolver().for_group(message.chat.id)
+        localizer = get_translator().for_locale(group_locale)
+        text = build_immediate_processed(
+            localizer,
+            message_type=message_type,
+            offender_mention=format_user_mention(message.from_user),
+            reason_codes=tuple(str(reason) for reason in result["reasons"]),
+            confidence=result["confidence"],
+            punishment_key=punishment_key,
+            message_id=message.message_id,
+        )
+        header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+        alert_msg = await message.answer(
+            header + text,
+            reply_markup=build_immediate_keyboard(
+                localizer, message.from_user.id, message.message_id
+            ),
+        )
+        await auto_delete_message(alert_msg)
 
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="✅ 误判",
-                            callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
-                        ),
-                        InlineKeyboardButton(
-                            text="❌ 确认垃圾",
-                            callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
-                        ),
-                    ]
-                ]
-            )
-
-            # 构建消息 header（包含管理员 mention）
-            alert_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
-
-            alert_msg = await message.answer(
-                f"{alert_header}"
-                f"🚫 检测到垃圾信息并已处理\n\n"
-                f"用户: {format_user_mention(message.from_user)}\n"
-                f"原因: {', '.join(result['reasons'])}\n"
-                f"置信度: {result['confidence']:.2%}\n"
-                f"处罚: {punishment_text}\n"
-                f"消息 ID: {message.message_id}",
-                reply_markup=keyboard,
-            )
-            await auto_delete_message(alert_msg)
-
-            # 记录原始消息文本用于反馈
-            detector = get_detector()
-            await detector.add_feedback(
-                text=message.text or "",
-                is_spam=True,
-                labeled_by=bot.id,
-                confidence=result["confidence"],
-            )
-
-        else:
-            logger.error(f"禁言垃圾用户失败: {error_msg}")
-
+        detector = get_detector()
+        await detector.add_feedback(
+            text=sample_text,
+            is_spam=True,
+            labeled_by=bot.id,
+            confidence=result["confidence"],
+        )
     except Exception as e:
         logger.error(f"处理垃圾消息失败: {e}")
+
+
+async def _route_spam_detection(
+    message: Message,
+    bot: Bot,
+    result: dict[str, Any],
+    group: Group | None,
+    *,
+    message_type: SpamMessageType,
+    recognized_text: str | None = None,
+) -> None:
+    """按群组确认模式配置分发垃圾消息（确认→review，否则→立即处罚）。"""
+    if group and group.spam_confirm_enabled:
+        await _handle_spam_with_review(
+            message,
+            bot,
+            result,
+            message_type=message_type,
+            recognized_text=recognized_text,
+        )
+    else:
+        await _apply_immediate_punishment(
+            message,
+            bot,
+            result,
+            message_type=message_type,
+            recognized_text=recognized_text,
+        )
 
 
 @router.message(Command("antispam"))
@@ -1266,22 +1270,13 @@ async def on_message(message: Message, bot: Bot) -> None:
         )
 
         # 根据群组配置决定处理方式
-        if group and group.spam_confirm_enabled:
-            # 确认模式：创建状态快照，等待管理员审核（message.answer + Redis 关联）
-            await _handle_spam_with_review(
-                message=message,
-                bot=bot,
-                result=dict(result),  # type: ignore[arg-type]
-                message_type=SpamMessageType.text,
-            )
-        else:
-            # 关闭确认模式：按现有流程立即处罚
-            await _handle_spam_immediately(
-                message=message,
-                bot=bot,
-                result=dict(result),  # type: ignore[arg-type]
-                _group=group if group else None,  # type: ignore[arg-type]
-            )
+        await _route_spam_detection(
+            message,
+            bot,
+            dict(result),  # type: ignore[arg-type]
+            group,
+            message_type=SpamMessageType.text,
+        )
     else:
         # ✅ 消息通过检测，记录到上下文缓存（防止污染上下文）
         await ContextService.record_message(message)
@@ -1408,97 +1403,14 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         # 获取识别出的文本（如果有）
         recognized_text = result.get("details", {}).get("recognized_text", "")
 
-        # 根据群组配置决定处理方式
-        if group and group.spam_confirm_enabled:
-            # 确认模式：3b-3 起新 review 流程（sticker/edited 将在 3b-4 接入）
-            await _handle_spam_with_review(
-                message=message,
-                bot=bot,
-                result=dict(result),  # type: ignore[arg-type]
-                message_type=SpamMessageType.photo,
-                recognized_text=recognized_text,
-            )
-        else:
-            # 立即处罚模式：删除消息，立即处罚
-            try:
-                # 删除垃圾消息
-                await message.delete()
-
-                # 根据置信度决定处罚措施
-                if result["confidence"] >= settings.spam_high_confidence_threshold:
-                    # 高置信度：踢出并封禁 1 小时
-                    success, error_msg = await ModerationService.ban_user_temporarily(
-                        bot=bot,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id,
-                        operator_id=bot.id,
-                        duration=60,  # 60 分钟 = 1 小时
-                        reason=f"图片垃圾信息（高置信度）: {', '.join(result['reasons'])}",
-                    )
-                    punishment_text = "踢出并封禁 1 小时"
-                else:
-                    # 低置信度：禁言 10 分钟
-                    success, error_msg = await ModerationService.mute_user(
-                        bot=bot,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id,
-                        operator_id=bot.id,
-                        duration=10,
-                        reason=f"图片垃圾信息: {', '.join(result['reasons'])}",
-                    )
-                    punishment_text = "禁言 10 分钟"
-
-                if success:
-                    # 缓存识别文本用于管理员反馈（如果有）
-                    if recognized_text:
-                        redis = get_redis()
-                        text_cache_key = RedisKeys.spam_message_text(
-                            message.chat.id, message.message_id
-                        )
-                        await redis.setex(text_cache_key, 86400, recognized_text)
-
-                    # 发送提示消息（包含管理员反馈按钮）
-                    message_id_str = str(message.message_id)
-
-                    keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="✅ 误判",
-                                    callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
-                                ),
-                                InlineKeyboardButton(
-                                    text="❌ 确认垃圾",
-                                    callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
-                                ),
-                            ]
-                        ]
-                    )
-
-                    alert_msg = await message.answer(
-                        f"🚫 检测到图片垃圾信息并已处理\n\n"
-                        f"用户: {format_user_mention(message.from_user)}\n"
-                        f"原因: {', '.join(result['reasons'])}\n"
-                        f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: {punishment_text}\n"
-                        f"消息 ID: {message.message_id}",
-                        reply_markup=keyboard,
-                    )
-                    await auto_delete_message(alert_msg)
-
-                    # 记录反馈（如果有识别文本）
-                    if recognized_text:
-                        await detector.add_feedback(
-                            text=recognized_text,
-                            is_spam=True,
-                            labeled_by=bot.id,
-                            confidence=result["confidence"],
-                        )
-                else:
-                    logger.error(f"处罚用户失败: {error_msg}")
-
-            except Exception as e:
-                logger.error(f"处理图片垃圾消息失败: {e}")
+        await _route_spam_detection(
+            message,
+            bot,
+            dict(result),  # type: ignore[arg-type]
+            group,
+            message_type=SpamMessageType.photo,
+            recognized_text=recognized_text,
+        )
 
 
 @router.message(F.sticker)
@@ -1918,87 +1830,14 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                 f"原因: {', '.join(result['reasons'])}"
             )
 
-            try:
-                # 删除垃圾消息
-                await message.delete()
-
-                # 根据置信度决定处罚措施
-                if result["confidence"] >= settings.spam_high_confidence_threshold:
-                    # 高置信度：踢出并封禁 1 小时
-                    success, error_msg = await ModerationService.ban_user_temporarily(
-                        bot=bot,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id,
-                        operator_id=bot.id,
-                        duration=60,  # 60 分钟 = 1 小时
-                        reason=f"贴纸垃圾信息（高置信度）: {', '.join(result['reasons'])}",
-                    )
-                    punishment_text = "踢出并封禁 1 小时"
-                else:
-                    # 低置信度：禁言 10 分钟
-                    success, error_msg = await ModerationService.mute_user(
-                        bot=bot,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id,
-                        operator_id=bot.id,
-                        duration=10,
-                        reason=f"贴纸垃圾信息: {', '.join(result['reasons'])}",
-                    )
-                    punishment_text = "禁言 10 分钟"
-
-                if success:
-                    # 缓存原始消息的识别文本，用于管理员反馈（TTL 1天）
-                    if "recognized_text" in result["details"]:
-                        redis = get_redis()
-                        text_cache_key = RedisKeys.spam_message_text(
-                            message.chat.id, message.message_id
-                        )
-                        await redis.setex(
-                            text_cache_key, 86400, result["details"]["recognized_text"]
-                        )
-
-                    # 发送提示消息
-                    message_id_str = str(message.message_id)
-
-                    keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="✅ 误判",
-                                    callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
-                                ),
-                                InlineKeyboardButton(
-                                    text="❌ 确认垃圾",
-                                    callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
-                                ),
-                            ]
-                        ]
-                    )
-
-                    alert_msg = await message.answer(
-                        f"🚫 检测到贴纸垃圾信息并已处理\n\n"
-                        f"用户: {format_user_mention(message.from_user)}\n"
-                        f"原因: {', '.join(result['reasons'])}\n"
-                        f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: {punishment_text}\n"
-                        f"消息 ID: {message.message_id}",
-                        reply_markup=keyboard,
-                    )
-                    await auto_delete_message(alert_msg)
-
-                    # 记录反馈
-                    if "recognized_text" in result["details"]:
-                        await detector.add_feedback(
-                            text=result["details"]["recognized_text"],
-                            is_spam=True,
-                            labeled_by=bot.id,
-                            confidence=result["confidence"],
-                        )
-                else:
-                    logger.error(f"禁言用户失败: {error_msg}")
-
-            except Exception as e:
-                logger.error(f"处理贴纸垃圾消息失败: {e}")
+            await _route_spam_detection(
+                message,
+                bot,
+                dict(result),  # type: ignore[arg-type]
+                group,
+                message_type=SpamMessageType.sticker,
+                recognized_text=result.get("details", {}).get("recognized_text"),
+            )
 
     except Exception as e:
         logger.error(f"贴纸检测失败: {e}")
@@ -2362,82 +2201,13 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
             f"原因: {', '.join(map(str, result['reasons']))}"
         )
 
-        try:
-            # 删除垃圾消息
-            await message.delete()
-
-            # 根据置信度决定处罚措施
-            if result["confidence"] >= settings.spam_high_confidence_threshold:
-                # 高置信度：踢出并封禁 1 小时
-                success, error_msg = await ModerationService.ban_user_temporarily(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,
-                    duration=60,  # 60 分钟 = 1 小时
-                    reason=f"编辑消息为垃圾信息（高置信度）: {', '.join(result['reasons'])}",
-                )
-                punishment_text = "踢出并封禁 1 小时"
-            else:
-                # 低置信度：禁言 10 分钟
-                success, error_msg = await ModerationService.mute_user(
-                    bot=bot,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id,
-                    operator_id=bot.id,
-                    duration=10,
-                    reason=f"编辑消息为垃圾信息: {', '.join(result['reasons'])}",
-                )
-                punishment_text = "禁言 10 分钟"
-
-            if success:
-                # 缓存原始消息文本，用于管理员反馈（TTL 1天）
-                redis = get_redis()
-                text_cache_key = RedisKeys.spam_message_text(message.chat.id, message.message_id)
-                await redis.setex(text_cache_key, 86400, message.text or "")
-
-                # 发送提示消息（包含管理员反馈按钮）
-                message_id_str = str(message.message_id)
-
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="✅ 误判",
-                                callback_data=f"spam_feedback:normal:{message.from_user.id}:{message_id_str}",
-                            ),
-                            InlineKeyboardButton(
-                                text="❌ 确认垃圾",
-                                callback_data=f"spam_feedback:spam:{message.from_user.id}:{message_id_str}",
-                            ),
-                        ]
-                    ]
-                )
-
-                alert_msg = await message.answer(
-                    f"🚫 检测到编辑消息为垃圾信息并已处理\n\n"
-                    f"用户: {format_user_mention(message.from_user)}\n"
-                    f"原因: {', '.join(result['reasons'])}\n"
-                    f"置信度: {result['confidence']:.2%}\n"
-                    f"处罚: {punishment_text}\n"
-                    f"消息 ID: {message.message_id}",
-                    reply_markup=keyboard,
-                )
-                await auto_delete_message(alert_msg)
-
-                # 记录反馈
-                await detector.add_feedback(
-                    text=message.text or "",
-                    is_spam=True,
-                    labeled_by=bot.id,
-                    confidence=result["confidence"],
-                )
-
-            else:
-                logger.error(f"处罚用户失败: {error_msg}")
-
-        except Exception as e:
-            logger.error(f"处理编辑的垃圾消息失败: {e}")
+        await _route_spam_detection(
+            message,
+            bot,
+            dict(result),  # type: ignore[arg-type]
+            group,
+            message_type=SpamMessageType.edited_text,
+        )
 
 
 @router.edited_message(F.photo)
@@ -2524,46 +2294,14 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
                 f"置信度: {result['confidence']:.2f}"
             )
 
-            try:
-                # 删除消息
-                await message.delete()
-
-                # 根据置信度决定处罚
-                if result["confidence"] >= settings.spam_high_confidence_threshold:
-                    success, _ = await ModerationService.ban_user_temporarily(
-                        bot=bot,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id,
-                        operator_id=bot.id,
-                        duration=60,
-                        reason=f"编辑图片标题为垃圾信息（高置信度）: {', '.join(result['reasons'])}",
-                    )
-                    punishment_text = "踢出并封禁 1 小时"
-                else:
-                    success, _ = await ModerationService.mute_user(
-                        bot=bot,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id,
-                        operator_id=bot.id,
-                        duration=10,
-                        reason=f"编辑图片标题为垃圾信息: {', '.join(result['reasons'])}",
-                    )
-                    punishment_text = "禁言 10 分钟"
-
-                if success:
-                    # 发送提示
-                    alert_msg = await message.answer(
-                        f"🚫 检测到编辑图片标题为垃圾信息并已处理\n\n"
-                        f"用户: {format_user_mention(message.from_user)}\n"
-                        f"原因: {', '.join(result['reasons'])}\n"
-                        f"置信度: {result['confidence']:.2%}\n"
-                        f"处罚: {punishment_text}\n"
-                        f"消息 ID: {message.message_id}"
-                    )
-                    await auto_delete_message(alert_msg)
-
-            except Exception as e:
-                logger.error(f"处理编辑图片标题垃圾失败: {e}")
+            await _route_spam_detection(
+                message,
+                bot,
+                dict(result),  # type: ignore[arg-type]
+                group,
+                message_type=SpamMessageType.edited_photo,
+                recognized_text=result.get("details", {}).get("recognized_text"),
+            )
 
 
 async def _answer_toast(
@@ -2745,25 +2483,23 @@ async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data.startswith("spam_feedback:"))
 async def on_spam_feedback(callback: CallbackQuery) -> None:
-    """处理管理员反馈
+    """处理管理员反馈（立即处罚后的事后纠正）。
 
-    ✅ P1-12: 从 Redis 缓存获取真实文本，而非使用 message_id
+    业务逻辑（缓存文本取值 / 误判删旧正样本 / 确认垃圾替换 AI 样本 / 误判 unmute /
+    自动训练）保留，仅文案 i18n（3b-4）。成功 toast 用简短 recorded，消息结果走
+    build_feedback_result（群 locale）。
     """
     try:
-        # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await _answer_toast(callback, "antispam.callback.invalid_data.toast")
             return
 
-        # 检查 bot 是否可用
         if not callback.bot:
-            await callback.answer("❌ Bot 实例不可用", show_alert=True)
+            await _answer_toast(callback, "antispam.callback.invalid_data.toast")
             return
-
-        from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await _answer_toast(callback, "antispam.callback.invalid_data.toast")
             return
 
         message: Message = callback.message
@@ -2777,7 +2513,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             if not await PermissionCache.is_admin(
                 callback.bot, message.chat.id, callback.from_user.id
             ):
-                await callback.answer("❌ 只有管理员可以提供反馈", show_alert=True)
+                await _answer_toast(callback, "antispam.callback.permission_denied.toast")
                 return
 
         detector = get_detector()
@@ -2795,13 +2531,11 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             if not is_spam:
                 from src.repositories.spam_repo import SpamRepository
 
-                # 查找该文本的正样本记录（如果存在）
                 existing_sample = await SpamRepository.find_sample_by_text(
                     cached_text, is_spam=True
                 )
 
                 if existing_sample:
-                    # 删除之前的正样本记录
                     deleted = await SpamRepository.delete_sample(existing_sample.id)
                     if deleted:
                         logger.info(
@@ -2812,13 +2546,11 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                 # ✅ 确认垃圾反馈：检查是否已存在 AI 自动入库的样本，避免重复
                 from src.repositories.spam_repo import SpamRepository
 
-                # 查找该文本的正样本记录（如果存在）
                 existing_sample = await SpamRepository.find_sample_by_text(
                     cached_text, is_spam=True
                 )
 
                 if existing_sample and existing_sample.labeled_by == -1:
-                    # 删除 AI 自动入库的样本（labeled_by=-1）
                     deleted = await SpamRepository.delete_sample(existing_sample.id)
                     if deleted:
                         logger.info(
@@ -2867,19 +2599,24 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
             logger.warning(
                 f"反馈文本缓存未命中 [消息ID:{message_id_str}]，可能是缓存过期或系统重启导致"
             )
-            await callback.answer("⚠️ 原始文本已过期，反馈可能不完整", show_alert=True)
+            await _answer_toast(callback, "antispam.feedback.expired.toast")
             return
 
-        # 更新消息
-        feedback_text = "✅ 确认为正常消息" if not is_spam else "❌ 确认为垃圾信息"
-        message_text = message.text if message.text else ""
+        # 更新消息（群 locale 渲染结果段 + 移除按钮）
+        group_locale = await get_resolver().for_group(message.chat.id)
+        localizer = get_translator().for_locale(group_locale)
         operator_mention = format_trusted_user_mention(callback.from_user)
-        await message.edit_text(message_text + f"\n\n{feedback_text} (by {operator_mention})")
+        feedback_result = build_feedback_result(localizer, is_spam, operator_mention)
+        await message.edit_text(
+            f"{message.text or ''}\n\n{feedback_result}",
+            reply_markup=None,
+        )
 
         # 自动删除提示消息
         await auto_delete_message(message, delay=30)
 
-        await callback.answer(f"反馈已记录: {feedback_text}")
+        # 成功 toast（简短，不弹框；edit_text 已展示完整结果）
+        await _answer_toast(callback, "antispam.feedback.recorded.toast", show_alert=False)
 
         logger.info(
             f"管理员反馈 [管理员:{callback.from_user.id}] 类型: {'垃圾' if is_spam else '正常'}"
@@ -2887,4 +2624,4 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
 
     except Exception as e:
         logger.error(f"处理管理员反馈失败: {e}")
-        await callback.answer("❌ 处理失败", show_alert=True)
+        await _answer_toast(callback, "antispam.callback.invalid_data.toast")
