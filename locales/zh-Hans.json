@@ -86,6 +86,7 @@
   "verification.honeypot.challenge.decoy.direct.button": "✅ 直接通过",
   "verification.honeypot.challenge.decoy.human.button": "✅ 我是人类",
   "verification.honeypot.challenge.decoy.skip.button": "✅ 跳过验证",
+  "verification.join.group.invited_by.message": "由管理员 {inviter} 邀请加入",
   "verification.join.group.welcome": "✅ 欢迎 {user} 加入群组！",
   "verification.math.challenge.join.message": "👋 欢迎 <b>{username}</b>！\n\n您已加入群组：<b>{chat_title}</b>\n\n请在 {timeout} 秒内回答问题：\n\n❓ <code>{expression}</code> = ?",
   "verification.math.challenge.join_request.message": "👋 欢迎 <b>{username}</b>！\n\n您请求加入群组：<b>{chat_title}</b>\n\n请在 {timeout} 秒内回答问题：\n\n❓ <code>{expression}</code> = ?",

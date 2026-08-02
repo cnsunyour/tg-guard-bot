@@ -86,6 +86,7 @@
   "verification.honeypot.challenge.decoy.direct.button": "✅ Pass directly",
   "verification.honeypot.challenge.decoy.human.button": "✅ I am human",
   "verification.honeypot.challenge.decoy.skip.button": "✅ Skip verification",
+  "verification.join.group.invited_by.message": "Invited by admin {inviter}",
   "verification.join.group.welcome": "✅ Welcome {user} to the group!",
   "verification.math.challenge.join.message": "👋 Welcome, <b>{username}</b>!\n\nYou have joined <b>{chat_title}</b>.\n\nPlease answer within {timeout} seconds:\n\n❓ <code>{expression}</code> = ?",
   "verification.math.challenge.join_request.message": "👋 Welcome, <b>{username}</b>!\n\nYou requested to join <b>{chat_title}</b>.\n\nPlease answer within {timeout} seconds:\n\n❓ <code>{expression}</code> = ?",

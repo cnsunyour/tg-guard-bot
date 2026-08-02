@@ -21,6 +21,7 @@ from aiogram.types import (
     InputMediaPhoto,
     Message,
     ReplyKeyboardRemove,
+    User,
 )
 from loguru import logger
 
@@ -258,6 +259,17 @@ async def send_verification_success_message(
         parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
     )
+
+
+async def send_group_welcome(bot: Bot, chat_id: int, user: User) -> Message:
+    """在群内发送欢迎消息（按群 locale 渲染），返回消息供调用方延迟删除。"""
+    group_locale = await get_resolver().for_group(chat_id)
+    welcome_text = (
+        get_translator()
+        .for_locale(group_locale)
+        .t("verification.join.group.welcome", user=format_user_mention(user))
+    )
+    return await bot.send_message(chat_id=chat_id, text=welcome_text)
 
 
 async def check_user_spam_info(
@@ -499,10 +511,8 @@ async def _handle_approved_join_request(bot: Bot, chat_id: int, user_id: int) ->
         logger.info(f"已批准用户 {user_id} 的加入请求（已验证用户）")
         # 不删除 approved_key：用户随后加入群组时由 on_user_join 恢复权限并消费此标记
         with contextlib.suppress(Exception):
-            await bot.send_message(
-                chat_id=user_id,
-                text=f"✅ <b>加入成功！</b>\n\n您的加入请求已批准，欢迎加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！",
-                parse_mode="HTML",
+            await send_verification_success_message(
+                bot, user_id, chat_title, "success_join_request", group_chat_id=chat_id
             )
         return
 
@@ -732,11 +742,8 @@ async def _handle_approved_user_join(
     with contextlib.suppress(Exception):
         await send_verification_success_message(bot, user_id, chat_title, "success")
 
-    # 在群内发送欢迎消息
-    welcome_msg = await bot.send_message(
-        chat_id=chat_id,
-        text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！",
-    )
+    # 在群内发送欢迎消息（按群 locale）
+    welcome_msg = await send_group_welcome(bot, chat_id, user)
 
     # 5秒后删除欢迎消息
     await asyncio.sleep(5)
@@ -777,12 +784,18 @@ async def _process_user_join(
             # 消费可能残留的 approved_key（管理员邀请/批准与 Bot 验证竞争时），使命已完成
             await redis.delete(RedisKeys.verification_approved(chat_id, user_id))
 
-            # 直接发送欢迎消息（不需要限制权限）
-            welcome_msg = await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！\n\n"
-                f"由管理员 {format_trusted_user_mention(event.from_user)} 邀请加入。",
+            # 直接发送欢迎消息（不需要限制权限，按群 locale）
+            group_locale = await get_resolver().for_group(chat_id)
+            localizer = get_translator().for_locale(group_locale)
+            welcome_text = (
+                localizer.t("verification.join.group.welcome", user=format_user_mention(user))
+                + "\n\n"
+                + localizer.t(
+                    "verification.join.group.invited_by.message",
+                    inviter=format_trusted_user_mention(event.from_user),
+                )
             )
+            welcome_msg = await bot.send_message(chat_id=chat_id, text=welcome_text)
 
             # 5秒后删除欢迎消息
             await asyncio.sleep(5)
@@ -1797,13 +1810,7 @@ async def handle_verification_success(
             await callback.answer(_toast("verification.callback.success.toast"))
 
             # 在群内发送欢迎消息（仅此一条群内消息，按群 locale）
-            group_locale = await get_resolver().for_group(chat_id)
-            welcome_text = (
-                get_translator()
-                .for_locale(group_locale)
-                .t("verification.join.group.welcome", user=format_user_mention(callback.from_user))
-            )
-            welcome_msg = await bot.send_message(chat_id=chat_id, text=welcome_text)
+            welcome_msg = await send_group_welcome(bot, chat_id, callback.from_user)
 
             # 5秒后删除欢迎消息
             await asyncio.sleep(5)
