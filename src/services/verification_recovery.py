@@ -562,3 +562,18 @@ async def claim_timeout(
     if code == 2:
         return TimeoutClaim(status="claimed", message_id=max(0, int(result[1])))
     return TimeoutClaim(status="stale")
+
+
+async def get_deadline_ms(chat_id: int, user_id: int) -> int | None:
+    """读取原始 deadline epoch ms（/start 恢复据此算剩余时间）。返回 None 表示无记录。
+
+    deadline 值格式 ``{session}:{deadline_ms}``；session 段无冒号，按最后一个 ``:`` 拆分。
+    """
+    redis = get_redis()
+    raw = await redis.get(RedisKeys.verification_deadline(chat_id, user_id))
+    if raw is None:
+        return None
+    _, sep, ms_part = raw.rpartition(":")
+    if not sep or not ms_part.isdigit():
+        return None
+    return int(ms_part)

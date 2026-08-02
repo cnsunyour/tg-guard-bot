@@ -3,7 +3,8 @@
 import asyncio
 import contextlib
 import secrets
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -64,10 +65,13 @@ from src.services.verification_hint import (
 )
 from src.services.verification_recovery import (
     claim_timeout,
+    commit_recovery,
+    new_revision_id,
     new_session_id,
     promote_recovery,
     release_recovery,
     reserve_initial_recovery,
+    reserve_recovery,
 )
 
 router = Router(name="verification")
@@ -1976,7 +1980,10 @@ async def _send_hint_message(
             [
                 InlineKeyboardButton(
                     text=localizer.t("verification.hint.start.button"),
-                    url=f"https://t.me/{bot_username}?start=verify_{chat_id}",
+                    url=(
+                        f"https://t.me/{bot_username}?start="
+                        f"{'verify_join_request_' if flow == 'join_request' else 'verify_'}{chat_id}"
+                    ),
                 )
             ]
         ]
@@ -2150,22 +2157,218 @@ async def handle_join_request_timeout(
 async def handle_user_not_started_bot_for_join_request(
     bot: Bot, chat_id: int, user_id: int
 ) -> None:
-    """加入请求用户未启动 Bot：发布共享引导消息 + 拒绝加入请求。
+    """加入请求用户未启动 Bot：发布共享引导消息，保留 undelivered 供 /start 恢复。
 
-    4a 维持现状（decline + clear）：用户可重新申请加入。4b 接入 /start 恢复入口后，改为
-    保留 undelivered 状态供恢复（由同 session timeout 兜底拒绝+封禁）。
+    challenge 已由 _start_initial_verification 标记为 undelivered（保留主键/deadline/type），
+    由同 session 的 timeout task 兜底拒绝+封禁。4b /start 恢复入口已接入，用户点 hint
+    按钮 → /start verify_join_request_{chat_id} → handle_verification_start 恢复 challenge。
     """
     await _publish_shared_hint(bot, chat_id, "join_request")
+    logger.info(f"用户 {user_id} 的 join_request challenge 已标记为 undelivered（群组 {chat_id}）")
+
+
+def _recovery_branch(recovery: str | None) -> str:
+    """解析 recovery 值的状态段：undelivered/pending/message/timeout/none。"""
+    if not recovery:
+        return "none"
+    if recovery.startswith("undelivered:"):
+        return "undelivered"
+    if recovery.startswith("pending:"):
+        return "pending"
+    if recovery.startswith("message:"):
+        return "message"
+    if recovery.startswith("timeout:"):
+        return "timeout"
+    return "none"
+
+
+async def handle_verification_start(
+    message: Message,
+    bot: Bot,
+    chat_id: int,
+    flow_hint: VerificationFlow,
+) -> None:
+    """/start verify_[join_request_]{chat_id}：按成员状态 + recovery 状态恢复 challenge UI。
+
+    成员矩阵区分 join / join_request 两 flow（join_request + left 是合法申请中状态，
+    不按 left=stale 清理）。recovery 为 undelivered 时走恢复链路；其余按状态提示。
+    flow 以 verification_type 键为权威（recovery 在时），deep-link flow_hint 仅兼容旧链接。
+    """
+    if not message.from_user:
+        return
+    user_id = message.from_user.id
+
+    locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
+    localizer = get_translator().for_locale(locale)
+    chat_title = str(chat_id)
+    with contextlib.suppress(Exception):
+        chat = await bot.get_chat(chat_id)
+        chat_title = chat.title or chat_title
+    title_html = escape_html(chat_title)
+
+    def _answer(key: str, **kwargs: object):
+        text = localizer.t(
+            f"verification.start.{key}.private.message", chat_title=title_html, **kwargs
+        )
+        return message.answer(text, parse_mode="HTML")
+
+    # 成员状态查询（失败不读写状态，仅提示稍后重试）
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except Exception:
+        logger.warning(f"/start 恢复查询成员状态失败 [群组:{chat_id}] [用户:{user_id}]")
+        await _answer("member_lookup_failed")
+        return
+
+    # 管理员/创建者：无需验证，清 stale
+    if member.status in ("administrator", "creator"):
+        await VerificationService().clear_verification(chat_id, user_id)
+        await _answer("admin")
+        return
+
+    redis = get_redis()
+    recovery = await redis.get(RedisKeys.verification_recovery(chat_id, user_id))
+    type_value = await redis.get(RedisKeys.verification_type(chat_id, user_id))
+    main_value = await redis.get(RedisKeys.verification(chat_id, user_id))
+    # flow 以 verification_type 键为权威（join/join_request 均覆盖，防 flow_hint 误点跨 flow
+    # 导致 reserve 用错误 flow、commit 因 type 不匹配失败而误删原会话）；flow_hint 仅在 type
+    # 缺失（无 recovery，兼容旧链接）时使用
+    flow: VerificationFlow = type_value if type_value in ("join", "join_request") else flow_hint
+    branch = _recovery_branch(recovery)
+    is_member = member.status == "member" or (
+        member.status == "restricted" and getattr(member, "is_member", False)
+    )
+    # 可恢复：undelivered，或 pending 过期后 recovery 缺失但主键仍在（reserve 支持 recovery nil）
+    recoverable = branch == "undelivered" or (branch == "none" and main_value is not None)
+
+    if flow == "join":
+        if not is_member:
+            # left/kicked/restricted(非 member)：清 stale + 提示重新加入
+            await VerificationService().clear_verification(chat_id, user_id)
+            await _answer("rejoin")
+            return
+        if recoverable:
+            await _recover_verification_challenge(message, bot, chat_id, user_id, flow, _answer)
+            return
+        if branch == "pending":
+            await _answer("recovering")
+            return
+        if branch == "message":
+            await _answer("already_sent")
+            return
+        # none/timeout 且主键不在：无待验证（可能已完成）
+        await _answer("no_pending.member")
+        return
+
+    # flow == "join_request"
+    if is_member:
+        # member/restricted(is_member=True)：已加入（加入请求已批准），无需验证
+        await VerificationService().clear_verification(chat_id, user_id)
+        await _answer("no_pending.member")
+        return
+    if member.status == "kicked":
+        await VerificationService().clear_verification(chat_id, user_id)
+        await _answer("resubmit_join_request")
+        return
+    # join_request + left/restricted(非 member)：合法申请中
+    if recoverable:
+        await _recover_verification_challenge(message, bot, chat_id, user_id, flow, _answer)
+        return
+    if branch == "pending":
+        await _answer("recovering")
+        return
+    if branch == "message":
+        await _answer("already_sent")
+        return
+    # none/timeout 且主键不在
+    await _answer("resubmit_join_request")
+
+
+async def _recover_verification_challenge(
+    message: Message,
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    flow: VerificationFlow,
+    _answer: Callable[..., Awaitable[object]],
+) -> None:
+    """恢复链路：reserve_recovery → prepare → commit → send → promote。
+
+    session/deadline 沿用原值（reserve_recovery 从 deadline 键读原 session），保证初始
+    timeout task 的 session_id 匹配、claim 能读到恢复后的真实 message_id。不启新 timeout。
+    """
+    verification_service = VerificationService()
+    redis = get_redis()
+    revision = new_revision_id()
+
+    # 先 reserve（原子读旧主键 + deadline），避免「单独 GET main → reserve」间的 TOCTOU
+    reservation = await reserve_recovery(chat_id, user_id, revision)
+    if reservation is None:
+        # 并发 /start（busy）或状态已变（missing/expired）
+        current = await redis.get(RedisKeys.verification_recovery(chat_id, user_id))
+        if _recovery_branch(current) in ("pending", "undelivered"):
+            await _answer("recovering")
+        else:
+            await _answer("recovery_failed")
+        return
+
+    # 从 reservation.expected_state_value（reserve 原子读的旧主键）解析 challenge type；
+    # 剩余时间用 reservation.deadline_ms（reserve 原子读的原 deadline），避免再 GET 产生 TOCTOU
+    if not reservation.expected_state_value or ":" not in reservation.expected_state_value:
+        await release_recovery(reservation, preserve_challenge=True)
+        await _answer("recovery_failed")
+        return
+    challenge_type = reservation.expected_state_value.split(":", 1)[0]
+    remaining_seconds = (reservation.deadline_ms - int(time.time() * 1000)) // 1000
+    if remaining_seconds <= 0:
+        # deadline 已到（或不足 1 秒）：不发送立即过期的 UI，release 保留状态让 timeout 兜底
+        await release_recovery(reservation, preserve_challenge=True)
+        await _answer("expired")
+        return
 
     try:
-        await decline_join_request(bot, chat_id, user_id)
-        logger.info(f"用户 {user_id} 未启动 Bot，已拒绝加入请求（群组 {chat_id}）")
-        # decline 成功才 clear（用户可重新申请加入）
-        verification_service = VerificationService()
-        await verification_service.clear_verification(chat_id, user_id)
-    except Exception as e:
-        # decline 失败（网络等）：不 clear，保留 undelivered 让同 session timeout 兜底
-        # （timeout 到期 claim → 再 decline + ban 1h），避免加入请求永久未处理
-        logger.error(
-            f"拒绝加入请求失败，保留状态由 timeout 兜底 [群组:{chat_id}] [用户:{user_id}]: {e}"
+        prepared = await verification_service.prepare_challenge(challenge_type, chat_id, user_id)
+        committed = await commit_recovery(
+            reservation,
+            state_value=prepared.state_value,
+            auxiliary_state=prepared.auxiliary_state,
+            flow=flow,
         )
+        if not committed:
+            # 保留 undelivered 让初始 timeout 兜底（preserve=False 会删 main/deadline，导致
+            # timeout claim 拿到 stale，用户永久受限且加入请求永久未处理）
+            await release_recovery(reservation, preserve_challenge=True)
+            await _answer("recovery_failed")
+            return
+
+        username = message.from_user.full_name if message.from_user else ""
+        try:
+            sent = await send_verification_message(
+                bot,
+                chat_id,
+                user_id,
+                prepared.challenge,
+                flow=flow,
+                username=username,
+                timeout=remaining_seconds,
+            )
+        except TelegramForbiddenError:
+            # /start 已启动 Bot，Forbidden 不该发生；保守 release preserve + 失败提示
+            await release_recovery(reservation, preserve_challenge=True)
+            await _answer("recovery_failed")
+            return
+
+        if not await promote_recovery(reservation, flow, sent.message_id):
+            # reservation 在发送期间失效：删未受状态机管理的 UI，release 保留状态给 timeout
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=sent.message_id)
+            await release_recovery(reservation, preserve_challenge=True)
+            await _answer("recovery_failed")
+            return
+
+        await _answer("recovered", timeout=remaining_seconds)
+    except Exception:
+        # 保留 undelivered 让初始 timeout 兜底（preserve=False 会删全部，取消 timeout 终态）
+        with contextlib.suppress(Exception):
+            await release_recovery(reservation, preserve_challenge=True)
+        raise
