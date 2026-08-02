@@ -52,6 +52,7 @@ from src.services.verification import VerificationChallenge, VerificationService
 from src.services.verification_hint import (
     VerificationHintFlow,
     delete_hint_reservation,
+    get_hint_ttl_if_match,
     promote_hint,
     reserve_hint,
     try_extend_hint,
@@ -2019,20 +2020,17 @@ async def delete_hint_message_after_delay(
     try:
         await asyncio.sleep(delay)
 
-        redis = get_redis()
-        hint_key = RedisKeys.verification_hint(chat_id, flow)
-        current_hint = await redis.get(hint_key)
-
-        if current_hint == f"message_id:{message_id}":
-            remaining_ttl = await redis.ttl(hint_key)
-            if remaining_ttl > 0:
-                logger.debug(
-                    f"群组 {chat_id} 的 {flow} 引导消息 TTL 被延长，继续等待 {remaining_ttl} 秒"
-                )
-                asyncio.create_task(
-                    delete_hint_message_after_delay(bot, chat_id, message_id, flow, remaining_ttl)
-                )
-                return
+        # 原子校验：仅当 hint 仍指向当前 message_id 时按其剩余 TTL 拖延删除，
+        # 避免旧消息按新 reservation 的 TTL 被拖延、新旧两条 hint 共存（codex P2）
+        remaining_ttl = await get_hint_ttl_if_match(chat_id, flow, message_id)
+        if remaining_ttl > 0:
+            logger.debug(
+                f"群组 {chat_id} 的 {flow} 引导消息 TTL 被延长，继续等待 {remaining_ttl} 秒"
+            )
+            asyncio.create_task(
+                delete_hint_message_after_delay(bot, chat_id, message_id, flow, remaining_ttl)
+            )
+            return
 
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logger.info(f"已删除群组 {chat_id} 的 {flow} 引导消息 {message_id}")

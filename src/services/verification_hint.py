@@ -65,6 +65,22 @@ return 0
 """.strip()
 
 
+# 删除任务用：仅当当前值仍等于期望 message_id 时原子返回 TTL（避免 get 与 ttl 之间
+# 旧 key 过期、新 reservation 建立，导致旧消息按新 key 的 TTL 被拖延，新旧两条共存）。
+# 返回 -1 表示值不匹配（不拖延，立即删）；-2 表示 key 不存在；>0 为剩余 TTL 秒。
+_GET_HINT_TTL_IF_MATCH_SCRIPT = """
+local raw = redis.call("get", KEYS[1])
+if raw ~= ARGV[1] then
+    return -1
+end
+local ttl = redis.call("ttl", KEYS[1])
+if ttl < 0 then
+    return -2
+end
+return ttl
+""".strip()
+
+
 async def reserve_hint(
     chat_id: int,
     flow: VerificationHintFlow,
@@ -139,3 +155,23 @@ async def try_extend_hint(
         ttl,
     )
     return bool(extended)
+
+
+async def get_hint_ttl_if_match(
+    chat_id: int,
+    flow: VerificationHintFlow,
+    message_id: int,
+) -> int:
+    """仅当 hint 仍指向指定 message_id 时原子返回剩余 TTL。
+
+    - >0：剩余 TTL 秒（调用方应继续等待之后重删）
+    - -1：值不匹配或 key 不存在（被新 reservation/新消息替换，或已过期；
+      调用方应立即删旧消息，不再拖延）
+    """
+    redis = get_redis()
+    return await redis.eval(
+        _GET_HINT_TTL_IF_MATCH_SCRIPT,
+        1,
+        RedisKeys.verification_hint(chat_id, flow),
+        f"message_id:{message_id}",
+    )

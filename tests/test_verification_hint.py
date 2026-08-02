@@ -63,7 +63,55 @@ class _FakeRedis:
                 self.expirations[key] = int(args[0])
                 return 1
             return 0
+        if script == verification_hint._GET_HINT_TTL_IF_MATCH_SCRIPT:
+            # args = (expected_message_id_value,)
+            if self.values.get(key) != args[0]:
+                return -1
+            ttl = self.expirations.get(key)
+            if ttl is None or ttl <= 0:
+                return -2
+            return ttl
         raise AssertionError("unexpected Lua script")
+
+
+async def test_get_hint_ttl_if_match_returns_ttl_only_for_own_message(mocker) -> None:
+    redis = _FakeRedis()
+    _patch_redis(mocker, redis)
+    token = await reserve_hint(CHAT_ID, FLOW)
+    await promote_hint(CHAT_ID, FLOW, token, 999)
+    redis.expirations[RedisKeys.verification_hint(CHAT_ID, FLOW)] = 25
+
+    # 仍指向 999 → 返回 TTL
+    assert (
+        await __import__(
+            "src.services.verification_hint", fromlist=["get_hint_ttl_if_match"]
+        ).get_hint_ttl_if_match(CHAT_ID, FLOW, 999)
+        == 25
+    )
+
+    # 指向其他 message_id → -1（不拖延，立即删）
+    assert (
+        await __import__(
+            "src.services.verification_hint", fromlist=["get_hint_ttl_if_match"]
+        ).get_hint_ttl_if_match(CHAT_ID, FLOW, 1000)
+        == -1
+    )
+
+
+async def test_get_hint_ttl_if_match_returns_minus_1_when_missing(mocker) -> None:
+    """key 不存在或值不匹配均返回 -1（调用方立即删旧消息，不拖延）。"""
+    redis = _FakeRedis()
+    _patch_redis(mocker, redis)
+
+    from src.services.verification_hint import get_hint_ttl_if_match
+
+    # key 不存在 → -1
+    assert await get_hint_ttl_if_match(CHAT_ID, FLOW, 999) == -1
+
+    # 值不匹配（指向其他 message_id）→ -1
+    token = await reserve_hint(CHAT_ID, FLOW)
+    await promote_hint(CHAT_ID, FLOW, token, 888)
+    assert await get_hint_ttl_if_match(CHAT_ID, FLOW, 999) == -1
 
 
 def _patch_redis(mocker, redis):
