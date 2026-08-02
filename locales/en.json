@@ -42,6 +42,7 @@
   "lang.option.selected.button": "✅ {locale_name}",
   "moderation.warnings.count.one": "{count} warning",
   "moderation.warnings.count.other": "{count} warnings",
+  "start.welcome.private.message": "👋 <b>Welcome to Guard Bot!</b>\n\n🤖 This Bot provides:\n• Join verification\n• Smart anti-spam\n• Group management\n\nAfter joining a group, I will send a verification message in private chat.\n\nUse /help for more commands.",
   "verification.callback.approve_failed.toast": "⚠️ Verification passed, but the join request could not be approved. Please try again later or contact an administrator",
   "verification.callback.expired.toast": "✅ This verification message has expired",
   "verification.callback.failed.toast": "❌ Verification failed. Please contact an administrator",

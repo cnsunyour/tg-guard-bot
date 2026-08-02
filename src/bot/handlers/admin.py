@@ -14,9 +14,11 @@ from src.repositories.group_repo import GroupRepository
 router = Router(name="admin")
 
 
-@router.message(Command("start"))
-async def cmd_start(message: Message) -> None:
-    """处理 /start 命令"""
+async def show_command_overview(message: Message) -> None:
+    """显示完整命令概览（由 /help 无参时调用，非 /start 路由）。
+
+    /start 路由由 start.py 唯一注册；本函数去装饰器避免重复注册不可达。
+    """
     await message.answer(
         "🤖 <b>Telegram Guard Bot</b>\n\n"
         "我是一个群管理机器人，支持以下功能：\n\n"
@@ -625,9 +627,9 @@ async def cmd_help(message: Message) -> None:
     # 解析参数
     args = message.text.split(maxsplit=1)
 
-    # 如果没有参数，显示通用帮助
+    # 如果没有参数，显示通用帮助（命令概览）
     if len(args) == 1:
-        await cmd_start(message)
+        await show_command_overview(message)
         return
 
     # 获取命令名称（去掉可能的 / 前缀）

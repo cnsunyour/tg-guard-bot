@@ -42,6 +42,7 @@
   "lang.option.selected.button": "✅ {locale_name}",
   "moderation.warnings.count.one": "{count} 次警告",
   "moderation.warnings.count.other": "{count} 次警告",
+  "start.welcome.private.message": "👋 <b>欢迎使用 Guard Bot！</b>\n\n🤖 本 Bot 提供以下功能：\n• 入群验证\n• 智能反垃圾\n• 群组管理\n\n加入群组后，我会在私聊中发送验证消息。\n\n使用 /help 查看更多命令。",
   "verification.callback.approve_failed.toast": "⚠️ 验证已通过，但暂时无法批准加入请求，请稍后重试或联系管理员",
   "verification.callback.expired.toast": "✅ 此验证消息已失效",
   "verification.callback.failed.toast": "❌ 验证失败，请联系管理员",

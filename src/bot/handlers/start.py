@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from loguru import logger
 
+from src.core.i18n import get_resolver, get_translator
 from src.core.utils import escape_html
 
 router = Router(name="start")
@@ -53,14 +54,13 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
 
 async def show_welcome_message(message: Message):
-    """显示欢迎消息"""
+    """显示欢迎消息（按点击者的私聊语言偏好渲染）。
+
+    保持简洁，不塞完整命令手册（完整列表属 /help → show_command_overview）。
+    """
+    locale = await get_resolver().for_user(message.from_user.id)
+    localizer = get_translator().for_locale(locale)
     await message.answer(
-        "👋 <b>欢迎使用 Guard Bot！</b>\n\n"
-        "🤖 本 Bot 提供以下功能：\n"
-        "• 入群验证\n"
-        "• 智能反垃圾\n"
-        "• 群组管理\n\n"
-        "加入群组后，我会在私聊中发送验证消息。\n\n"
-        "使用 /help 查看更多命令。",
+        localizer.t("start.welcome.private.message"),
         parse_mode="HTML",
     )
