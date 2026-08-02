@@ -54,13 +54,18 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
 
 async def show_welcome_message(message: Message):
-    """显示欢迎消息（按点击者的私聊语言偏好渲染）。
+    """显示欢迎消息（按消息所在 chat 的 locale 渲染）。
 
-    保持简洁，不塞完整命令手册（完整列表属 /help → show_command_overview）。
+    私聊用点击者 ``for_user`` 偏好；群组用 ``for_group``（避免群里回复用私聊
+    语言，codex 3c1-3 P2）。保持简洁，完整命令手册属 /help → show_command_overview。
     """
     if not message.from_user:
         return
-    locale = await get_resolver().for_user(message.from_user.id)
+    resolver = get_resolver()
+    if message.chat.type == "private":
+        locale = await resolver.for_user(message.from_user.id)
+    else:
+        locale = await resolver.for_group(message.chat.id)
     localizer = get_translator().for_locale(locale)
     await message.answer(
         localizer.t("start.welcome.private.message"),
