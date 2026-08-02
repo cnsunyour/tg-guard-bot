@@ -58,6 +58,8 @@ async def show_welcome_message(message: Message):
 
     保持简洁，不塞完整命令手册（完整列表属 /help → show_command_overview）。
     """
+    if not message.from_user:
+        return
     locale = await get_resolver().for_user(message.from_user.id)
     localizer = get_translator().for_locale(locale)
     await message.answer(
