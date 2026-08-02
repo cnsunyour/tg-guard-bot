@@ -101,6 +101,7 @@ def test_review_prompt_without_recognized_uses_plain_key() -> None:
         user=offender,
         confidence="91.25%",
         reasons=escape_html('rule:<script>"x"</script>、emoji:😀'),
+        original=escape_html(unsafe_original),
     )
     # 无 recognized 时走 plain key，不含识别内容段
     assert "识别内容" not in rendered
@@ -109,9 +110,9 @@ def test_review_prompt_without_recognized_uses_plain_key() -> None:
     assert "&lt;a href=" not in rendered
     # reason_codes 被转义
     assert "&lt;script&gt;&quot;x&quot;&lt;/script&gt;" in rendered
-    # 确认模式保留原消息，original_text 不复制进提示（不可注入渲染结果）
-    assert unsafe_original not in rendered
-    assert escape_html(unsafe_original) not in rendered
+    # P1：original_text 截断后 escape 展示（管理员需在提示内看到判断依据）
+    assert escape_html(unsafe_original) in rendered
+    assert "<script>alert" not in rendered
     _assert_no_placeholders(rendered)
 
 
@@ -128,6 +129,7 @@ def test_review_prompt_with_recognized_uses_recognized_key_and_escapes_html() ->
         user="Alice",
         confidence=_format_confidence(state.confidence),
         reasons=_format_reasons(state.reason_codes),
+        original=escape_html(state.original_text),
         recognized=escape_html(recognized),
     )
     assert escape_html(recognized) in rendered

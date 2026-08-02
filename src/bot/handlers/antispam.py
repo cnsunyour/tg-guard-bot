@@ -416,8 +416,9 @@ async def _handle_spam_with_review(
     1. 构造 ``SpamReviewState``，``create_review_state`` 以 ``SET NX EX`` 写入；键已
        存在（同消息重复 update / 编辑再次命中）则直接返回，保留首快照、不重复发提示。
     2. 按群 locale 渲染 prompt + 按钮，``message.answer`` 发送（不用 reply，避免回复
-       预览泄露 spammer 显示名，见 [[antispam-reply-preview-leak]]）。
-    3. 发送失败则按 ``review_id`` CAS 删除刚写入的 state，避免脏 state。
+       预览泄露 spammer 显示名）。
+    3. admin lookup / locale / 渲染 / 发送任一失败，则按 ``review_id`` CAS 删除刚写入
+       的 state，避免遗留 24h 无法触达的 review（codex 3b-3 review P2）。
     """
     if not message.from_user:
         logger.warning("消息缺少发送者信息，跳过处理")
@@ -437,20 +438,19 @@ async def _handle_spam_with_review(
     if created is None:
         return  # 已有 review 快照，不覆盖、不重复发提示
 
-    offender_mention = format_user_mention(message.from_user)
-    admin_mentions = await get_chat_administrators_mention(bot, message.chat.id)
-    group_locale = await get_resolver().for_group(message.chat.id)
-    localizer = get_translator().for_locale(group_locale)
-    prompt = build_review_prompt(localizer, state, offender_mention)
-    header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
-
     try:
+        offender_mention = format_user_mention(message.from_user)
+        admin_mentions = await get_chat_administrators_mention(bot, message.chat.id)
+        group_locale = await get_resolver().for_group(message.chat.id)
+        localizer = get_translator().for_locale(group_locale)
+        prompt = build_review_prompt(localizer, state, offender_mention)
+        header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
         await message.answer(
             header + prompt,
             reply_markup=build_review_keyboard(localizer, message.message_id, state.review_id),
         )
     except Exception:
-        # 发送失败：清理刚写入的 state，避免遗留无法触达的 review
+        # 准备或发送失败：清理刚写入的 state，避免遗留无法触达的 review
         await delete_review_state_if_match(message.chat.id, message.message_id, state.review_id)
         raise
 
@@ -2627,8 +2627,8 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
 
         state = await get_review_state(message.chat.id, orig_msg_id)
         if state is None or state.review_id != review_id:
-            # state 不存在或被重建（review_id 不匹配）→ 旧按钮失效，删旧提示
-            await _answer_toast(callback, "antispam.callback.expired.toast")
+            # state 不存在或被重建（review_id 不匹配）→ 旧按钮失效。不再 callback.answer
+            # （已 answer processing，Telegram 仅允许一次），直接删旧提示清理
             with contextlib.suppress(Exception):
                 await message.delete()
             return
@@ -2647,12 +2647,16 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                 allow_left=True,
             )
             if not success:
-                # 处罚失败：toast 报错，保留原提示与按钮供重试（不破坏消息）
-                await _answer_toast(
-                    callback,
-                    "antispam.review.action_failed.message",
-                    error=error_msg or "",
-                )
+                # 处罚失败：edit 报错（不 callback.answer，已 answer processing），
+                # 保留原提示与按钮供重试（codex 3b-3 review P2）
+                with contextlib.suppress(Exception):
+                    await message.edit_text(
+                        localizer.t(
+                            "antispam.review.action_failed.message",
+                            error=error_msg or "",
+                        ),
+                        reply_markup=message.reply_markup,
+                    )
                 return
 
             detector = get_detector()
@@ -2717,16 +2721,25 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("spam_confirm:"))
-async def on_spam_confirm_callback(callback: CallbackQuery) -> None:
+async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
     """旧版 spam_confirm 按钮失效处理（tombstone）。
 
     旧格式按钮（部署前发出的提示）点下去只提示"请重新触发检测"并 best-effort
     删除旧提示消息（消除 reply 预览），不解析旧参数、不读原消息、不处罚。
+    删除前校验管理员权限，防非管理员 dismiss 待处理 alert（codex 3b-3 review P2）。
     """
+    if not callback.message or isinstance(callback.message, InaccessibleMessage):
+        await _answer_toast(callback, "antispam.callback.invalid_data.toast")
+        return
+
+    if callback.from_user.id not in settings.admin_ids:
+        if not await PermissionCache.is_admin(bot, callback.message.chat.id, callback.from_user.id):
+            await _answer_toast(callback, "antispam.callback.permission_denied.toast")
+            return
+
     await _answer_toast(callback, "antispam.review.legacy.toast")
-    if callback.message is not None:
-        with contextlib.suppress(Exception):
-            await callback.message.delete()
+    with contextlib.suppress(Exception):
+        await callback.message.delete()
 
 
 @router.callback_query(F.data.startswith("spam_feedback:"))

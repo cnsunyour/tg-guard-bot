@@ -56,17 +56,19 @@ def build_review_prompt(
     state: SpamReviewState,
     offender_mention: str,
 ) -> str:
-    """渲染确认模式提示正文（不含管理员 header，由调用方拼 ``🔔{admins}\\n\\n``）。
+    """渲染确认模式提示正文（管理员 header 由调用方前置拼接）。
 
-    ``offender_mention`` 已由调用方 escape，作为可信 HTML 直接插入。确认模式保留
-    原消息，故 ``original_text`` 不复制进提示；``recognized_text`` 非空时走带识别
-    内容的 key 并截断后 escape。
+    ``offender_mention`` 已由调用方 escape，作为可信 HTML 直接插入。``original_text``
+    与 ``recognized_text`` 均截断后 escape 作为证据展示：确认模式虽保留原消息，但
+    ``message.answer`` 不建立 reply 关联，管理员需在提示内直接看到判断依据
+    （codex 3b-3 review P1）。
     """
     variables = {
         "message_type": message_type_label(localizer, state.message_type),
         "user": offender_mention,
         "confidence": _format_confidence(state.confidence),
         "reasons": _format_reasons(state.reason_codes),
+        "original": escape_html(state.original_text[:_RECOGNIZED_TEXT_LIMIT]),
     }
     if state.recognized_text:
         return localizer.t(

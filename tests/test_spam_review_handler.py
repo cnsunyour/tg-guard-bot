@@ -201,10 +201,9 @@ async def test_review_callback_missing_state_expires_and_deletes_prompt(mocker, 
 
     await antispam.on_spam_review_callback(callback, MagicMock())
 
-    # processing（不弹框）+ expired（弹框）
+    # processing（不弹框）；expired 不再 callback.answer（Telegram 仅允许一次），只删提示
     assert callback.answer.await_args_list == [
         call("antispam.callback.processing.toast", show_alert=False),
-        call("antispam.callback.expired.toast", show_alert=True),
     ]
     message.delete.assert_awaited_once()
 
@@ -223,9 +222,10 @@ async def test_review_callback_mismatched_review_id_expires_and_deletes_prompt(
 
     await antispam.on_spam_review_callback(callback, MagicMock())
 
-    assert callback.answer.await_args_list[-1] == call(
-        "antispam.callback.expired.toast", show_alert=True
-    )
+    # P2：不二次 answer（已 answer processing），只删旧提示
+    assert callback.answer.await_args_list == [
+        call("antispam.callback.processing.toast", show_alert=False),
+    ]
     message.delete.assert_awaited_once()
 
 
@@ -291,11 +291,10 @@ async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
     await antispam.on_spam_review_callback(callback, MagicMock())
 
     consume.assert_not_awaited()
-    message.edit_text.assert_not_awaited()  # 不破坏原消息
-    # action_failed 通过 toast 报告（mock t 把 error 拼进返回值）
-    assert callback.answer.await_args_list[-1] == call(
-        "antispam.review.action_failed.message:forbidden", show_alert=True
-    )
+    # P2：action_failed 用 edit_text（不 callback.answer），保留按钮供重试
+    message.edit_text.assert_awaited_once()
+    assert message.edit_text.await_args.kwargs["reply_markup"] == "review-keyboard"
+    assert "forbidden" in message.edit_text.await_args.args[0]
 
 
 async def test_review_callback_false_positive_keeps_original_message(mocker, localizer) -> None:
@@ -337,16 +336,28 @@ async def test_review_callback_returns_after_processing_when_lock_not_acquired(
     state.assert_not_awaited()
 
 
-async def test_legacy_spam_confirm_callback_only_expires_and_deletes_prompt(
+async def test_legacy_spam_confirm_callback_authorizes_then_expires_prompt(
     mocker, localizer
 ) -> None:
     message = _message()
     callback = _callback("spam_confirm:ban:42:1", message)
+    _authorize(mocker)  # P2：tombstone 删提示前要管理员权限
 
-    await antispam.on_spam_confirm_callback(callback)
+    await antispam.on_spam_confirm_callback(callback, MagicMock())
 
     callback.answer.assert_awaited_once_with("antispam.review.legacy.toast", show_alert=True)
     message.delete.assert_awaited_once()
+
+
+async def test_legacy_spam_confirm_callback_rejects_non_admin(mocker, localizer) -> None:
+    callback = _callback("spam_confirm:ban:42:1", _message())
+    _authorize(mocker, allowed=False)
+
+    await antispam.on_spam_confirm_callback(callback, MagicMock())
+
+    callback.answer.assert_awaited_once_with(
+        "antispam.callback.permission_denied.toast", show_alert=True
+    )
 
 
 async def test_ban_user_allow_left_bans_a_left_member(mocker) -> None:
