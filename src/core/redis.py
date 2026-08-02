@@ -103,6 +103,22 @@ class RedisKeys:
         return f"spam_text:{chat_id}:{message_id}"
 
     @staticmethod
+    def spam_review(chat_id: int, orig_msg_id: int) -> str:
+        """垃圾消息人工复核状态键名
+
+        存储 SpamReviewState v1 JSON（create_review_state 用 SET NX EX 写入）。
+        """
+        return f"spam_review:{chat_id}:{orig_msg_id}"
+
+    @staticmethod
+    def spam_review_lock(chat_id: int, orig_msg_id: int) -> str:
+        """垃圾消息复核处理锁键名
+
+        防止同一原始消息的复核 callback 并发执行（review_lock 取锁）。
+        """
+        return f"spam_review_lock:{chat_id}:{orig_msg_id}"
+
+    @staticmethod
     def verification_hint(chat_id: int) -> str:
         """验证引导消息记录键名
 
