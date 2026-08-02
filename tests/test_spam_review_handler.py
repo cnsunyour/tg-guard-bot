@@ -1,0 +1,380 @@
+"""反垃圾 review producer/consumer + tombstone + ban_user allow_left 测试。
+
+覆盖 3b-3 核心契约：
+- producer：NX 写 state、已存在不发、发送失败 CAS 清理
+- consumer：格式错 / 无权限 / state 过期 / review_id 不匹配（P2）/ ban 成功（allow_left）/ ban 失败（toast 不破坏消息）/ false_positive（保留原消息）/ 锁未取得
+- tombstone：旧 spam_confirm 只 legacy.toast + 删提示，不处罚
+- ban_user allow_left：left 用户可封（review 路径），默认仍拒绝
+"""
+
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, call
+
+import pytest
+
+from src.bot.handlers import antispam
+from src.services import moderation
+from src.services.spam_review import SpamMessageType, SpamReviewState
+
+pytestmark = pytest.mark.unit
+
+REVIEW_ID = "0123456789abcdef"
+OTHER_REVIEW_ID = "fedcba9876543210"
+CHAT_ID = -100123
+ORIG_MSG_ID = 321
+OFFENDER_ID = 42
+OPERATOR_ID = 7
+
+
+@pytest.fixture
+def localizer(mocker):
+    """mock i18n：t 返回 key 本身（含 error 时附 error 值），便于断言。"""
+    localizer = MagicMock()
+    localizer.t.side_effect = lambda key, **variables: (
+        f"{key}:{variables['error']}" if "error" in variables else key
+    )
+    resolver = MagicMock()
+    resolver.for_user = AsyncMock(return_value="zh-Hans")
+    resolver.for_group = AsyncMock(return_value="zh-Hans")
+    translator = MagicMock()
+    translator.for_locale.return_value = localizer
+    mocker.patch.object(antispam, "get_resolver", return_value=resolver)
+    mocker.patch.object(antispam, "get_translator", return_value=translator)
+    return localizer
+
+
+def _message(*, answer_side_effect=None):
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=CHAT_ID),
+        from_user=SimpleNamespace(
+            id=OFFENDER_ID,
+            full_name="Offender",
+            first_name="Offender",
+            username=None,
+        ),
+        message_id=ORIG_MSG_ID,
+        text="spam text",
+        caption=None,
+        reply_markup="review-keyboard",
+        answer=AsyncMock(side_effect=answer_side_effect),
+        delete=AsyncMock(),
+        edit_text=AsyncMock(),
+    )
+
+
+def _callback(data: str, message):
+    return SimpleNamespace(
+        data=data,
+        from_user=SimpleNamespace(
+            id=OPERATOR_ID,
+            full_name="Admin",
+            first_name="Admin",
+            username=None,
+        ),
+        message=message,
+        answer=AsyncMock(),
+    )
+
+
+def _state(review_id: str = REVIEW_ID) -> SpamReviewState:
+    return SpamReviewState(
+        review_id=review_id,
+        offender_user_id=OFFENDER_ID,
+        message_type=SpamMessageType.text,
+        original_text="original text",
+        recognized_text=None,
+        sample_text="sample text",
+        reason_codes=("rule:url",),
+        confidence=0.91,
+    )
+
+
+def _patch_lock(mocker, acquired: bool) -> None:
+    @asynccontextmanager
+    async def fake_review_lock(chat_id: int, orig_msg_id: int):
+        yield acquired
+
+    mocker.patch.object(antispam, "review_lock", new=fake_review_lock)
+
+
+def _authorize(mocker, allowed: bool = True):
+    mocker.patch.object(antispam.settings, "admin_ids", [])
+    return mocker.patch.object(
+        antispam.PermissionCache, "is_admin", new=AsyncMock(return_value=allowed)
+    )
+
+
+async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localizer) -> None:
+    message = _message()
+    create_state = mocker.patch.object(
+        antispam, "create_review_state", new=AsyncMock(side_effect=lambda state, *_: state)
+    )
+    mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
+    mocker.patch.object(
+        antispam, "get_chat_administrators_mention", new=AsyncMock(return_value="@admins")
+    )
+
+    await antispam._handle_spam_with_review(
+        message,
+        MagicMock(),
+        {"reasons": ["rule:url"], "confidence": 0.91},
+        message_type=SpamMessageType.text,
+    )
+
+    state = create_state.await_args.args[0]
+    assert state.offender_user_id == OFFENDER_ID
+    assert state.original_text == "spam text"
+    assert state.sample_text == "spam text"
+    assert state.message_type is SpamMessageType.text
+    create_state.assert_awaited_once_with(state, CHAT_ID, ORIG_MSG_ID)
+    message.answer.assert_awaited_once()
+
+
+async def test_review_producer_does_not_send_when_state_already_exists(mocker, localizer) -> None:
+    message = _message()
+    mocker.patch.object(antispam, "create_review_state", new=AsyncMock(return_value=None))
+
+    await antispam._handle_spam_with_review(
+        message,
+        MagicMock(),
+        {"reasons": ["rule:url"], "confidence": 0.91},
+        message_type=SpamMessageType.text,
+    )
+
+    message.answer.assert_not_awaited()
+
+
+async def test_review_producer_cleans_state_when_prompt_send_fails(mocker, localizer) -> None:
+    message = _message(answer_side_effect=RuntimeError("send failed"))
+    create_state = mocker.patch.object(
+        antispam, "create_review_state", new=AsyncMock(side_effect=lambda state, *_: state)
+    )
+    cleanup = mocker.patch.object(
+        antispam, "delete_review_state_if_match", new=AsyncMock(return_value=True)
+    )
+    mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
+    mocker.patch.object(antispam, "get_chat_administrators_mention", new=AsyncMock(return_value=""))
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        await antispam._handle_spam_with_review(
+            message,
+            MagicMock(),
+            {"reasons": ["rule:url"], "confidence": 0.91},
+            message_type=SpamMessageType.text,
+        )
+
+    state = create_state.await_args.args[0]
+    cleanup.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, state.review_id)
+
+
+async def test_review_callback_invalid_format_answers_invalid_data(mocker, localizer) -> None:
+    callback = _callback("spam_review:ban:not-an-id:bad", _message())
+    permission = _authorize(mocker)
+
+    await antispam.on_spam_review_callback(callback, MagicMock())
+
+    callback.answer.assert_awaited_once_with(
+        "antispam.callback.invalid_data.toast", show_alert=True
+    )
+    permission.assert_not_awaited()
+
+
+async def test_review_callback_rejects_non_admin(mocker, localizer) -> None:
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", _message())
+    permission = _authorize(mocker, allowed=False)
+
+    await antispam.on_spam_review_callback(callback, MagicMock())
+
+    permission.assert_awaited_once()
+    callback.answer.assert_awaited_once_with(
+        "antispam.callback.permission_denied.toast", show_alert=True
+    )
+
+
+async def test_review_callback_missing_state_expires_and_deletes_prompt(mocker, localizer) -> None:
+    message = _message()
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=None))
+
+    await antispam.on_spam_review_callback(callback, MagicMock())
+
+    # processing（不弹框）+ expired（弹框）
+    assert callback.answer.await_args_list == [
+        call("antispam.callback.processing.toast", show_alert=False),
+        call("antispam.callback.expired.toast", show_alert=True),
+    ]
+    message.delete.assert_awaited_once()
+
+
+async def test_review_callback_mismatched_review_id_expires_and_deletes_prompt(
+    mocker, localizer
+) -> None:
+    """P2：旧 prompt 按钮消费被重建的新 state → expired（不误封）。"""
+    message = _message()
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(
+        antispam, "get_review_state", new=AsyncMock(return_value=_state(OTHER_REVIEW_ID))
+    )
+
+    await antispam.on_spam_review_callback(callback, MagicMock())
+
+    assert callback.answer.await_args_list[-1] == call(
+        "antispam.callback.expired.toast", show_alert=True
+    )
+    message.delete.assert_awaited_once()
+
+
+async def test_review_callback_ban_success_consumes_state_and_allows_left(
+    mocker, localizer
+) -> None:
+    message = _message()
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
+    ban = mocker.patch.object(
+        antispam.ModerationService, "ban_user", new=AsyncMock(return_value=(True, None))
+    )
+    detector = SimpleNamespace(add_feedback=AsyncMock())
+    mocker.patch.object(antispam, "get_detector", return_value=detector)
+    audit = mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
+    consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
+    mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+
+    await antispam.on_spam_review_callback(callback, bot)
+
+    ban.assert_awaited_once_with(
+        bot=bot,
+        chat_id=CHAT_ID,
+        user_id=OFFENDER_ID,
+        operator_id=OPERATOR_ID,
+        reason="垃圾信息（管理员确认）",
+        allow_left=True,
+    )
+    detector.add_feedback.assert_awaited_once_with(
+        text="sample text", is_spam=True, labeled_by=OPERATOR_ID
+    )
+    audit.assert_awaited_once_with(
+        group_id=CHAT_ID,
+        operator_id=OPERATOR_ID,
+        action="spam_review_ban",
+        target_user_id=OFFENDER_ID,
+        details={"orig_msg_id": ORIG_MSG_ID, "text_preview": "sample text"},
+    )
+    bot.delete_message.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID)
+    consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
+    message.edit_text.assert_awaited_once()
+    assert message.edit_text.await_args.kwargs["reply_markup"] is None
+
+
+async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
+    mocker, localizer
+) -> None:
+    """处罚失败：toast 报错，保留原提示与按钮供重试（不破坏消息、不消费 state）。"""
+    message = _message()
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
+    mocker.patch.object(
+        antispam.ModerationService, "ban_user", new=AsyncMock(return_value=(False, "forbidden"))
+    )
+    consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
+
+    await antispam.on_spam_review_callback(callback, MagicMock())
+
+    consume.assert_not_awaited()
+    message.edit_text.assert_not_awaited()  # 不破坏原消息
+    # action_failed 通过 toast 报告（mock t 把 error 拼进返回值）
+    assert callback.answer.await_args_list[-1] == call(
+        "antispam.review.action_failed.message:forbidden", show_alert=True
+    )
+
+
+async def test_review_callback_false_positive_keeps_original_message(mocker, localizer) -> None:
+    message = _message()
+    callback = _callback(f"spam_review:false_positive:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
+    detector = SimpleNamespace(add_feedback=AsyncMock())
+    mocker.patch.object(antispam, "get_detector", return_value=detector)
+    mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
+    consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
+    mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+
+    await antispam.on_spam_review_callback(callback, bot)
+
+    detector.add_feedback.assert_awaited_once_with(
+        text="sample text", is_spam=False, labeled_by=OPERATOR_ID
+    )
+    consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
+    bot.delete_message.assert_not_awaited()  # 保留原消息
+    message.delete.assert_not_awaited()
+    assert message.edit_text.await_args.kwargs["reply_markup"] is None
+
+
+async def test_review_callback_returns_after_processing_when_lock_not_acquired(
+    mocker, localizer
+) -> None:
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", _message())
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=False)
+    state = mocker.patch.object(antispam, "get_review_state", new=AsyncMock())
+
+    await antispam.on_spam_review_callback(callback, MagicMock())
+
+    callback.answer.assert_awaited_once_with("antispam.callback.processing.toast", show_alert=False)
+    state.assert_not_awaited()
+
+
+async def test_legacy_spam_confirm_callback_only_expires_and_deletes_prompt(
+    mocker, localizer
+) -> None:
+    message = _message()
+    callback = _callback("spam_confirm:ban:42:1", message)
+
+    await antispam.on_spam_confirm_callback(callback)
+
+    callback.answer.assert_awaited_once_with("antispam.review.legacy.toast", show_alert=True)
+    message.delete.assert_awaited_once()
+
+
+async def test_ban_user_allow_left_bans_a_left_member(mocker) -> None:
+    bot = MagicMock()
+    bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status="left"))
+    bot.ban_chat_member = AsyncMock()
+    mocker.patch.object(moderation.AuditRepository, "log_action", new=AsyncMock())
+
+    success, error = await moderation.ModerationService.ban_user(
+        bot, CHAT_ID, OFFENDER_ID, OPERATOR_ID, allow_left=True
+    )
+
+    assert success is True
+    assert error is None
+    bot.ban_chat_member.assert_awaited_once_with(
+        chat_id=CHAT_ID, user_id=OFFENDER_ID, revoke_messages=False
+    )
+
+
+async def test_ban_user_default_rejects_a_left_member() -> None:
+    bot = MagicMock()
+    bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status="left"))
+    bot.ban_chat_member = AsyncMock()
+
+    success, error = await moderation.ModerationService.ban_user(
+        bot, CHAT_ID, OFFENDER_ID, OPERATOR_ID
+    )
+
+    assert success is False
+    assert error == "用户不在群组中"
+    bot.ban_chat_member.assert_not_awaited()

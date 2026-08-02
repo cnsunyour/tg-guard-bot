@@ -12,12 +12,25 @@ from typing import Any
 import imageio.v3 as iio
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InaccessibleMessage,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from loguru import logger
 from PIL import Image
 
+from src.bot.handlers.antispam_render import (
+    build_review_ban_result,
+    build_review_false_positive_result,
+    build_review_keyboard,
+    build_review_prompt,
+)
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
+from src.core.i18n import get_resolver, get_translator
 from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
 from src.core.utils import (
     auto_delete_message,
@@ -28,11 +41,21 @@ from src.core.utils import (
     should_skip_sender,
 )
 from src.models.group import Group
+from src.repositories.audit_repo import AuditRepository
 from src.repositories.group_repo import GroupRepository
 from src.services.activity import ActivityService  # 活跃度服务
 from src.services.context_service import ContextService  # 上下文服务
 from src.services.moderation import ModerationService
 from src.services.spam_detector import get_detector
+from src.services.spam_review import (
+    SpamMessageType,
+    SpamReviewState,
+    consume_review_state,
+    create_review_state,
+    delete_review_state_if_match,
+    get_review_state,
+    review_lock,
+)
 from src.services.username_mapping import UsernameMappingService  # ✅ username 映射服务
 
 router = Router(name="antispam")
@@ -219,8 +242,7 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
         )
         sender_chat_id = message.sender_chat.id if message.sender_chat else 0
         logger.warning(
-            f"检测到频道马甲消息 [群组:{message.chat.id}] "
-            f"[频道:{channel_title}({sender_chat_id})]"
+            f"检测到频道马甲消息 [群组:{message.chat.id}] [频道:{channel_title}({sender_chat_id})]"
         )
 
         # 删除消息
@@ -380,117 +402,61 @@ def managed_temp_file(suffix: str = ".jpg") -> Iterator[str]:
                 logger.error(f"删除临时文件失败 {temp_file_path}: {e}")
 
 
-def _extract_recognized_text_from_prompt(prompt_text: str) -> str:
-    """从提示消息中提取识别的文本
-
-    格式: "📝 识别内容:\n「{content}」"
-
-    Args:
-        prompt_text: 提示消息文本
-
-    Returns:
-        提取的识别文本，如果提取失败返回空字符串
-    """
-    # 使用正则提取「」之间的内容
-    match = re.search(r"📝 识别内容:\n「(.+?)」", prompt_text, re.DOTALL)
-    if match:
-        content = match.group(1)
-        # 移除可能的截断标记
-        return content.replace("...", "").strip()
-    return ""
-
-
-async def _handle_spam_with_confirmation(
+async def _handle_spam_with_review(
     message: Message,
-    _bot: Bot,
+    bot: Bot,
     result: dict[str, Any],
-    _group: Group,
+    *,
+    message_type: SpamMessageType,
     recognized_text: str | None = None,
 ) -> None:
-    """垃圾消息确认模式处理（保留原消息）
+    """创建不可变复核快照并发送管理员审核提示。
 
     流程：
-    1. 保留原消息（不删除）
-    2. 发送确认提示消息（回复原消息）
-    3. 通过回复链建立关联，回调时可获取原消息
-    4. 对于图片/贴纸等识别出文字的消息，将识别文本嵌入提示消息
-
-    Args:
-        message: 原消息对象
-        _bot: Bot 实例
-        result: 检测结果
-        _group: 群组配置
-        recognized_text: 识别出的文本（用于图片/视频/贴纸）
+    1. 构造 ``SpamReviewState``，``create_review_state`` 以 ``SET NX EX`` 写入；键已
+       存在（同消息重复 update / 编辑再次命中）则直接返回，保留首快照、不重复发提示。
+    2. 按群 locale 渲染 prompt + 按钮，``message.answer`` 发送（不用 reply，避免回复
+       预览泄露 spammer 显示名，见 [[antispam-reply-preview-leak]]）。
+    3. 发送失败则按 ``review_id`` CAS 删除刚写入的 state，避免脏 state。
     """
-    # 检查消息发送者
     if not message.from_user:
         logger.warning("消息缺少发送者信息，跳过处理")
         return
 
-    # 1. 获取管理员 mention
-    admin_mentions = await get_chat_administrators_mention(
-        bot=_bot,
-        chat_id=message.chat.id,
+    original_text = message.text or message.caption or ""
+    state = SpamReviewState(
+        offender_user_id=message.from_user.id,
+        message_type=message_type,
+        original_text=original_text,
+        recognized_text=recognized_text,
+        sample_text=recognized_text or original_text,
+        reason_codes=tuple(str(reason) for reason in result["reasons"]),
+        confidence=float(result["confidence"]),
     )
+    created = await create_review_state(state, message.chat.id, message.message_id)
+    if created is None:
+        return  # 已有 review 快照，不覆盖、不重复发提示
 
-    # 2. 构建确认提示消息
-    user_mention = format_user_mention(message.from_user)
-    reasons_text = "、".join(result["reasons"])
+    offender_mention = format_user_mention(message.from_user)
+    admin_mentions = await get_chat_administrators_mention(bot, message.chat.id)
+    group_locale = await get_resolver().for_group(message.chat.id)
+    localizer = get_translator().for_locale(group_locale)
+    prompt = build_review_prompt(localizer, state, offender_mention)
+    header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
 
-    # 判断消息类型
-    message_type = "文本消息"
-    if message.photo and len(message.photo) > 0:
-        message_type = "图片消息"
-    elif message.sticker:
-        message_type = "贴纸消息"
-    elif message.video:
-        message_type = "视频消息"
-
-    # 构建 prompt header（包含管理员 mention）
-    prompt_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
-
-    prompt_text = (
-        f"{prompt_header}"
-        f"🚨 检测到疑似垃圾{message_type}\n\n"
-        f"👤 用户: {user_mention}\n"
-        f"📊 置信度: {result['confidence']:.2%}\n"
-        f"🔍 检测原因: {reasons_text}\n"
-    )
-
-    # 如果有识别出的文本，显示在提示消息中
-    if recognized_text:
-        prompt_text += (
-            f"\n📝 识别内容:\n"
-            f"「{recognized_text[:200]}{'...' if len(recognized_text) > 200 else ''}」\n"
+    try:
+        await message.answer(
+            header + prompt,
+            reply_markup=build_review_keyboard(localizer, message.message_id, state.review_id),
         )
-
-    prompt_text += "\n⏰ 请确认处理方式（删除此提示视为放弃处理）"
-
-    # 3. 创建内联按钮
-    # 回调数据格式: spam_confirm:{action}:{user_id}:{has_text}
-    # has_text: 1 表示有识别文本，0 表示没有
-    has_text = "1" if recognized_text else "0"
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ 确认垃圾",
-                    callback_data=f"spam_confirm:ban:{message.from_user.id}:{has_text}",
-                ),
-                InlineKeyboardButton(
-                    text="❌ 误判",
-                    callback_data=f"spam_confirm:false_positive:{message.from_user.id}:{has_text}",
-                ),
-            ]
-        ]
-    )
-
-    # 4. 发送提示消息（回复原消息）
-    await message.reply(text=prompt_text, reply_markup=keyboard)
+    except Exception:
+        # 发送失败：清理刚写入的 state，避免遗留无法触达的 review
+        await delete_review_state_if_match(message.chat.id, message.message_id, state.review_id)
+        raise
 
     logger.info(
-        f"垃圾消息待确认 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-        f"类型:{message_type} 置信度:{result['confidence']:.2%}"
+        f"垃圾消息待审核 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+        f"类型:{message_type.value} 置信度:{state.confidence:.2%}"
     )
 
 
@@ -607,147 +573,6 @@ async def _handle_spam_immediately(
 
     except Exception as e:
         logger.error(f"处理垃圾消息失败: {e}")
-
-
-async def _handle_spam_confirm_ban(
-    bot: Bot,
-    callback: CallbackQuery,
-    message: Message,
-    original_message: Message,
-    user_id: int,
-    original_text: str,
-) -> None:
-    """处理管理员确认垃圾消息（删除原消息 + 处罚）
-
-    操作：
-    1. 删除原消息
-    2. 踢出并永久封禁用户
-    3. 入库正样本
-    4. 更新提示消息
-    5. 记录审计日志
-
-    Args:
-        bot: Bot 实例
-        callback: 回调查询对象
-        message: 提示消息对象
-        original_message: 原消息对象
-        user_id: 被处理用户的 ID
-        original_text: 原消息文本内容
-    """
-    # 1. 删除原消息
-    with contextlib.suppress(Exception):
-        await original_message.delete()
-
-    # 2. 踢出并永久封禁用户
-    success, error_msg = await ModerationService.ban_user(
-        bot=bot,
-        chat_id=message.chat.id,
-        user_id=user_id,
-        operator_id=callback.from_user.id,
-        reason="垃圾信息（管理员确认）",
-    )
-
-    if not success:
-        await callback.answer(f"❌ 处理失败: {error_msg}", show_alert=True)
-        return
-
-    # 3. 入库正样本
-    detector = get_detector()
-    await detector.add_feedback(
-        text=original_text,
-        is_spam=True,
-        labeled_by=callback.from_user.id,
-        confidence=None,  # 管理员确认，不需要置信度
-    )
-
-    # 4. 更新提示消息
-    operator_mention = format_trusted_user_mention(callback.from_user)
-    updated_text = (
-        f"{message.text}\n\n"
-        f"✅ 已确认为垃圾消息并处理\n"
-        f"👮 操作者: {operator_mention}\n"
-        f"⚖️ 处罚: 踢出并永久封禁"
-    )
-
-    await message.edit_text(updated_text)
-    await callback.answer("✅ 已确认并处理", show_alert=True)
-
-    # 自动删除提示消息
-    await auto_delete_message(message, delay=30)
-
-    # 5. 记录审计日志
-    from src.repositories.audit_repo import AuditRepository
-
-    await AuditRepository.log_action(
-        group_id=message.chat.id,
-        operator_id=callback.from_user.id,
-        action="spam_confirm_ban",
-        target_user_id=user_id,
-        details={
-            "original_message_id": original_message.message_id,
-            "text_preview": original_text[:100],
-        },
-    )
-
-    logger.info(
-        f"管理员确认垃圾消息 [群组:{message.chat.id}] [用户:{user_id}] "
-        f"[操作者:{callback.from_user.id}]"
-    )
-
-
-async def _handle_spam_confirm_false_positive(
-    _bot: Bot,
-    callback: CallbackQuery,
-    message: Message,
-    user_id: int,
-    original_text: str,
-) -> None:
-    """处理管理员确认误判（保留原消息 + 删除提示）
-
-    操作：
-    1. 入库负样本
-    2. 删除提示消息（保留原消息）
-    3. 记录审计日志
-
-    Args:
-        bot: Bot 实例
-        callback: 回调查询对象
-        message: 提示消息对象
-        user_id: 被处理用户的 ID
-        original_text: 原消息文本内容
-    """
-    # 1. 入库负样本
-    detector = get_detector()
-    await detector.add_feedback(
-        text=original_text,
-        is_spam=False,
-        labeled_by=callback.from_user.id,
-        confidence=None,
-    )
-
-    # 2. 删除提示消息（保留原消息）
-    with contextlib.suppress(Exception):
-        await message.delete()
-
-    await callback.answer("✅ 已确认为误判并记录", show_alert=True)
-
-    # 3. 记录审计日志
-    from src.repositories.audit_repo import AuditRepository
-
-    await AuditRepository.log_action(
-        group_id=message.chat.id,
-        operator_id=callback.from_user.id,
-        action="spam_confirm_false_positive",
-        target_user_id=user_id,
-        details={
-            "text_preview": original_text[:100],
-        },
-    )
-
-    logger.info(
-        f"管理员确认误判 [群组:{message.chat.id}] [用户:{user_id}] "
-        f"[操作者:{callback.from_user.id}]"
-    )
 
 
 @router.message(Command("antispam"))
@@ -1288,8 +1113,7 @@ async def on_message(message: Message, bot: Bot) -> None:
             # 只跳过已注册的命令
             if command_name in _registered_commands:
                 logger.debug(
-                    f"[文本处理器] 跳过已注册命令 [群组:{message.chat.id}] "
-                    f"[命令:{command_name}]"
+                    f"[文本处理器] 跳过已注册命令 [群组:{message.chat.id}] [命令:{command_name}]"
                 )
                 return
             # 未注册的命令格式文本（如 /abc spam）会继续进行垃圾检测
@@ -1443,12 +1267,12 @@ async def on_message(message: Message, bot: Bot) -> None:
 
         # 根据群组配置决定处理方式
         if group and group.spam_confirm_enabled:
-            # 启用确认模式：发送确认提示，等待管理员操作
-            await _handle_spam_with_confirmation(
+            # 确认模式：创建状态快照，等待管理员审核（message.answer + Redis 关联）
+            await _handle_spam_with_review(
                 message=message,
-                _bot=bot,
+                bot=bot,
                 result=dict(result),  # type: ignore[arg-type]
-                _group=group,
+                message_type=SpamMessageType.text,
             )
         else:
             # 关闭确认模式：按现有流程立即处罚
@@ -1586,13 +1410,13 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
 
         # 根据群组配置决定处理方式
         if group and group.spam_confirm_enabled:
-            # 确认模式：保留原消息，发送确认提示
-            await _handle_spam_with_confirmation(
+            # 确认模式：3b-3 起新 review 流程（sticker/edited 将在 3b-4 接入）
+            await _handle_spam_with_review(
                 message=message,
-                _bot=bot,
+                bot=bot,
                 result=dict(result),  # type: ignore[arg-type]
-                _group=group,
-                recognized_text=recognized_text,  # 传递识别文本
+                message_type=SpamMessageType.photo,
+                recognized_text=recognized_text,
             )
         else:
             # 立即处罚模式：删除消息，立即处罚
@@ -1915,7 +1739,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         relative_pos = frame_idx - int(ip)
                         logger.debug(
                             f"渲染第 {frame_idx} 帧 "
-                            f"(相对位置: {relative_pos}/{total_frames}, 进度: {relative_pos/total_frames:.1%})"
+                            f"(相对位置: {relative_pos}/{total_frames}, 进度: {relative_pos / total_frames:.1%})"
                         )
 
                         with managed_temp_file(suffix=".png") as png_file_path:
@@ -1982,7 +1806,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             # WebP 文件应该以 "RIFF" 开头，并包含 "WEBP"
                             if not (header[:4] == b"RIFF" and header[8:12] == b"WEBP"):
                                 logger.error(
-                                    f"文件不是有效的 WebP 格式 " f"(header: {header[:12].hex()})"
+                                    f"文件不是有效的 WebP 格式 (header: {header[:12].hex()})"
                                 )
                                 return
 
@@ -2044,7 +1868,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         check_indices.append(frame_2_3)
 
                     logger.debug(
-                        f"将检测第 {check_indices} 帧 " f"(1/3 和 2/3 位置, 总帧数: {total_frames})"
+                        f"将检测第 {check_indices} 帧 (1/3 和 2/3 位置, 总帧数: {total_frames})"
                     )
 
                     # 循环检测每一帧
@@ -2052,7 +1876,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         frame = frames[frame_idx]
                         logger.debug(
                             f"检测第 {frame_idx} 帧 "
-                            f"(进度: {frame_idx}/{total_frames}={frame_idx/total_frames:.1%}, shape={frame.shape})"
+                            f"(进度: {frame_idx}/{total_frames}={frame_idx / total_frames:.1%}, shape={frame.shape})"
                         )
 
                         with managed_temp_file(suffix=".png") as png_file_path:
@@ -2742,80 +2566,167 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
                 logger.error(f"处理编辑图片标题垃圾失败: {e}")
 
 
-@router.callback_query(F.data.startswith("spam_confirm:"))
-async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
-    """处理垃圾消息确认回调（通过回复链获取原消息）
+async def _answer_toast(
+    callback: CallbackQuery,
+    key: str,
+    *,
+    show_alert: bool = True,
+    **variables: object,
+) -> None:
+    """以点击者的个人语言偏好显示 callback toast（非群 locale）。"""
+    locale = await get_resolver().for_user(callback.from_user.id)
+    localizer = get_translator().for_locale(locale)
+    await callback.answer(localizer.t(key, **variables), show_alert=show_alert)
 
-    回调数据格式: spam_confirm:{action}:{user_id}:{has_text}
-    - action: ban（确认垃圾） 或 false_positive（误判）
-    - user_id: 被处理用户的 ID
-    - has_text: 1 表示有识别文本，0 表示没有
 
-    原消息通过 callback.message.reply_to_message 获取
+@router.callback_query(F.data.startswith("spam_review:"))
+async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
+    """消费按原消息 ID + review_id 绑定的人工复核状态。
+
+    callback_data 格式: ``spam_review:{ban|false_positive}:{orig_msg_id}:{review_id}``。
+    先校验格式与权限并立即 answer processing（防 API/封禁/DB 致 callback 超时），
+    再在 review_lock 内按 review_id 比较快照身份（防旧 prompt 消费被重建的新 state，
+    codex 3b-2 review P2）。
     """
-    # 1. 类型检查
-    if not callback.data or not callback.message:
-        await callback.answer("❌ 数据错误", show_alert=True)
-        return
-
-    from aiogram.types import InaccessibleMessage, Message
-
-    if isinstance(callback.message, InaccessibleMessage):
-        await callback.answer("❌ 消息不可访问", show_alert=True)
+    if (
+        not callback.data
+        or not callback.message
+        or isinstance(callback.message, InaccessibleMessage)
+    ):
+        await _answer_toast(callback, "antispam.callback.invalid_data.toast")
         return
 
     message: Message = callback.message
-
-    # 2. 检查回复链
-    if not message.reply_to_message:
-        await callback.answer("❌ 原消息已被删除", show_alert=True)
+    try:
+        prefix, action, orig_msg_id_raw, review_id = callback.data.split(":", 3)
+        orig_msg_id = int(orig_msg_id_raw)
+    except ValueError:
+        await _answer_toast(callback, "antispam.callback.invalid_data.toast")
         return
 
-    # 3. 解析回调数据
-    _, action, user_id_str, has_text_str = callback.data.split(":", 3)
-    user_id = int(user_id_str)
-    has_text = has_text_str == "1"
+    if (
+        prefix != "spam_review"
+        or action not in {"ban", "false_positive"}
+        or orig_msg_id <= 0
+        or re.fullmatch(r"[0-9a-fA-F]{16}", review_id) is None
+    ):
+        await _answer_toast(callback, "antispam.callback.invalid_data.toast")
+        return
 
-    original_message = message.reply_to_message
-
-    # 4. 权限验证（超级管理员或群组管理员）
     if callback.from_user.id not in settings.admin_ids:
         if not await PermissionCache.is_admin(bot, message.chat.id, callback.from_user.id):
-            await callback.answer("❌ 只有管理员可以确认处理", show_alert=True)
+            await _answer_toast(callback, "antispam.callback.permission_denied.toast")
             return
 
-    # 5. 获取原消息内容
-    # 优先从 caption 获取，如果没有且有识别文本标记，则从提示消息中提取
-    original_text = original_message.text or original_message.caption or ""
+    # 先回应防 callback 超时（processing 不弹框，轻量提示）
+    await _answer_toast(callback, "antispam.callback.processing.toast", show_alert=False)
 
-    if not original_text and has_text:
-        # 从提示消息中提取识别出的文本
-        original_text = _extract_recognized_text_from_prompt(message.text or "")
+    async with review_lock(message.chat.id, orig_msg_id) as acquired:
+        if not acquired:
+            return  # 已有处理中
 
-    if not original_text:
-        await callback.answer("❌ 无法获取消息内容", show_alert=True)
-        return
+        state = await get_review_state(message.chat.id, orig_msg_id)
+        if state is None or state.review_id != review_id:
+            # state 不存在或被重建（review_id 不匹配）→ 旧按钮失效，删旧提示
+            await _answer_toast(callback, "antispam.callback.expired.toast")
+            with contextlib.suppress(Exception):
+                await message.delete()
+            return
 
-    # 6. 根据操作类型处理
-    if action == "ban":
-        # 确认垃圾：删除原消息 + 踢出并封禁
-        await _handle_spam_confirm_ban(
-            bot=bot,
-            callback=callback,
-            message=message,
-            original_message=original_message,
-            user_id=user_id,
-            original_text=original_text,
+        group_locale = await get_resolver().for_group(message.chat.id)
+        localizer = get_translator().for_locale(group_locale)
+        operator_mention = format_trusted_user_mention(callback.from_user)
+
+        if action == "ban":
+            success, error_msg = await ModerationService.ban_user(
+                bot=bot,
+                chat_id=message.chat.id,
+                user_id=state.offender_user_id,
+                operator_id=callback.from_user.id,
+                reason="垃圾信息（管理员确认）",
+                allow_left=True,
+            )
+            if not success:
+                # 处罚失败：toast 报错，保留原提示与按钮供重试（不破坏消息）
+                await _answer_toast(
+                    callback,
+                    "antispam.review.action_failed.message",
+                    error=error_msg or "",
+                )
+                return
+
+            detector = get_detector()
+            await detector.add_feedback(
+                text=state.sample_text,
+                is_spam=True,
+                labeled_by=callback.from_user.id,
+            )
+            await AuditRepository.log_action(
+                group_id=message.chat.id,
+                operator_id=callback.from_user.id,
+                action="spam_review_ban",
+                target_user_id=state.offender_user_id,
+                details={
+                    "orig_msg_id": orig_msg_id,
+                    "text_preview": state.sample_text[:100],
+                },
+            )
+            with contextlib.suppress(Exception):
+                await bot.delete_message(message.chat.id, orig_msg_id)
+            await consume_review_state(message.chat.id, orig_msg_id, review_id)
+            with contextlib.suppress(Exception):
+                await message.edit_text(
+                    f"{message.text or ''}\n\n"
+                    + build_review_ban_result(localizer, operator_mention, "permanent_ban"),
+                    reply_markup=None,
+                )
+            logger.info(
+                f"管理员确认垃圾消息 [群组:{message.chat.id}] "
+                f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
+            )
+            return
+
+        # false_positive：保留原消息 + 入库负样本
+        detector = get_detector()
+        await detector.add_feedback(
+            text=state.sample_text,
+            is_spam=False,
+            labeled_by=callback.from_user.id,
         )
-    elif action == "false_positive":
-        # 误判：保留原消息 + 入库负样本
-        await _handle_spam_confirm_false_positive(
-            _bot=bot,
-            callback=callback,
-            message=message,
-            user_id=user_id,
-            original_text=original_text,
+        await AuditRepository.log_action(
+            group_id=message.chat.id,
+            operator_id=callback.from_user.id,
+            action="spam_review_false_positive",
+            target_user_id=state.offender_user_id,
+            details={
+                "orig_msg_id": orig_msg_id,
+                "text_preview": state.sample_text[:100],
+            },
         )
+        await consume_review_state(message.chat.id, orig_msg_id, review_id)
+        with contextlib.suppress(Exception):
+            await message.edit_text(
+                f"{message.text or ''}\n\n"
+                + build_review_false_positive_result(localizer, operator_mention),
+                reply_markup=None,
+            )
+        logger.info(
+            f"管理员确认误判 [群组:{message.chat.id}] "
+            f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
+        )
+
+
+@router.callback_query(F.data.startswith("spam_confirm:"))
+async def on_spam_confirm_callback(callback: CallbackQuery) -> None:
+    """旧版 spam_confirm 按钮失效处理（tombstone）。
+
+    旧格式按钮（部署前发出的提示）点下去只提示"请重新触发检测"并 best-effort
+    删除旧提示消息（消除 reply 预览），不解析旧参数、不读原消息、不处罚。
+    """
+    await _answer_toast(callback, "antispam.review.legacy.toast")
+    if callback.message is not None:
+        with contextlib.suppress(Exception):
+            await callback.message.delete()
 
 
 @router.callback_query(F.data.startswith("spam_feedback:"))
@@ -2921,11 +2832,11 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                 )
                 if success:
                     logger.info(
-                        f"误判反馈：已自动恢复用户 {user_id} 的权限 " f"[群组:{message.chat.id}]"
+                        f"误判反馈：已自动恢复用户 {user_id} 的权限 [群组:{message.chat.id}]"
                     )
                 else:
                     logger.warning(
-                        f"误判反馈：恢复用户 {user_id} 权限失败 " f"[群组:{message.chat.id}]"
+                        f"误判反馈：恢复用户 {user_id} 权限失败 [群组:{message.chat.id}]"
                     )
 
             # 检查是否需要自动训练
@@ -2940,7 +2851,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         else:
             # 缓存已过期或不存在，记录警告但仍然接受反馈
             logger.warning(
-                f"反馈文本缓存未命中 [消息ID:{message_id_str}]，" "可能是缓存过期或系统重启导致"
+                f"反馈文本缓存未命中 [消息ID:{message_id_str}]，可能是缓存过期或系统重启导致"
             )
             await callback.answer("⚠️ 原始文本已过期，反馈可能不完整", show_alert=True)
             return
@@ -2957,7 +2868,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         await callback.answer(f"反馈已记录: {feedback_text}")
 
         logger.info(
-            f"管理员反馈 [管理员:{callback.from_user.id}] " f"类型: {'垃圾' if is_spam else '正常'}"
+            f"管理员反馈 [管理员:{callback.from_user.id}] 类型: {'垃圾' if is_spam else '正常'}"
         )
 
     except Exception as e:

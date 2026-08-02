@@ -184,12 +184,13 @@ def test_message_type_and_punishment_catalog_keys_have_exact_coverage(locale: st
 
 def test_review_keyboard_callback_data_and_labels() -> None:
     localizer = _localizer()
-    keyboard = build_review_keyboard(localizer, orig_msg_id=321)
+    review_id = "0123456789abcdef"
+    keyboard = build_review_keyboard(localizer, orig_msg_id=321, review_id=review_id)
 
     assert len(keyboard.inline_keyboard) == 1
     assert [button.callback_data for button in keyboard.inline_keyboard[0]] == [
-        "spam_review:ban:321",
-        "spam_review:false_positive:321",
+        "spam_review:ban:321:0123456789abcdef",
+        "spam_review:false_positive:321:0123456789abcdef",
     ]
     assert [button.text for button in keyboard.inline_keyboard[0]] == [
         localizer.t("antispam.review.ban.button"),

@@ -257,7 +257,7 @@ class ModerationService:
 
             action_text = "解除禁言" if action == "unmute" else "解除封禁"
             logger.info(
-                f"用户 {user_id} 被管理员 {operator_id} {action_text} " f"(原状态: {member.status})"
+                f"用户 {user_id} 被管理员 {operator_id} {action_text} (原状态: {member.status})"
             )
             return True
 
@@ -294,22 +294,31 @@ class ModerationService:
         operator_id: int,
         reason: str | None = None,
         revoke_messages: bool = False,
+        *,
+        allow_left: bool = False,
     ) -> tuple[bool, str | None]:
         """永久封禁用户
 
         Args:
             revoke_messages: 是否删除该用户的所有消息
+            allow_left: 是否允许封禁已离群/已被踢出的用户。人工复核 ban 需开启，
+                防止 spammer 在管理员确认前退群规避处罚；Telegram ``ban_chat_member``
+                对 left/kicked 用户也能执行（永久封禁 = 加入黑名单）。默认 False
+                保持旧行为：普通封禁仍要求目标用户当前在群内。
 
         Returns:
             (是否成功, 错误消息)
         """
         try:
-            # ✅ M7: 先验证用户是否在群组中
-            exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
-            if not exists:
-                return False, error_msg
+            if not allow_left:
+                # 默认行为不变：普通封禁仍要求目标用户当前在群内
+                exists, error_msg = await ModerationService.verify_user_in_chat(
+                    bot, chat_id, user_id
+                )
+                if not exists:
+                    return False, error_msg
 
-            # 验证目标用户不是管理员
+            # 即使 allow_left 也不可封禁管理员
             not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
             if not not_admin:
                 return False, error_msg
@@ -438,7 +447,7 @@ class ModerationService:
             )
 
             logger.info(
-                f"用户 {user_id} 被管理员 {operator_id} 警告，" f"累计警告次数: {warning_count}"
+                f"用户 {user_id} 被管理员 {operator_id} 警告，累计警告次数: {warning_count}"
             )
 
             # 检查是否触发自动处罚（处罚升级机制）

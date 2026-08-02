@@ -77,18 +77,26 @@ def build_review_prompt(
     return localizer.t("antispam.review.prompt.message", **variables)
 
 
-def build_review_keyboard(localizer: BoundLocalizer, orig_msg_id: int) -> InlineKeyboardMarkup:
-    """渲染确认模式的两个操作按钮（ban / false_positive 同行）。"""
+def build_review_keyboard(
+    localizer: BoundLocalizer,
+    orig_msg_id: int,
+    review_id: str,
+) -> InlineKeyboardMarkup:
+    """渲染确认模式的两个操作按钮（ban / false_positive 同行）。
+
+    callback_data 携带 ``review_id``，consumer 据此按快照身份消费，防止旧提示按钮
+    在 state 被重建后误消费新快照（codex 3b-2 review P2）。
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=localizer.t("antispam.review.ban.button"),
-                    callback_data=f"spam_review:ban:{orig_msg_id}",
+                    callback_data=f"spam_review:ban:{orig_msg_id}:{review_id}",
                 ),
                 InlineKeyboardButton(
                     text=localizer.t("antispam.review.false_positive.button"),
-                    callback_data=f"spam_review:false_positive:{orig_msg_id}",
+                    callback_data=f"spam_review:false_positive:{orig_msg_id}:{review_id}",
                 ),
             ]
         ]
