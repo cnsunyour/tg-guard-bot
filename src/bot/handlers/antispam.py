@@ -2182,6 +2182,8 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
             logger.warning(f"获取编辑消息上下文失败，使用普通检测: {e}")
             context_text = None
 
+    # 确认模式下跳过 AI 自动入库（避免 review 前持久化正样本，与误判负样本冲突）
+    skip_auto_train = bool(group and group.spam_confirm_enabled)
     # 检测垃圾（传入活跃度和上下文）
     result = await detector.detect_with_ai_context(
         text=message.text or "",
@@ -2189,6 +2191,7 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
         chat_id=message.chat.id,
         activity=activity,
         context_text=context_text,
+        skip_auto_train=skip_auto_train,
     )
 
     # 如果检测到垃圾
@@ -2278,6 +2281,8 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
                 logger.warning(f"获取编辑图片 caption 上下文失败: {e}")
                 context_text = None
 
+        # 确认模式下跳过 AI 自动入库（避免 review 前持久化正样本，与误判负样本冲突）
+        skip_auto_train = bool(group and group.spam_confirm_enabled)
         # 检测 caption 中的垃圾文字
         result = await detector.detect_with_ai_context(
             text=message.caption,
@@ -2285,6 +2290,7 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
             chat_id=message.chat.id,
             activity=activity,
             context_text=context_text,
+            skip_auto_train=skip_auto_train,
         )
 
         if result["is_spam"]:
