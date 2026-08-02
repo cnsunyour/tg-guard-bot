@@ -2429,6 +2429,7 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                     + build_review_ban_result(localizer, operator_mention, "permanent_ban"),
                     reply_markup=None,
                 )
+            await auto_delete_message(message, delay=30)
             logger.info(
                 f"管理员确认垃圾消息 [群组:{message.chat.id}] "
                 f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
@@ -2459,6 +2460,7 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                 + build_review_false_positive_result(localizer, operator_mention),
                 reply_markup=None,
             )
+        await auto_delete_message(message, delay=30)
         logger.info(
             f"管理员确认误判 [群组:{message.chat.id}] "
             f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"

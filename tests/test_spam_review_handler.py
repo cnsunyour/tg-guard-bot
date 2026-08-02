@@ -247,6 +247,7 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     audit = mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
     consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
     mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
 
     await antispam.on_spam_review_callback(callback, bot)
 
@@ -272,6 +273,7 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
     message.edit_text.assert_awaited_once()
     assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    auto_delete.assert_awaited_once_with(message, delay=30)
 
 
 async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
@@ -312,6 +314,7 @@ async def test_review_callback_false_positive_keeps_original_message(mocker, loc
     mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
     consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
     mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
 
     await antispam.on_spam_review_callback(callback, bot)
 
@@ -322,6 +325,7 @@ async def test_review_callback_false_positive_keeps_original_message(mocker, loc
     bot.delete_message.assert_not_awaited()  # 保留原消息
     message.delete.assert_not_awaited()
     assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    auto_delete.assert_awaited_once_with(message, delay=30)
 
 
 async def test_review_callback_returns_after_processing_when_lock_not_acquired(
