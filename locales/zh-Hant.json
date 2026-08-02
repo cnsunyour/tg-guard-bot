@@ -1,4 +1,5 @@
 {
+  "admin.help.overview.message": "🤖 <b>Telegram Guard Bot</b>\n\n我是一個群組管理機器人，支援以下功能：\n\n⚙️ <b>群組設定</b>\n• /groupset - 群組設定（統一入口）\n• /verifyconfig - 檢視驗證設定\n\n👮 <b>群組管理</b>\n• /kick - 踢出成員\n• /mute - 禁言成員\n• /ban - 封禁成員\n• /warn - 警告成員\n• /cleanup - 清理異常用戶\n\n🚨 <b>檢舉系統</b>\n• /spam 或 /report - 檢舉/標記垃圾訊息\n• /reports - 檢視檢舉列表（管理員）\n• /approve - 接受檢舉（管理員）\n• /reject - 拒絕檢舉（管理員）\n\n🗑️ <b>訊息刪除</b>\n• /delbefore - 刪除往前的訊息\n• /delafter - 刪除往後的訊息\n• /delrange - 刪除訊息範圍\n\n💡 <b>使用提示</b>\n1️⃣ 聯繫超級管理員將群組加入白名單\n2️⃣ 將 Bot 加入群組並設為管理員\n3️⃣ 使用 /help &lt;命令&gt; 檢視命令詳細用法\n   示例：/help groupset",
   "antispam.callback.expired.toast": "⚠️ 此審核已失效或已被處理",
   "antispam.callback.invalid_data.toast": "❌ 資料錯誤",
   "antispam.callback.permission_denied.toast": "❌ 只有管理員可以操作",

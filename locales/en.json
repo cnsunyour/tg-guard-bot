@@ -1,4 +1,5 @@
 {
+  "admin.help.overview.message": "🤖 <b>Telegram Guard Bot</b>\n\nI am a group management bot with the following features:\n\n⚙️ <b>Group configuration</b>\n• /groupset - Group settings (unified entry)\n• /verifyconfig - View verification settings\n\n👮 <b>Group management</b>\n• /kick - Kick member\n• /mute - Mute member\n• /ban - Ban member\n• /warn - Warn member\n• /cleanup - Clean up abnormal users\n\n🚨 <b>Report system</b>\n• /spam or /report - Report/flag spam\n• /reports - View report list (admins)\n• /approve - Accept report (admins)\n• /reject - Reject report (admins)\n\n🗑️ <b>Message deletion</b>\n• /delbefore - Delete messages before\n• /delafter - Delete messages after\n• /delrange - Delete message range\n\n💡 <b>Usage tips</b>\n1️⃣ Ask a super admin to whitelist the group\n2️⃣ Add the Bot to the group and set it as admin\n3️⃣ Use /help &lt;command&gt; for detailed usage\n   Example: /help groupset",
   "antispam.callback.expired.toast": "⚠️ Review expired or already processed",
   "antispam.callback.invalid_data.toast": "❌ Invalid data",
   "antispam.callback.permission_denied.toast": "❌ Admins only",

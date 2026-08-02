@@ -8,6 +8,7 @@ from loguru import logger
 from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.health import get_health_checker
+from src.core.i18n import get_resolver, get_translator
 from src.core.utils import auto_delete_message, check_admin_permission, escape_html
 from src.repositories.group_repo import GroupRepository
 
@@ -18,33 +19,19 @@ async def show_command_overview(message: Message) -> None:
     """显示完整命令概览（由 /help 无参时调用，非 /start 路由）。
 
     /start 路由由 start.py 唯一注册；本函数去装饰器避免重复注册不可达。
+    按消息所在 chat locale 渲染（私聊 for_user、群 for_group）。
     """
+    if not message.from_user:
+        return
+    resolver = get_resolver()
+    if message.chat.type == "private":
+        locale = await resolver.for_user(message.from_user.id)
+    else:
+        locale = await resolver.for_group(message.chat.id)
+    localizer = get_translator().for_locale(locale)
     await message.answer(
-        "🤖 <b>Telegram Guard Bot</b>\n\n"
-        "我是一个群管理机器人，支持以下功能：\n\n"
-        "⚙️ <b>群组配置</b>\n"
-        "• /groupset - 群组设置（统一入口）\n"
-        "• /verifyconfig - 查看验证配置\n\n"
-        "👮 <b>群管理</b>\n"
-        "• /kick - 踢出成员\n"
-        "• /mute - 禁言成员\n"
-        "• /ban - 封禁成员\n"
-        "• /warn - 警告成员\n"
-        "• /cleanup - 清理异常用户\n\n"
-        "🚨 <b>举报系统</b>\n"
-        "• /spam 或 /report - 举报/标记垃圾消息\n"
-        "• /reports - 查看举报列表（管理员）\n"
-        "• /approve - 接受举报（管理员）\n"
-        "• /reject - 拒绝举报（管理员）\n\n"
-        "🗑️ <b>消息删除</b>\n"
-        "• /delbefore - 删除往前的消息\n"
-        "• /delafter - 删除往后的消息\n"
-        "• /delrange - 删除消息范围\n\n"
-        "💡 <b>使用提示</b>\n"
-        "1️⃣ 联系超级管理员将群组加入白名单\n"
-        "2️⃣ 将 Bot 添加到群组并设为管理员\n"
-        "3️⃣ 使用 /help &lt;命令&gt; 查看命令详细用法\n"
-        "   示例：/help groupset"
+        localizer.t("admin.help.overview.message"),
+        parse_mode="HTML",
     )
 
 
