@@ -49,6 +49,13 @@ from src.services.spam_detector import SpamDetector
 from src.services.user_status_service import get_user_status_service
 from src.services.username_mapping import UsernameMappingService
 from src.services.verification import VerificationChallenge, VerificationService
+from src.services.verification_hint import (
+    VerificationHintFlow,
+    delete_hint_reservation,
+    promote_hint,
+    reserve_hint,
+    try_extend_hint,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -1898,81 +1905,96 @@ async def handle_verification_timeout(
         logger.error(f"处理验证超时失败: {e}")
 
 
-async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int, timeout: int) -> None:
+async def _send_hint_message(
+    bot: Bot,
+    chat_id: int,
+    flow: VerificationHintFlow,
+) -> Message:
+    """按群 locale 发送对应 flow 的验证引导消息（未启动 Bot 提示）。
+
+    chat_title 获取失败时回退到语言无关的 chat_id，避免重新引入硬编码中文。
     """
-    处理用户未启动 Bot 的情况 - 共享引导消息机制 + 延迟踢出
+    group_locale = await get_resolver().for_group(chat_id)
+    localizer = get_translator().for_locale(group_locale)
 
-    优化: 30秒内只发送一条群内引导消息，多用户共享
-    策略: 不立即踢出，给用户完整的验证超时时间去启动 bot 和完成验证
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
+
+    chat_title = str(chat_id)
+    with contextlib.suppress(Exception):
+        chat = await bot.get_chat(chat_id)
+        chat_title = chat.title or chat_title
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("verification.hint.start.button"),
+                    url=f"https://t.me/{bot_username}?start=verify_{chat_id}",
+                )
+            ]
+        ]
+    )
+
+    return await bot.send_message(
+        chat_id=chat_id,
+        text=localizer.t(
+            f"verification.hint.{flow}.group.message",
+            chat_title=escape_html(chat_title),
+        ),
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+
+
+async def _publish_shared_hint(
+    bot: Bot,
+    chat_id: int,
+    flow: VerificationHintFlow,
+) -> None:
+    """竞争发送权并发布共享引导消息（NX reservation → send → promote CAS）。
+
+    取不到发送权时尝试延长已提交消息的共享窗口。发送失败或 reservation 过期时
+    清理自己的 reservation / 未提交消息，避免第二条 hint 残留。
     """
-    redis = get_redis()
-    hint_key = RedisKeys.verification_hint(chat_id)
+    owner_token = await reserve_hint(chat_id, flow)
+    if owner_token is None:
+        # 已有 hint（已提交或他人 pending）：已提交则延长共享窗口；pending 不续命
+        if await try_extend_hint(chat_id, flow):
+            logger.debug(f"群组 {chat_id} 已有 {flow} 引导消息，延长 TTL 到 30 秒")
+        return
 
-    # 1. 检查是否已经发送过引导消息（30秒内）
-    existing_hint = await redis.get(hint_key)
-
-    if not existing_hint:
-        # 2. 如果没有，发送通用引导消息
-        try:
-            bot_info = await bot.get_me()
-            bot_username = bot_info.username
-
-            # 获取群组信息
-            try:
-                chat = await bot.get_chat(chat_id)
-                chat_title = (
-                    escape_html(chat.title) if chat.title else "本群组"
-                )  # ✅ 安全修复：转义 HTML
-            except Exception:
-                chat_title = "本群组"
-
-            # 创建启动链接按钮
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🤖 启动 Bot 进行验证",
-                            url=f"https://t.me/{bot_username}?start=verify_{chat_id}",
-                        )
-                    ]
-                ]
-            )
-
-            # 发送通用引导消息
-            hint_msg = await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "⚠️ <b>入群验证提示</b>\n\n"
-                    f"欢迎加入 <b>{chat_title}</b>！\n\n"  # ✅ 安全修复：转义 HTML
-                    "📱 本群使用 Bot 私聊验证，如果您刚加入但未收到验证消息，"
-                    "说明您尚未启动 Bot。\n\n"
-                    "👉 请点击下方按钮启动 Bot 进行验证：\n\n"
-                    "✅ 启动后会立即收到验证消息\n"
-                    "💡 此提示将在 30 秒后自动删除"
-                ),
-                reply_markup=keyboard,
-                parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
-            )
-
-            # 3. 记录到 Redis（30秒过期）
-            await redis.setex(hint_key, 30, f"message_id:{hint_msg.message_id}")
-
-            # 4. 启动自动删除任务
+    try:
+        hint_msg = await _send_hint_message(bot, chat_id, flow)
+        if await promote_hint(chat_id, flow, owner_token, hint_msg.message_id):
             asyncio.create_task(
-                delete_hint_message_after_delay(bot, chat_id, hint_msg.message_id, hint_key, 30)
+                delete_hint_message_after_delay(bot, chat_id, hint_msg.message_id, flow, 30)
             )
+            logger.info(f"群组 {chat_id} 发送 {flow} 验证引导消息（30秒内共享）")
+        else:
+            # reservation 在发送期间过期或被替换：删未受状态机管理的消息，不覆盖新 owner
+            logger.warning(
+                f"群组 {chat_id} {flow} 引导 reservation 已失效，删除未提交消息 "
+                f"{hint_msg.message_id}"
+            )
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=chat_id, message_id=hint_msg.message_id)
+    except Exception:
+        with contextlib.suppress(Exception):
+            await delete_hint_reservation(chat_id, flow, owner_token)
+        logger.error(f"发送 {flow} 引导消息失败", exc_info=True)
 
-            logger.info(f"群组 {chat_id} 发送入群验证引导消息（30秒内共享）")
 
-        except Exception as e:
-            logger.error(f"发送引导消息失败: {e}")
-    else:
-        # ✅ 已有引导消息，延长 TTL 到 30 秒，让后入群用户有足够时间
-        await redis.expire(hint_key, 30)
-        logger.debug(f"群组 {chat_id} 已有引导消息，延长 TTL 到 30 秒（用户 {user_id}）")
+async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int, timeout: int) -> None:
+    """直接入群用户未启动 Bot：共享引导消息 + 延迟踢出。
 
-    # 5. 启动延迟踢出任务（延迟时间 = 验证超时时间）
-    # 如果用户在超时前启动 bot 并完成验证，验证成功流程会清除验证状态，导致踢出任务检查失败
+    30 秒内同一 flow 只发送一条引导消息。不立即踢出，给用户完整的验证超时
+    时间启动 Bot 并完成验证。
+    """
+    await _publish_shared_hint(bot, chat_id, "join")
+
+    # 延迟踢出（延迟时间 = 验证超时时间）。若用户在超时前启动 Bot 并完成验证，
+    # 验证成功流程会清除验证状态，踢出任务检查失败即不踢出。
     asyncio.create_task(
         handle_verification_timeout(bot, chat_id, user_id, message_id=0, timeout=timeout)
     )
@@ -1982,32 +2004,40 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int, time
 
 
 async def delete_hint_message_after_delay(
-    bot: Bot, chat_id: int, message_id: int, hint_key: str, delay: int
-):
-    """延迟删除引导消息
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    flow: VerificationHintFlow,
+    delay: int,
+) -> None:
+    """延迟删除引导消息。
 
-    支持 TTL 延长：如果在等待期间 Redis key 被延长，会继续等待剩余时间
+    支持共享窗口延长：只有 key 仍指向当前消息时才跟随其 TTL，避免旧删除任务
+    被同 flow 的新 reservation 或新消息拖延。删除任务不调用 try_extend_hint，
+    否则会自行续期导致 hint 永不删除。
     """
     try:
         await asyncio.sleep(delay)
 
-        # ✅ 检查 Redis key 是否还存在（可能被延长了）
         redis = get_redis()
-        remaining_ttl = await redis.ttl(hint_key)
+        hint_key = RedisKeys.verification_hint(chat_id, flow)
+        current_hint = await redis.get(hint_key)
 
-        if remaining_ttl > 0:
-            # Key 还存在且被延长了，继续等待剩余时间
-            logger.debug(f"群组 {chat_id} 的引导消息 TTL 被延长，继续等待 {remaining_ttl} 秒")
-            asyncio.create_task(
-                delete_hint_message_after_delay(bot, chat_id, message_id, hint_key, remaining_ttl)
-            )
-            return
+        if current_hint == f"message_id:{message_id}":
+            remaining_ttl = await redis.ttl(hint_key)
+            if remaining_ttl > 0:
+                logger.debug(
+                    f"群组 {chat_id} 的 {flow} 引导消息 TTL 被延长，继续等待 {remaining_ttl} 秒"
+                )
+                asyncio.create_task(
+                    delete_hint_message_after_delay(bot, chat_id, message_id, flow, remaining_ttl)
+                )
+                return
 
-        # TTL 已过期或 key 不存在，删除消息
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        logger.info(f"已删除群组 {chat_id} 的引导消息 {message_id}")
+        logger.info(f"已删除群组 {chat_id} 的 {flow} 引导消息 {message_id}")
     except Exception as e:
-        logger.debug(f"删除引导消息失败（可能已被手动删除）: {e}")
+        logger.error(f"延迟删除引导消息失败: {e}")
 
 
 async def handle_join_request_timeout(
@@ -2084,80 +2114,16 @@ async def handle_join_request_timeout(
 async def handle_user_not_started_bot_for_join_request(
     bot: Bot, chat_id: int, user_id: int
 ) -> None:
-    """处理加入请求中用户未启动 Bot - 共享引导消息 + 拒绝加入请求"""
-    redis = get_redis()
-    hint_key = RedisKeys.verification_hint(chat_id)
+    """加入请求中用户未启动 Bot：共享引导消息 + 拒绝加入请求。"""
+    await _publish_shared_hint(bot, chat_id, "join_request")
 
-    # 1. 检查是否已经发送过引导消息（30秒内）
-    existing_hint = await redis.get(hint_key)
-
-    if not existing_hint:
-        # 2. 如果没有，发送通用引导消息
-        try:
-            bot_info = await bot.get_me()
-            bot_username = bot_info.username
-
-            # 获取群组信息
-            try:
-                chat = await bot.get_chat(chat_id)
-                chat_title = (
-                    escape_html(chat.title) if chat.title else "本群组"
-                )  # ✅ 安全修复：转义 HTML
-            except Exception:
-                chat_title = "本群组"
-
-            # 创建启动链接按钮
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🤖 启动 Bot 进行验证",
-                            url=f"https://t.me/{bot_username}?start=verify_{chat_id}",
-                        )
-                    ]
-                ]
-            )
-
-            # 发送通用引导消息
-            hint_msg = await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "⚠️ <b>入群验证提示</b>\n\n"
-                    f"欢迎请求加入 <b>{chat_title}</b>！\n\n"  # ✅ 安全修复：转义 HTML
-                    "📱 本群使用 Bot 私聊验证，如果您发送了加入请求但未收到验证消息，"
-                    "说明您尚未启动 Bot。\n\n"
-                    "👉 请点击下方按钮启动 Bot 后重新发送加入请求：\n\n"
-                    "✅ 启动后重新请求加入即可收到验证消息\n"
-                    "💡 此提示将在 30 秒后自动删除"
-                ),
-                reply_markup=keyboard,
-                parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
-            )
-
-            # 3. 记录到 Redis（30秒过期）
-            await redis.setex(hint_key, 30, f"message_id:{hint_msg.message_id}")
-
-            # 4. 启动自动删除任务
-            asyncio.create_task(
-                delete_hint_message_after_delay(bot, chat_id, hint_msg.message_id, hint_key, 30)
-            )
-
-            logger.info(f"群组 {chat_id} 发送加入请求验证引导消息（30秒内共享）")
-
-        except Exception as e:
-            logger.error(f"发送引导消息失败: {e}")
-    else:
-        # 已有引导消息，延长 TTL 到 30 秒
-        await redis.expire(hint_key, 30)
-        logger.debug(f"群组 {chat_id} 已有引导消息，延长 TTL 到 30 秒（用户 {user_id}）")
-
-    # 5. 拒绝加入请求
+    # 拒绝加入请求
     try:
         await decline_join_request(bot, chat_id, user_id)
         logger.info(f"用户 {user_id} 未启动 Bot，已拒绝加入请求（群组 {chat_id}）")
     except Exception as e:
         logger.error(f"拒绝加入请求失败: {e}")
 
-    # 6. ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
+    # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
     verification_service = VerificationService()
     await verification_service.clear_verification(chat_id, user_id)

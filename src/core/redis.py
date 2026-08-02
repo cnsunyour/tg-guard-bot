@@ -119,12 +119,15 @@ class RedisKeys:
         return f"spam_review_lock:{chat_id}:{orig_msg_id}"
 
     @staticmethod
-    def verification_hint(chat_id: int) -> str:
-        """验证引导消息记录键名
+    def verification_hint(chat_id: int, flow: str) -> str:
+        """验证引导消息记录键名（join / join_request 各自独立状态）。
 
-        用于防止多用户同时未启动 Bot 时重复发送引导消息
+        两种验证流程的后续动作不同（join 可恢复 challenge；join_request 立即 decline
+        + clear），文案也不同，共用 key 会让先到 flow 的错误文案压住另一个。
         """
-        return f"verification_hint:{chat_id}"
+        if flow not in ("join", "join_request"):
+            raise ValueError(f"不支持的验证引导 flow: {flow}")
+        return f"verification_hint:{flow}:{chat_id}"
 
     @staticmethod
     def verification_approved(chat_id: int, user_id: int) -> str:
