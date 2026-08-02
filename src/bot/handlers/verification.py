@@ -5,7 +5,7 @@ import contextlib
 import secrets
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
@@ -58,10 +58,7 @@ router = Router(name="verification")
 # 安全释放 in-flight 锁的 Lua 脚本：仅当键值等于 owner token 时才删除，
 # 避免「单次处理耗时超过 TTL → 旧协程 finally 误删新协程刚取得的锁」。
 _INFLIGHT_RELEASE_SCRIPT = (
-    'if redis.call("get", KEYS[1]) == ARGV[1] then '
-    'return redis.call("del", KEYS[1]) '
-    "end "
-    "return 0"
+    'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0'
 )
 
 
@@ -201,15 +198,21 @@ async def approve_join_request(bot: Bot, chat_id: int, user_id: int) -> bool:
         return False
 
 
+# 验证结果私聊消息的四种类型（catalog: verification.success.private.<type>.message）
+type SuccessMessageType = Literal[
+    "success", "success_join_request", "restore_failed", "approve_failed"
+]
+
+
 async def send_verification_success_message(
     bot: Bot,
     user_id: int,
     chat_title: str,
-    message_type: str = "success",
+    message_type: SuccessMessageType,
     *,
-    group_chat_id: int | None = None,
+    group_chat_id: int,
 ) -> None:
-    """发送验证结果消息（纯文本）。
+    """发送验证结果私聊消息（按用户偏好 → 来源群 locale 渲染）。
 
     所有关键操作（权限恢复、加入请求批准）均由调用方带重试执行，失败时传入
     对应的 ``*_failed`` 类型，由本函数发送降级引导文案。不再创建邀请链接：
@@ -218,41 +221,19 @@ async def send_verification_success_message(
     Args:
         bot: Bot 实例
         user_id: 用户 ID
-        chat_title: 群组标题（已转义 HTML）
-        message_type: 消息类型
-            - "success": 验证成功，已恢复群组权限
-            - "success_join_request": 验证成功，加入请求已批准
-            - "restore_failed": 验证已通过，但权限恢复失败（用户仍在群内）
-            - "approve_failed": 验证已通过，但加入请求批准失败（用户尚未入群）
-        group_chat_id: 来源群 ID。传入时按「用户偏好 → 来源群 locale」渲染
-            （math 验证）；不传则保留中文文案（其他验证类型 POC 阶段）。
+        chat_title: 群组标题（已 escape HTML）
+        message_type: 结果类型（success / success_join_request / restore_failed /
+            approve_failed）
+        group_chat_id: 来源群 ID（必传，用于解析私聊 locale 并保证文案走 catalog）。
     """
-    if group_chat_id is not None:
-        locale = await get_resolver().for_private_from_group(
-            user_id=user_id, group_chat_id=group_chat_id
-        )
-        localizer = get_translator().for_locale(locale)
-        text = localizer.t(
-            f"verification.success.private.{message_type}.message",
-            chat_title=chat_title,
-        )
-    elif message_type == "success":
-        text = f"✅ <b>验证成功！</b>\n\n您已成功加入群组：<b>{chat_title}</b>\n\n现在可以在群内自由发言了！"
-    elif message_type == "success_join_request":
-        text = f"✅ <b>验证成功！</b>\n\n您的加入请求已批准，正在加入群组：<b>{chat_title}</b>\n\n稍后您将能在群内自由发言！"
-    elif message_type == "restore_failed":
-        text = (
-            f"✅ <b>验证已通过</b>\n\n暂时无法自动恢复您在群组 <b>{chat_title}</b> 中的发言权限。\n\n"
-            f"请稍后在群内尝试发言；若仍无法发言，请联系管理员协助处理。"
-        )
-    elif message_type == "approve_failed":
-        text = (
-            f"✅ <b>验证已通过</b>\n\n暂时无法自动批准您加入群组：<b>{chat_title}</b>。\n\n"
-            f"请稍后重新提交加入请求；若仍无法加入，请联系管理员协助处理。"
-        )
-    else:
-        text = f"✅ <b>验证成功！</b>\n\n群组：<b>{chat_title}</b>"
-
+    locale = await get_resolver().for_private_from_group(
+        user_id=user_id, group_chat_id=group_chat_id
+    )
+    localizer = get_translator().for_locale(locale)
+    text = localizer.t(
+        f"verification.success.private.{message_type}.message",
+        chat_title=chat_title,
+    )
     await bot.send_message(
         chat_id=user_id,
         text=text,
@@ -518,7 +499,9 @@ async def _handle_approved_join_request(bot: Bot, chat_id: int, user_id: int) ->
 
     # 批准失败（重试耗尽）：保留 approved_key 以便用户重新提交加入请求时自动批准
     with contextlib.suppress(Exception):
-        await send_verification_success_message(bot, user_id, chat_title, "approve_failed")
+        await send_verification_success_message(
+            bot, user_id, chat_title, "approve_failed", group_chat_id=chat_id
+        )
 
 
 async def _process_join_request(
@@ -732,7 +715,9 @@ async def _handle_approved_user_join(
     if not await restore_user_permissions(bot, chat_id, user_id):
         # 恢复失败：保留 approved_key，以便用户重新入群时再次尝试
         with contextlib.suppress(Exception):
-            await send_verification_success_message(bot, user_id, chat_title, "restore_failed")
+            await send_verification_success_message(
+                bot, user_id, chat_title, "restore_failed", group_chat_id=chat_id
+            )
         return
 
     # 恢复成功：清除验证标记
@@ -740,7 +725,9 @@ async def _handle_approved_user_join(
 
     # 在私聊中通知用户
     with contextlib.suppress(Exception):
-        await send_verification_success_message(bot, user_id, chat_title, "success")
+        await send_verification_success_message(
+            bot, user_id, chat_title, "success", group_chat_id=chat_id
+        )
 
     # 在群内发送欢迎消息（按群 locale）
     welcome_msg = await send_group_welcome(bot, chat_id, user)
@@ -773,7 +760,7 @@ async def _process_user_join(
 
         if is_admin_invite:
             logger.info(
-                f"用户 {user_id} 由管理员 {inviter_name} ({inviter_id}) 邀请，" f"跳过验证直接通过"
+                f"用户 {user_id} 由管理员 {inviter_name} ({inviter_id}) 邀请，跳过验证直接通过"
             )
 
             # ✅ 清除可能存在的待验证状态（管理员批准加入请求场景）
@@ -923,8 +910,7 @@ async def _process_user_join(
                 logger.warning(f"发送封禁通知失败: {e}")
 
             logger.info(
-                f"异常用户加入被拒 [群组:{chat_id}] [用户:{user_id}] "
-                f"[状态:{status_result.reason}]"
+                f"异常用户加入被拒 [群组:{chat_id}] [用户:{user_id}] [状态:{status_result.reason}]"
             )
             return  # 结束处理，不继续后续流程
     # ========== 用户状态检查结束 ==========
@@ -1336,7 +1322,11 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 if not await approve_join_request(bot, chat_id, user_id):
                     with contextlib.suppress(Exception):
                         await send_verification_success_message(
-                            bot, user_id, chat_title, "approve_failed"
+                            bot,
+                            user_id,
+                            chat_title,
+                            "approve_failed",
+                            group_chat_id=chat_id,
                         )
                     return
                 logger.info(f"用户 {user_id} 验证成功，已批准加入请求")
@@ -1345,7 +1335,11 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 if not await restore_user_permissions(bot, chat_id, user_id):
                     with contextlib.suppress(Exception):
                         await send_verification_success_message(
-                            bot, user_id, chat_title, "restore_failed"
+                            bot,
+                            user_id,
+                            chat_title,
+                            "restore_failed",
+                            group_chat_id=chat_id,
                         )
                     return
 
@@ -1632,7 +1626,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
-                await send_verification_success_message(bot, user_id, chat_title, message_type)
+                await send_verification_success_message(
+                    bot, user_id, chat_title, message_type, group_chat_id=chat_id
+                )
 
         else:
             # 正常入群模式：恢复群组权限
@@ -1650,7 +1646,11 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     chat = await bot.get_chat(chat_id)
                     chat_title = escape_html(chat.title) if chat.title else "群组"
                     await send_verification_success_message(
-                        bot, user_id, chat_title, "restore_failed"
+                        bot,
+                        user_id,
+                        chat_title,
+                        "restore_failed",
+                        group_chat_id=chat_id,
                     )
                 return  # 提前返回，不发送欢迎消息
 
@@ -1661,7 +1661,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
-                await send_verification_success_message(bot, user_id, chat_title, "success")
+                await send_verification_success_message(
+                    bot, user_id, chat_title, "success", group_chat_id=chat_id
+                )
 
             # 在群内发送欢迎消息
             user = message.from_user
