@@ -1622,7 +1622,9 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                 )
 
             # 在私聊中通知用户
-            message_type = "success_join_request" if approved else "approve_failed"
+            message_type: SuccessMessageType = (
+                "success_join_request" if approved else "approve_failed"
+            )
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
                 chat_title = escape_html(chat.title) if chat.title else "群组"
