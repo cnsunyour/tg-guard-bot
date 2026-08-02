@@ -5,7 +5,7 @@ import contextlib
 import secrets
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
@@ -48,7 +48,12 @@ from src.services.cas_service import get_cas_service
 from src.services.spam_detector import SpamDetector
 from src.services.user_status_service import get_user_status_service
 from src.services.username_mapping import UsernameMappingService
-from src.services.verification import VerificationChallenge, VerificationService
+from src.services.verification import (
+    CaptchaChallenge,
+    PreparedChallenge,
+    VerificationChallenge,
+    VerificationService,
+)
 from src.services.verification_hint import (
     VerificationHintFlow,
     delete_hint_reservation,
@@ -57,11 +62,18 @@ from src.services.verification_hint import (
     reserve_hint,
     try_extend_hint,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+from src.services.verification_recovery import (
+    claim_timeout,
+    new_session_id,
+    promote_recovery,
+    release_recovery,
+    reserve_initial_recovery,
+)
 
 router = Router(name="verification")
+
+# 初始发送编排结果：sent 已发送 / undelivered 未启动 Bot（可恢复）/ busy 残留旧会话
+type InitialDeliveryResult = Literal["sent", "undelivered", "busy"]
 
 # 安全释放 in-flight 锁的 Lua 脚本：仅当键值等于 owner token 时才删除，
 # 避免「单次处理耗时超过 TTL → 旧协程 finally 误删新协程刚取得的锁」。
@@ -344,42 +356,9 @@ async def check_user_spam_info(
     return False  # 通过检测
 
 
-async def generate_verification_challenge(
-    group, chat_id: int, user_id: int
-) -> VerificationChallenge:
-    """根据群组配置生成验证挑战
-
-    Args:
-        group: 群组配置对象
-        chat_id: 群组 ID
-        user_id: 用户 ID
-
-    Returns:
-        验证挑战对象（discriminated union）
-    """
-    verification_service = VerificationService()
-    timeout = group.verification_timeout
-
-    generators: dict[str, Callable[[int, int, int], Awaitable[VerificationChallenge]]] = {
-        "math": verification_service.generate_math_challenge,
-        "slider": verification_service.generate_slider_challenge,
-        "qa": verification_service.generate_qa_challenge,
-        "emoji": verification_service.generate_emoji_challenge,
-        "captcha": verification_service.generate_captcha_challenge,
-        "honeypot": verification_service.generate_honeypot_challenge,
-        "puzzle": verification_service.generate_puzzle_challenge,
-        "turnstile": verification_service.generate_turnstile_challenge,
-        "friendly": verification_service.generate_friendly_challenge,
-        "hcaptcha": verification_service.generate_hcaptcha_challenge,
-        "mtcaptcha": verification_service.generate_mtcaptcha_challenge,
-        "altcha": verification_service.generate_altcha_challenge,
-        "random": verification_service.generate_random_challenge,
-    }
-    # 未知类型默认数学验证
-    generator = generators.get(
-        group.verification_type, verification_service.generate_math_challenge
-    )
-    return await generator(chat_id, user_id, timeout)
+async def prepare_verification_challenge(group, chat_id: int, user_id: int) -> PreparedChallenge:
+    """按群配置执行纯 prepare；random 在 service 内解析为具体类型，不写正式 Redis 键。"""
+    return await VerificationService.prepare_challenge(group.verification_type, chat_id, user_id)
 
 
 async def send_verification_message(
@@ -442,6 +421,84 @@ async def send_verification_message(
         reply_markup=rendered.keyboard,
         parse_mode="HTML",
     )
+
+
+async def _start_initial_verification(
+    bot: Bot,
+    group,
+    chat_id: int,
+    user_id: int,
+    username: str,
+    flow: VerificationFlow,
+) -> InitialDeliveryResult:
+    """统一执行初始发送：reserve → prepare → commit → 启 timeout → send → promote。
+
+    commit 成功后立即创建 timeout task（携带 session_id），这样 Telegram send 卡住或越过
+    deadline 时 timeout 仍能 claim pending session。Forbidden 时 release 为 undelivered
+    （保留状态供 /start 恢复）；其他发送错误 release 删全部状态。
+    """
+    verification_service = VerificationService()
+    session_id = new_session_id()
+    timeout = group.verification_timeout
+
+    reservation = await reserve_initial_recovery(chat_id, user_id, session_id, timeout * 1000)
+    if reservation is None:
+        # 残留旧会话（inflight 锁正常时不该发生）；交给旧会话 timeout 兜底
+        logger.warning(f"初始验证发送权竞争失败 [群组:{chat_id}] [用户:{user_id}]")
+        return "busy"
+
+    try:
+        prepared = await prepare_verification_challenge(group, chat_id, user_id)
+        committed = await verification_service.commit_challenge(
+            chat_id,
+            user_id,
+            prepared,
+            session_id,
+            reservation.deadline_ms,
+            flow,
+            reservation=reservation,
+        )
+        if not committed:
+            # commit 失败（reservation 过期或状态被替换）：抛异常让调用方 except 执行确定的
+            # ban/decline。initial reserve 成功后无旧 session timeout 兜底，return busy 会被
+            # 忽略导致用户永久受限。release 由本函数 except 统一执行。
+            raise RuntimeError("commit_challenge 失败：reservation 已过期或状态被替换")
+
+        # commit 成功即启 timeout（session_id 关联），即使后续 send 卡住也能 claim
+        timeout_handler = (
+            handle_join_request_timeout if flow == "join_request" else handle_verification_timeout
+        )
+        asyncio.create_task(
+            timeout_handler(bot, chat_id, user_id, session_id=session_id, timeout=timeout)
+        )
+
+        try:
+            sent_message = await send_verification_message(
+                bot,
+                chat_id,
+                user_id,
+                prepared.challenge,
+                flow=flow,
+                username=username,
+                timeout=timeout,
+            )
+        except TelegramForbiddenError:
+            # 用户未启动 Bot：release 为 undelivered，保留状态供 /start 恢复
+            released = await release_recovery(reservation, preserve_challenge=True)
+            return "undelivered" if released else "busy"
+
+        if not await promote_recovery(reservation, flow, sent_message.message_id):
+            # reservation 在发送期间失效（过期/被替换）：删未受状态机管理的 UI
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=sent_message.message_id)
+            return "busy"
+
+        return "sent"
+    except Exception:
+        # 未预期异常：release 删全部状态，避免残留不可恢复的 pending
+        with contextlib.suppress(Exception):
+            await release_recovery(reservation, preserve_challenge=False)
+        raise
 
 
 @router.chat_join_request()
@@ -611,47 +668,20 @@ async def _process_join_request(
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
-        # 根据验证类型生成挑战
-        challenge = await generate_verification_challenge(group, chat_id, user_id)
-
-        # 尝试私聊发送验证消息
         try:
-            # 标记验证类型为加入请求验证
-            type_key = RedisKeys.verification_type(chat_id, user_id)
-            await redis.setex(type_key, group.verification_timeout + 10, "join_request")
-
-            # 发送验证消息
-            sent_message = await send_verification_message(
-                bot,
-                chat_id,
-                user_id,
-                challenge,
-                flow="join_request",
-                username=username,
-                timeout=group.verification_timeout,
+            result = await _start_initial_verification(
+                bot, group, chat_id, user_id, username, "join_request"
             )
-
-            logger.info(f"已向用户 {user_id} 私聊发送加入请求验证消息")
-
-            # 启动超时处理任务（拒绝加入请求）
-            asyncio.create_task(
-                handle_join_request_timeout(
-                    bot, chat_id, user_id, sent_message.message_id, group.verification_timeout
-                )
-            )
-
-        except TelegramForbiddenError:
-            # 用户未启动 Bot，使用共享引导消息机制，并拒绝加入请求
-            logger.warning(f"用户 {user_id} 未启动 Bot，无法发送私聊验证，拒绝加入请求")
-            await handle_user_not_started_bot_for_join_request(bot, chat_id, user_id)
-
+            if result == "sent":
+                logger.info(f"已向用户 {user_id} 私聊发送加入请求验证消息")
+            elif result == "undelivered":
+                # 用户未启动 Bot：状态已 release 为 undelivered，发布共享引导消息
+                logger.warning(f"用户 {user_id} 未启动 Bot，加入请求验证等待恢复")
+                await handle_user_not_started_bot_for_join_request(bot, chat_id, user_id)
         except Exception as e:
             logger.error(f"发送私聊验证消息失败: {e}")
-            # 拒绝加入请求
+            # 拒绝加入请求（状态已由 _start_initial_verification release 清理）
             await decline_join_request(bot, chat_id, user_id)
-
-            # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
-            await verification_service.clear_verification(chat_id, user_id)
 
     except Exception as e:
         logger.error(f"处理加入请求失败: {e}")
@@ -933,39 +963,19 @@ async def _process_user_join(
         # 获取群组配置
         group = await GroupRepository.get_or_create(chat_id, event.chat.title)
 
-        # 根据验证类型生成挑战
-        challenge = await generate_verification_challenge(group, chat_id, user_id)
-
-        # ✅ 尝试私聊发送验证消息
         try:
-            # 发送验证消息
-            sent_message = await send_verification_message(
-                bot,
-                chat_id,
-                user_id,
-                challenge,
-                flow="join",
-                username=username,
-                timeout=group.verification_timeout,
+            result = await _start_initial_verification(
+                bot, group, chat_id, user_id, username, "join"
             )
-
-            logger.info(f"已向用户 {user_id} 私聊发送验证消息")
-
-            # 启动超时处理任务
-            asyncio.create_task(
-                handle_verification_timeout(
-                    bot, chat_id, user_id, sent_message.message_id, group.verification_timeout
-                )
-            )
-
-        except TelegramForbiddenError:
-            # ✅ 用户未启动 Bot，使用共享引导消息机制
-            logger.warning(f"用户 {user_id} 未启动 Bot，无法发送私聊验证")
-            await handle_user_not_started_bot(bot, chat_id, user_id, group.verification_timeout)
-
+            if result == "sent":
+                logger.info(f"已向用户 {user_id} 私聊发送验证消息")
+            elif result == "undelivered":
+                # 用户未启动 Bot：状态已 release 为 undelivered，发布共享引导消息
+                logger.warning(f"用户 {user_id} 未启动 Bot，无法发送私聊验证")
+                await handle_user_not_started_bot(bot, chat_id, user_id)
         except Exception as e:
             logger.error(f"发送私聊验证消息失败: {e}")
-            # 踢出并封禁 1 小时
+            # 踢出并封禁 1 小时（状态已由 _start_initial_verification release 清理）
             await bot.ban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -1199,7 +1209,16 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         group_config = await group_repo.get(chat_id)
         timeout = group_config.verification_timeout if group_config else 120
 
-        challenge = await verification_service.generate_captcha_challenge(chat_id, user_id, timeout)
+        # 刷新需独立 CAS 提交（不能用旧 SETEX，会在 clear/timeout 后复活状态）：
+        # 仅当验证仍在进行时 prepare + commit_captcha_refresh 原子替换答案
+        if not await verification_service.is_verification_pending(chat_id, user_id):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            return
+
+        prepared = await verification_service.prepare_challenge("captcha", chat_id, user_id)
+        if not isinstance(prepared.challenge, CaptchaChallenge):
+            raise TypeError("captcha prepare 返回了错误的 challenge 类型")
+        challenge = prepared.challenge
 
         # 刷新后仅更新题面与按钮（保持原行为：不重复信封标题），按 locale 渲染
         locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
@@ -1213,20 +1232,20 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
             await callback.answer("❌ 生成验证码失败", show_alert=True)
             return
 
-        # 编辑消息，更新图片和按钮
+        # 先编辑（media + caption 一步原子，避免「media 新 caption 旧」）；失败则 except 不 commit
         await bot.edit_message_media(
             chat_id=user_id,
             message_id=callback.message.message_id,
-            media=InputMediaPhoto(media=rendered.photo),
-        )
-        await bot.edit_message_caption(
-            chat_id=user_id,
-            message_id=callback.message.message_id,
-            caption=rendered.text,
+            media=InputMediaPhoto(media=rendered.photo, caption=rendered.text),
             reply_markup=(
                 rendered.keyboard if isinstance(rendered.keyboard, InlineKeyboardMarkup) else None
             ),
         )
+
+        # 编辑成功后 CAS commit（仅当 captcha session 仍有效才替换答案；timeout 已 claim 则失败）
+        if not await verification_service.commit_captcha_refresh(chat_id, user_id, prepared):
+            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            return
         await callback.answer("🔄 已刷新验证码", show_alert=False)
 
     except Exception as e:
@@ -1840,67 +1859,93 @@ async def handle_verification_success(
             )
 
 
+async def _wait_for_timeout_claim(
+    chat_id: int,
+    user_id: int,
+    session_id: str | None,
+    flow: VerificationFlow,
+) -> int | None:
+    """等待 Redis deadline 并 claim；返回 message_id，None 表示 session 已失效无需处理。
+
+    旧的无 session_id 调用 fail-closed 直接返回 None——退化到 is_verification_pending 会让
+    旧 timeout 误罚新 session。timeout 始终以 Redis deadline 为准（claim 循环按剩余毫秒重排）。
+    """
+    if not session_id:
+        logger.warning(f"忽略缺少 session_id 的旧 timeout 任务 [群组:{chat_id}] [用户:{user_id}]")
+        return None
+
+    while True:
+        claim = await claim_timeout(chat_id, user_id, session_id, flow)
+        if claim.status == "stale":
+            return None
+        if claim.status == "claimed":
+            return claim.message_id
+        # wait：按 Redis 剩余毫秒重排（恢复可能延长了 deadline）
+        await asyncio.sleep(max(0.001, claim.remaining_ms / 1000))
+
+
 async def handle_verification_timeout(
-    bot: Bot, chat_id: int, user_id: int, message_id: int, timeout: int
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    *,
+    session_id: str | None,
+    timeout: int,
 ) -> None:
-    """处理验证超时 - 私聊验证模式"""
+    """处理验证超时 - 私聊验证模式（join flow）"""
     try:
-        # 等待超时时间
-        await asyncio.sleep(timeout)
+        message_id = await _wait_for_timeout_claim(chat_id, user_id, session_id, "join")
+        if message_id is None:
+            return
 
-        # 检查验证状态
-        verification_service = VerificationService()
-        if await verification_service.is_verification_pending(chat_id, user_id):
-            # 验证超时
-            logger.info(f"用户 {user_id} 验证超时（{timeout}秒），开始处理...")
+        # 验证超时
+        logger.info(f"用户 {user_id} 验证超时（{timeout}秒），开始处理...")
 
-            # 1. 踢出并封禁 1 小时
-            try:
-                await bot.ban_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=1),
-                )
-                logger.info(f"已踢出并封禁用户 {user_id} 1小时（验证超时）")
-            except Exception as e:
-                logger.error(f"踢出用户失败: {e}")
+        # 1. 踢出并封禁 1 小时
+        try:
+            await bot.ban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                until_date=datetime.now() + timedelta(hours=1),
+            )
+            logger.info(f"已踢出并封禁用户 {user_id} 1小时（验证超时）")
+        except Exception as e:
+            logger.error(f"踢出用户失败: {e}")
 
-            # 2. ✅ 删除私聊中的验证消息
+        # 2. 删除私聊中的验证消息（message_id=0 表示无 UI，如 hint 路径）
+        if message_id > 0:
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=message_id)
 
-            # 3. ✅ 在私聊中通知用户（可选）
-            with contextlib.suppress(Exception):
-                chat = await bot.get_chat(chat_id)
-                chat_title = (
-                    escape_html(chat.title) if chat.title else "群组"
-                )  # ✅ 安全修复：转义 HTML
-                timeout_locale = await get_resolver().for_private_from_group(
-                    user_id=user_id, group_chat_id=chat_id
+        # 3. 在私聊中通知用户（可选）
+        with contextlib.suppress(Exception):
+            chat = await bot.get_chat(chat_id)
+            chat_title = escape_html(chat.title) if chat.title else "群组"
+            timeout_locale = await get_resolver().for_private_from_group(
+                user_id=user_id, group_chat_id=chat_id
+            )
+            timeout_text = (
+                get_translator()
+                .for_locale(timeout_locale)
+                .t(
+                    "verification.timeout.private.join.message",
+                    chat_title=chat_title,
+                    timeout=timeout,
                 )
-                timeout_text = (
-                    get_translator()
-                    .for_locale(timeout_locale)
-                    .t(
-                        "verification.timeout.private.join.message",
-                        chat_title=chat_title,
-                        timeout=timeout,
-                    )
-                )
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=timeout_text,
-                    parse_mode="HTML",  # ✅ 安全修复：使用 HTML 代替 Markdown
-                )
+            )
+            await bot.send_message(
+                chat_id=user_id,
+                text=timeout_text,
+                parse_mode="HTML",
+            )
 
-            # 4. ✅ 群内不发送任何消息
+        # 4. 群内不发送任何消息
 
-            # 5. 清除验证状态
-            await verification_service.clear_verification(chat_id, user_id)
+        # 5. 清除验证状态（claim 已删主键/token，此处清剩余键）
+        verification_service = VerificationService()
+        await verification_service.clear_verification(chat_id, user_id)
 
-            logger.info(f"用户 {user_id} 验证超时处理完成（已踢出+封禁1小时）")
-        else:
-            logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
+        logger.info(f"用户 {user_id} 验证超时处理完成（已踢出+封禁1小时）")
 
     except Exception as e:
         logger.error(f"处理验证超时失败: {e}")
@@ -1986,22 +2031,14 @@ async def _publish_shared_hint(
         logger.error(f"发送 {flow} 引导消息失败", exc_info=True)
 
 
-async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int, timeout: int) -> None:
-    """直接入群用户未启动 Bot：共享引导消息 + 延迟踢出。
+async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> None:
+    """直接入群用户未启动 Bot：发布共享引导消息。
 
-    30 秒内同一 flow 只发送一条引导消息。不立即踢出，给用户完整的验证超时
-    时间启动 Bot 并完成验证。
+    challenge 已由 _start_initial_verification 标记为 undelivered，并由同 session 的
+    timeout task 兜底处罚，故此处不再另启 timeout。30 秒内同一 flow 只发一条引导消息。
     """
     await _publish_shared_hint(bot, chat_id, "join")
-
-    # 延迟踢出（延迟时间 = 验证超时时间）。若用户在超时前启动 Bot 并完成验证，
-    # 验证成功流程会清除验证状态，踢出任务检查失败即不踢出。
-    asyncio.create_task(
-        handle_verification_timeout(bot, chat_id, user_id, message_id=0, timeout=timeout)
-    )
-    logger.info(
-        f"用户 {user_id} 未启动 Bot，已保留在群组 {chat_id} 但限制权限，{timeout} 秒后将踢出"
-    )
+    logger.info(f"用户 {user_id} 的 join challenge 已标记为 undelivered（群组 {chat_id}）")
 
 
 async def delete_hint_message_after_delay(
@@ -2039,71 +2076,72 @@ async def delete_hint_message_after_delay(
 
 
 async def handle_join_request_timeout(
-    bot: Bot, chat_id: int, user_id: int, message_id: int, timeout: int
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    *,
+    session_id: str | None,
+    timeout: int,
 ) -> None:
-    """处理加入请求验证超时 - 拒绝加入请求"""
+    """处理加入请求验证超时 - 拒绝加入请求（join_request flow）"""
     try:
-        # 等待超时时间
-        await asyncio.sleep(timeout)
+        message_id = await _wait_for_timeout_claim(chat_id, user_id, session_id, "join_request")
+        if message_id is None:
+            return
 
-        # 检查验证状态
-        verification_service = VerificationService()
-        if await verification_service.is_verification_pending(chat_id, user_id):
-            # 验证超时
-            logger.info(f"用户 {user_id} 加入请求验证超时（{timeout}秒），开始处理...")
+        # 验证超时
+        logger.info(f"用户 {user_id} 加入请求验证超时（{timeout}秒），开始处理...")
 
-            # 1. 拒绝加入请求
-            try:
-                await decline_join_request(bot, chat_id, user_id)
-                logger.info(f"已拒绝用户 {user_id} 的加入请求")
-            except Exception as e:
-                logger.error(f"拒绝加入请求失败: {e}")
+        # 1. 拒绝加入请求
+        try:
+            await decline_join_request(bot, chat_id, user_id)
+            logger.info(f"已拒绝用户 {user_id} 的加入请求")
+        except Exception as e:
+            logger.error(f"拒绝加入请求失败: {e}")
 
-            # 2. 封禁 1 小时，防止立即重试
-            try:
-                await bot.ban_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=1),
-                )
-                logger.info(f"已封禁用户 {user_id} 1小时（验证超时）")
-            except Exception as e:
-                logger.error(f"封禁用户失败: {e}")
+        # 2. 封禁 1 小时，防止立即重试
+        try:
+            await bot.ban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                until_date=datetime.now() + timedelta(hours=1),
+            )
+            logger.info(f"已封禁用户 {user_id} 1小时（验证超时）")
+        except Exception as e:
+            logger.error(f"封禁用户失败: {e}")
 
-            # 3. 删除私聊中的验证消息
+        # 3. 删除私聊中的验证消息（message_id=0 表示无 UI）
+        if message_id > 0:
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=message_id)
 
-            # 4. 在私聊中通知用户
-            with contextlib.suppress(Exception):
-                chat = await bot.get_chat(chat_id)
-                chat_title = (
-                    escape_html(chat.title) if chat.title else "群组"
-                )  # ✅ 安全修复：转义 HTML
-                timeout_locale = await get_resolver().for_private_from_group(
-                    user_id=user_id, group_chat_id=chat_id
+        # 4. 在私聊中通知用户
+        with contextlib.suppress(Exception):
+            chat = await bot.get_chat(chat_id)
+            chat_title = escape_html(chat.title) if chat.title else "群组"
+            timeout_locale = await get_resolver().for_private_from_group(
+                user_id=user_id, group_chat_id=chat_id
+            )
+            timeout_text = (
+                get_translator()
+                .for_locale(timeout_locale)
+                .t(
+                    "verification.timeout.private.join_request.message",
+                    chat_title=chat_title,
+                    timeout=timeout,
                 )
-                timeout_text = (
-                    get_translator()
-                    .for_locale(timeout_locale)
-                    .t(
-                        "verification.timeout.private.join_request.message",
-                        chat_title=chat_title,
-                        timeout=timeout,
-                    )
-                )
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=timeout_text,
-                    parse_mode="HTML",
-                )
+            )
+            await bot.send_message(
+                chat_id=user_id,
+                text=timeout_text,
+                parse_mode="HTML",
+            )
 
-            # 5. 清除验证状态
-            await verification_service.clear_verification(chat_id, user_id)
+        # 5. 清除验证状态（claim 已删主键/token，此处清剩余键）
+        verification_service = VerificationService()
+        await verification_service.clear_verification(chat_id, user_id)
 
-            logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁1小时）")
-        else:
-            logger.debug(f"用户 {user_id} 验证状态已清除（可能已完成验证或被清除）")
+        logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁1小时）")
 
     except Exception as e:
         logger.error(f"处理加入请求验证超时失败: {e}")
@@ -2112,16 +2150,22 @@ async def handle_join_request_timeout(
 async def handle_user_not_started_bot_for_join_request(
     bot: Bot, chat_id: int, user_id: int
 ) -> None:
-    """加入请求中用户未启动 Bot：共享引导消息 + 拒绝加入请求。"""
+    """加入请求用户未启动 Bot：发布共享引导消息 + 拒绝加入请求。
+
+    4a 维持现状（decline + clear）：用户可重新申请加入。4b 接入 /start 恢复入口后，改为
+    保留 undelivered 状态供恢复（由同 session timeout 兜底拒绝+封禁）。
+    """
     await _publish_shared_hint(bot, chat_id, "join_request")
 
-    # 拒绝加入请求
     try:
         await decline_join_request(bot, chat_id, user_id)
         logger.info(f"用户 {user_id} 未启动 Bot，已拒绝加入请求（群组 {chat_id}）")
+        # decline 成功才 clear（用户可重新申请加入）
+        verification_service = VerificationService()
+        await verification_service.clear_verification(chat_id, user_id)
     except Exception as e:
-        logger.error(f"拒绝加入请求失败: {e}")
-
-    # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
-    verification_service = VerificationService()
-    await verification_service.clear_verification(chat_id, user_id)
+        # decline 失败（网络等）：不 clear，保留 undelivered 让同 session timeout 兜底
+        # （timeout 到期 claim → 再 decline + ban 1h），避免加入请求永久未处理
+        logger.error(
+            f"拒绝加入请求失败，保留状态由 timeout 兜底 [群组:{chat_id}] [用户:{user_id}]: {e}"
+        )
