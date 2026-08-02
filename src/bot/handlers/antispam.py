@@ -2647,11 +2647,12 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                 allow_left=True,
             )
             if not success:
-                # 处罚失败：edit 报错（不 callback.answer，已 answer processing），
-                # 保留原提示与按钮供重试（codex 3b-3 review P2）
+                # 处罚失败：追加报错到原提示（保留证据 + 按钮），不 callback.answer
+                # （已 answer processing）。codex review P2：勿替换整个 prompt 丢证据
                 with contextlib.suppress(Exception):
                     await message.edit_text(
-                        localizer.t(
+                        f"{message.text or ''}\n\n"
+                        + localizer.t(
                             "antispam.review.action_failed.message",
                             error=error_msg or "",
                         ),

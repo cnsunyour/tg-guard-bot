@@ -291,10 +291,12 @@ async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
     await antispam.on_spam_review_callback(callback, MagicMock())
 
     consume.assert_not_awaited()
-    # P2：action_failed 用 edit_text（不 callback.answer），保留按钮供重试
+    # P2：action_failed 追加到原提示（保留证据 + 按钮，不替换整个 prompt）
     message.edit_text.assert_awaited_once()
     assert message.edit_text.await_args.kwargs["reply_markup"] == "review-keyboard"
-    assert "forbidden" in message.edit_text.await_args.args[0]
+    edit_text = message.edit_text.await_args.args[0]
+    assert "forbidden" in edit_text
+    assert "spam text" in edit_text  # 原 message.text 保留
 
 
 async def test_review_callback_false_positive_keeps_original_message(mocker, localizer) -> None:
