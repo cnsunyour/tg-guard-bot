@@ -1462,74 +1462,96 @@ async def cmd_set_timeout(message: Message, bot: Bot, localizer: BoundLocalizer)
 
 
 @router.message(Command("health"))
-async def cmd_health(message: Message) -> None:
+async def cmd_health(message: Message, localizer: BoundLocalizer) -> None:
     """健康检查命令（仅超级管理员）"""
     # 检查是否是超级管理员
     if not message.from_user:
         return
 
     if message.from_user.id not in settings.admin_ids:
-        await message.answer("❌ 只有超级管理员可以使用此命令")
+        await message.answer(localizer.t("admin.health.permission_denied.message"))
         return
 
     try:
         health_checker = get_health_checker()
         report = await health_checker.full_check()
 
-        # 构建报告文本
         status_emoji = "✅" if report["healthy"] else "❌"
+        uptime = report["uptime"]
+        uptime_text = localizer.t(
+            "admin.common.uptime.message",
+            days=uptime["days"],
+            hours=uptime["hours"],
+            minutes=uptime["minutes"],
+            seconds=uptime["seconds_component"],
+        )
 
-        text = f"{status_emoji} <b>系统健康状态</b>\n\n"
-
-        # 运行时间
-        text += f"⏱️ <b>运行时间</b>: {report['uptime']['formatted']}\n"
-        text += f"🔄 <b>检查次数</b>: {report['check_count']}\n\n"
-
-        # 数据库状态
         db = report["database"]
         db_emoji = "✅" if db["healthy"] else "❌"
-        text += f"{db_emoji} <b>数据库</b>: {db['latency_ms']:.2f}ms\n"
-        if db["error"]:
-            text += f"   错误: {db['error']}\n"
+        db_error_line = (
+            localizer.t(
+                "admin.health.error_line.message", error=escape_html(str(db["error"])[:500])
+            )
+            if db["error"]
+            else ""
+        )
 
-        # Redis 状态
         redis = report["redis"]
         redis_emoji = "✅" if redis["healthy"] else "❌"
-        text += f"{redis_emoji} <b>Redis</b>: {redis['latency_ms']:.2f}ms\n"
-        if redis["error"]:
-            text += f"   错误: {redis['error']}\n"
+        redis_error_line = (
+            localizer.t(
+                "admin.health.error_line.message", error=escape_html(str(redis["error"])[:500])
+            )
+            if redis["error"]
+            else ""
+        )
 
-        # 系统资源
-        if report.get("system"):
-            sys = report["system"]
-            text += "\n💻 <b>系统资源</b>\n"
-            text += f"• CPU: {sys['cpu']['percent']:.1f}% ({sys['cpu']['count']} 核)\n"
-            text += (
-                f"• 内存: {sys['memory']['used_mb']:.0f}/{sys['memory']['total_mb']:.0f} MB "
-                f"({sys['memory']['percent']:.1f}%)\n"
+        system_block = ""
+        sys_metrics = report.get("system")
+        if sys_metrics:
+            system_block = localizer.t(
+                "admin.health.report.system.message",
+                cpu_percent=f"{sys_metrics['cpu']['percent']:.1f}",
+                cpu_count=sys_metrics["cpu"]["count"],
+                mem_used=f"{sys_metrics['memory']['used_mb']:.0f}",
+                mem_total=f"{sys_metrics['memory']['total_mb']:.0f}",
+                mem_percent=f"{sys_metrics['memory']['percent']:.1f}",
+                disk_used=f"{sys_metrics['disk']['used_gb']:.1f}",
+                disk_total=f"{sys_metrics['disk']['total_gb']:.1f}",
+                disk_percent=f"{sys_metrics['disk']['percent']:.1f}",
             )
-            text += (
-                f"• 磁盘: {sys['disk']['used_gb']:.1f}/{sys['disk']['total_gb']:.1f} GB "
-                f"({sys['disk']['percent']:.1f}%)\n"
-            )
+
+        text = localizer.t(
+            "admin.health.report.message",
+            status_emoji=status_emoji,
+            uptime=uptime_text,
+            check_count=report["check_count"],
+            db_emoji=db_emoji,
+            db_latency=f"{db['latency_ms']:.2f}",
+            db_error_line=db_error_line,
+            redis_emoji=redis_emoji,
+            redis_latency=f"{redis['latency_ms']:.2f}",
+            redis_error_line=redis_error_line,
+            system_block=system_block,
+        )
 
         await message.answer(text)
 
-    except Exception as e:
-        logger.error(f"健康检查失败: {e}")
+    except Exception:
+        logger.exception("健康检查失败")
         # ✅ M2: 不向用户显示详细异常信息，防止信息泄露
-        await message.answer("❌ 健康检查失败，请联系管理员")
+        await message.answer(localizer.t("admin.health.failed.message"))
 
 
 @router.message(Command("stats"))
-async def cmd_stats(message: Message) -> None:
+async def cmd_stats(message: Message, localizer: BoundLocalizer) -> None:
     """统计信息命令（仅超级管理员）"""
     # 检查是否是超级管理员
     if not message.from_user:
         return
 
     if message.from_user.id not in settings.admin_ids:
-        await message.answer("❌ 只有超级管理员可以使用此命令")
+        await message.answer(localizer.t("admin.stats.permission_denied.message"))
         return
 
     try:
@@ -1539,35 +1561,44 @@ async def cmd_stats(message: Message) -> None:
         detector = get_detector()
         spam_stats = await detector.get_statistics()
 
-        # 获取警告统计（简单示例）
-        # total_warnings = await UserRepository.count_all_warnings()  # 需要实现此方法
-
-        text = "📊 <b>系统统计</b>\n\n"
-
-        # 反垃圾统计
-        text += "🛡️ <b>反垃圾系统</b>\n"
-        text += f"• 总样本数: {spam_stats.get('total_samples', 0)}\n"
-        text += f"• 垃圾样本: {spam_stats.get('spam_samples', 0)}\n"
-        text += f"• 正常样本: {spam_stats.get('normal_samples', 0)}\n"
-        text += (
-            f"• ML 分类器: {'✅ 已训练' if spam_stats.get('classifier_trained') else '❌ 未训练'}\n"
+        classifier_status = localizer.t(
+            "admin.stats.classifier.trained.label"
+            if spam_stats.get("classifier_trained")
+            else "admin.stats.classifier.untrained.label"
         )
-        text += f"• Embedding: {'✅ 已初始化' if spam_stats.get('embedder_initialized') else '❌ 未初始化'}\n"
+        embedder_status = localizer.t(
+            "admin.stats.embedder.initialized.label"
+            if spam_stats.get("embedder_initialized")
+            else "admin.stats.embedder.uninitialized.label"
+        )
 
-        # 系统信息
         health_checker = get_health_checker()
         uptime = health_checker.get_uptime()
+        uptime_text = localizer.t(
+            "admin.common.uptime.message",
+            days=uptime["days"],
+            hours=uptime["hours"],
+            minutes=uptime["minutes"],
+            seconds=uptime["seconds_component"],
+        )
 
-        text += "\n⏱️ <b>系统信息</b>\n"
-        text += f"• 运行时间: {uptime['formatted']}\n"
-        text += f"• 启动时间: {uptime['started_at']}\n"
+        text = localizer.t(
+            "admin.stats.report.message",
+            total=spam_stats.get("total_samples", 0),
+            spam=spam_stats.get("spam_samples", 0),
+            normal=spam_stats.get("normal_samples", 0),
+            classifier_status=classifier_status,
+            embedder_status=embedder_status,
+            uptime=uptime_text,
+            started_at=uptime["started_at"],
+        )
 
         await message.answer(text)
 
-    except Exception as e:
-        logger.error(f"获取统计信息失败: {e}")
+    except Exception:
+        logger.exception("获取统计信息失败")
         # ✅ M2: 不向用户显示详细异常信息，防止信息泄露
-        await message.answer("❌ 获取统计信息失败，请联系管理员")
+        await message.answer(localizer.t("admin.stats.failed.message"))
 
 
 async def _list_whitelist(message: Message) -> None:

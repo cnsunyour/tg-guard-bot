@@ -131,6 +131,11 @@ class HealthChecker:
 
         return {
             "seconds": int(uptime_seconds),
+            "days": days,
+            "hours": hours,
+            "minutes": minutes,
+            "seconds_component": seconds,
+            # formatted 保留向后兼容（固定中文）；调用方需本地化时应使用上面的组件字段
             "formatted": f"{days}天 {hours}小时 {minutes}分钟 {seconds}秒",
             "started_at": datetime.fromtimestamp(self.start_time).isoformat(),
         }
