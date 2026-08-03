@@ -45,6 +45,7 @@
   "moderation.warnings.count.other": "{count} warnings",
   "start.welcome.private.message": "👋 <b>Welcome to Guard Bot!</b>\n\n🤖 This Bot provides:\n• Join verification\n• Smart anti-spam\n• Group management\n\nAfter joining a group, I will send a verification message in private chat.\n\nUse /help for more commands.",
   "verification.callback.approve_failed.toast": "⚠️ Verification passed, but the join request could not be approved. Please try again later or contact an administrator",
+  "verification.callback.cancelled.toast": "Verification cancelled",
   "verification.callback.expired.toast": "✅ This verification message has expired",
   "verification.callback.failed.toast": "❌ Verification failed. Please contact an administrator",
   "verification.callback.honeypot_trap.toast": "❌ Bot behavior detected",
@@ -57,6 +58,11 @@
   "verification.captcha.challenge.body.message": "👋 Welcome, {username}!\n\nWithin {timeout} seconds, enter the code from the image (case-insensitive):",
   "verification.captcha.challenge.input.button": "✏️ Enter code",
   "verification.captcha.challenge.refresh.button": "🔄 Refresh",
+  "verification.captcha.generate_failed.toast": "❌ Failed to generate captcha",
+  "verification.captcha.input_prompt.toast": "✏️ Please send the captcha code as a text message",
+  "verification.captcha.input_success.private.message": "✅ Verification successful!",
+  "verification.captcha.input_wrong.private.message": "❌ Incorrect captcha",
+  "verification.captcha.refreshed.toast": "🔄 Captcha refreshed",
   "verification.challenge.envelope.join.message": "📢 <b>Group verification</b>\n\nYou have joined the group: <b>{chat_title}</b>\n\n{body}",
   "verification.challenge.envelope.join_request.message": "📢 <b>Join request verification</b>\n\nYou requested to join the group: <b>{chat_title}</b>\n\n{body}",
   "verification.emoji.bank.airplane.description": "飞机",
@@ -282,5 +288,9 @@
   "verification.timeout.private.join.message": "❌ <b>Verification timed out</b>\n\nYour verification for <b>{chat_title}</b> timed out after {timeout} seconds. Please join again and complete verification within the time limit.",
   "verification.timeout.private.join_request.message": "❌ <b>Verification timed out</b>\n\nYour request to join <b>{chat_title}</b> was rejected because verification timed out after {timeout} seconds. Please submit a new request and complete verification within the time limit.",
   "verification.webapp.challenge.body.message": "👋 Welcome, {username}!\n\nWithin {timeout} seconds, tap the button below to complete verification:",
-  "verification.webapp.challenge.start.button": "🔐 Start verification"
+  "verification.webapp.challenge.start.button": "🔐 Start verification",
+  "verification.webapp.error.expired.private.message": "❌ <b>Verification failed</b>\n\nThe verification request has expired. Please try again.",
+  "verification.webapp.error.generic.private.message": "❌ <b>Verification failed</b>\n\nAn error occurred during verification. Please try again. If the problem persists, contact an administrator.",
+  "verification.webapp.error.invalid_token.private.message": "❌ <b>Verification failed</b>\n\nThe verification token is invalid or has already been used. Please try again.",
+  "verification.webapp.error.signature.private.message": "❌ <b>Verification failed</b>\n\nSignature verification failed. Please ask an administrator to check the configuration."
 }

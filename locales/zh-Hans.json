@@ -45,6 +45,7 @@
   "moderation.warnings.count.other": "{count} 次警告",
   "start.welcome.private.message": "👋 <b>欢迎使用 Guard Bot！</b>\n\n🤖 本 Bot 提供以下功能：\n• 入群验证\n• 智能反垃圾\n• 群组管理\n\n加入群组后，我会在私聊中发送验证消息。\n\n使用 /help 查看更多命令。",
   "verification.callback.approve_failed.toast": "⚠️ 验证已通过，但暂时无法批准加入请求，请稍后重试或联系管理员",
+  "verification.callback.cancelled.toast": "已取消验证",
   "verification.callback.expired.toast": "✅ 此验证消息已失效",
   "verification.callback.failed.toast": "❌ 验证失败，请联系管理员",
   "verification.callback.honeypot_trap.toast": "❌ 检测到机器人行为",
@@ -57,6 +58,11 @@
   "verification.captcha.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内输入图片中的验证码（不区分大小写）：",
   "verification.captcha.challenge.input.button": "✏️ 输入验证码",
   "verification.captcha.challenge.refresh.button": "🔄 换一张",
+  "verification.captcha.generate_failed.toast": "❌ 生成验证码失败",
+  "verification.captcha.input_prompt.toast": "✏️ 请直接发送验证码文本",
+  "verification.captcha.input_success.private.message": "✅ 验证成功！",
+  "verification.captcha.input_wrong.private.message": "❌ 验证码错误",
+  "verification.captcha.refreshed.toast": "🔄 已刷新验证码",
   "verification.challenge.envelope.join.message": "📢 <b>群组验证通知</b>\n\n您加入了群组：<b>{chat_title}</b>\n\n{body}",
   "verification.challenge.envelope.join_request.message": "📢 <b>加入请求验证</b>\n\n您请求加入群组：<b>{chat_title}</b>\n\n{body}",
   "verification.emoji.bank.airplane.description": "飞机",
@@ -282,5 +288,9 @@
   "verification.timeout.private.join.message": "❌ <b>验证超时</b>\n\n您在群组 <b>{chat_title}</b> 的验证已超时（超过 {timeout} 秒）。请重新加入并在规定时间内完成验证。",
   "verification.timeout.private.join_request.message": "❌ <b>验证超时</b>\n\n您加入群组 <b>{chat_title}</b> 的请求已被拒绝，原因：验证超时（超过 {timeout} 秒）。请重新发送加入请求并在规定时间内完成验证。",
   "verification.webapp.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内点击下方按钮完成验证：",
-  "verification.webapp.challenge.start.button": "🔐 开始验证"
+  "verification.webapp.challenge.start.button": "🔐 开始验证",
+  "verification.webapp.error.expired.private.message": "❌ <b>验证失败</b>\n\n验证请求已过期，请重新尝试。",
+  "verification.webapp.error.generic.private.message": "❌ <b>验证失败</b>\n\n处理验证时发生错误，请重新尝试。如果问题持续，请联系管理员。",
+  "verification.webapp.error.invalid_token.private.message": "❌ <b>验证失败</b>\n\n验证令牌无效或已使用，请重新尝试。",
+  "verification.webapp.error.signature.private.message": "❌ <b>验证失败</b>\n\n签名验证失败，请联系管理员检查配置。"
 }

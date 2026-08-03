@@ -45,6 +45,7 @@
   "moderation.warnings.count.other": "{count} 次警告",
   "start.welcome.private.message": "👋 <b>歡迎使用 Guard Bot！</b>\n\n🤖 本 Bot 提供以下功能：\n• 入群驗證\n• 智能反垃圾\n• 群組管理\n\n加入群組後，我會在私聊中發送驗證訊息。\n\n使用 /help 查看更多命令。",
   "verification.callback.approve_failed.toast": "⚠️ 驗證已通過，但暫時無法批准加入請求，請稍後再試或聯絡管理員",
+  "verification.callback.cancelled.toast": "已取消驗證",
   "verification.callback.expired.toast": "✅ 此驗證訊息已失效",
   "verification.callback.failed.toast": "❌ 驗證失敗，請聯絡管理員",
   "verification.callback.honeypot_trap.toast": "❌ 偵測到機器人行為",
@@ -57,6 +58,11 @@
   "verification.captcha.challenge.body.message": "👋 歡迎 {username}！\n\n請在 {timeout} 秒內輸入圖片中的驗證碼（不區分大小寫）：",
   "verification.captcha.challenge.input.button": "✏️ 輸入驗證碼",
   "verification.captcha.challenge.refresh.button": "🔄 換一張",
+  "verification.captcha.generate_failed.toast": "❌ 產生驗證碼失敗",
+  "verification.captcha.input_prompt.toast": "✏️ 請直接發送驗證碼文字",
+  "verification.captcha.input_success.private.message": "✅ 驗證成功！",
+  "verification.captcha.input_wrong.private.message": "❌ 驗證碼錯誤",
+  "verification.captcha.refreshed.toast": "🔄 已重新產生驗證碼",
   "verification.challenge.envelope.join.message": "📢 <b>群組驗證通知</b>\n\n您加入了群組：<b>{chat_title}</b>\n\n{body}",
   "verification.challenge.envelope.join_request.message": "📢 <b>加入請求驗證</b>\n\n您請求加入群組：<b>{chat_title}</b>\n\n{body}",
   "verification.emoji.bank.airplane.description": "飞机",
@@ -282,5 +288,9 @@
   "verification.timeout.private.join.message": "❌ <b>驗證逾時</b>\n\n您在群組 <b>{chat_title}</b> 的驗證已逾時（超過 {timeout} 秒）。請重新加入，並在規定時間內完成驗證。",
   "verification.timeout.private.join_request.message": "❌ <b>驗證逾時</b>\n\n您加入群組 <b>{chat_title}</b> 的申請已被拒絕，原因：驗證逾時（超過 {timeout} 秒）。請重新提交加入申請，並在規定時間內完成驗證。",
   "verification.webapp.challenge.body.message": "👋 歡迎 {username}！\n\n請在 {timeout} 秒內點擊下方按鈕完成驗證：",
-  "verification.webapp.challenge.start.button": "🔐 開始驗證"
+  "verification.webapp.challenge.start.button": "🔐 開始驗證",
+  "verification.webapp.error.expired.private.message": "❌ <b>驗證失敗</b>\n\n驗證請求已過期，請重新嘗試。",
+  "verification.webapp.error.generic.private.message": "❌ <b>驗證失敗</b>\n\n處理驗證時發生錯誤，請重新嘗試。若問題持續，請聯絡管理員。",
+  "verification.webapp.error.invalid_token.private.message": "❌ <b>驗證失敗</b>\n\n驗證權杖無效或已使用，請重新嘗試。",
+  "verification.webapp.error.signature.private.message": "❌ <b>驗證失敗</b>\n\n簽章驗證失敗，請聯絡管理員檢查設定。"
 }

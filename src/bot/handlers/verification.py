@@ -266,15 +266,28 @@ async def send_verification_success_message(
     )
 
 
-async def send_group_welcome(bot: Bot, chat_id: int, user: User) -> Message:
-    """在群内发送欢迎消息（按群 locale 渲染），返回消息供调用方延迟删除。"""
+type WelcomeMentionStyle = Literal["plain", "linked"]
+
+
+async def send_group_welcome(
+    bot: Bot,
+    chat_id: int,
+    user: User,
+    *,
+    mention_style: WelcomeMentionStyle = "plain",
+) -> Message:
+    """在群内发送欢迎消息（按群 locale 渲染），返回消息供调用方延迟删除。
+
+    mention_style 控制用户提及格式（均经脱敏，普通用户不暴露真实名称）：
+    - plain: format_user_mention 纯文本（脱敏名 + @脱敏username 或数字 ID）
+    - linked: masked_mention_html 可点击 <a> 链接（仅脱敏名，管理员可点击定位）
+    """
     group_locale = await get_resolver().for_group(chat_id)
+    mention = masked_mention_html(user) if mention_style == "linked" else format_user_mention(user)
     welcome_text = (
-        get_translator()
-        .for_locale(group_locale)
-        .t("verification.join.group.welcome", user=format_user_mention(user))
+        get_translator().for_locale(group_locale).t("verification.join.group.welcome", user=mention)
     )
-    return await bot.send_message(chat_id=chat_id, text=welcome_text)
+    return await bot.send_message(chat_id=chat_id, text=welcome_text, parse_mode="HTML")
 
 
 async def check_user_spam_info(
@@ -1150,10 +1163,17 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
 @router.callback_query(F.data.startswith("verify_captcha_input:"))
 async def on_captcha_input_request(callback: CallbackQuery) -> None:
     """处理验证码输入请求 - 私聊模式"""
+    # 点击者显式语言偏好（身份确认前的 toast + 异常兜底）
+    clicker_locale = await get_resolver().for_user(callback.from_user.id)
+    clicker_localizer = get_translator().for_locale(clicker_locale)
+
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 验证数据错误", show_alert=True)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.invalid_data.toast"),
+                show_alert=True,
+            )
             return
 
         _, chat_id_str, user_id_str = callback.data.split(":")
@@ -1162,8 +1182,17 @@ async def on_captcha_input_request(callback: CallbackQuery) -> None:
 
         # 检查是否是本人点击
         if callback.from_user.id != user_id:
-            await callback.answer("❌ 这不是你的验证消息", show_alert=True)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.not_yours.toast"),
+                show_alert=True,
+            )
             return
+
+        # 身份确认后解析 owner 私聊 locale（选项 B：用户偏好 → 来源群）
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
 
         # 获取群组配置的超时时间
         group_repo = GroupRepository()
@@ -1179,20 +1208,31 @@ async def on_captcha_input_request(callback: CallbackQuery) -> None:
         waiting_user_key = RedisKeys.captcha_waiting_user(user_id)
         await redis.setex(waiting_user_key, timeout + 10, str(chat_id))
 
-        await callback.answer("✏️ 请直接发送验证码文本", show_alert=False)
+        await callback.answer(
+            localizer.t("verification.captcha.input_prompt.toast"), show_alert=False
+        )
 
     except Exception as e:
         logger.error(f"处理验证码输入请求失败: {e}")
-        await callback.answer("❌ 操作失败，请联系管理员", show_alert=True)
+        await callback.answer(
+            clicker_localizer.t("verification.callback.failed.toast"), show_alert=True
+        )
 
 
 @router.callback_query(F.data.startswith("verify_captcha_refresh:"))
 async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
     """处理验证码刷新 - 私聊模式"""
+    # 点击者显式语言偏好（身份确认前的 toast）
+    clicker_locale = await get_resolver().for_user(callback.from_user.id)
+    clicker_localizer = get_translator().for_locale(clicker_locale)
+
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 验证数据错误", show_alert=True)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.invalid_data.toast"),
+                show_alert=True,
+            )
             return
 
         _, chat_id_str, user_id_str = callback.data.split(":")
@@ -1201,8 +1241,17 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
 
         # 检查是否是本人点击
         if callback.from_user.id != user_id:
-            await callback.answer("❌ 这不是你的验证消息", show_alert=True)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.not_yours.toast"),
+                show_alert=True,
+            )
             return
+
+        # 身份确认后解析 owner 私聊 locale（选项 B：用户偏好 → 来源群）
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
 
         # 重新生成验证码
         verification_service = VerificationService()
@@ -1216,7 +1265,9 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         # 刷新需独立 CAS 提交（不能用旧 SETEX，会在 clear/timeout 后复活状态）：
         # 仅当验证仍在进行时 prepare + commit_captcha_refresh 原子替换答案
         if not await verification_service.is_verification_pending(chat_id, user_id):
-            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            await callback.answer(
+                localizer.t("verification.callback.expired.toast"), show_alert=False
+            )
             return
 
         prepared = await verification_service.prepare_challenge("captcha", chat_id, user_id)
@@ -1225,15 +1276,15 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
         challenge = prepared.challenge
 
         # 刷新后仅更新题面与按钮（保持原行为：不重复信封标题），按 locale 渲染
-        locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
-        localizer = get_translator().for_locale(locale)
         rendered = render_captcha_for_refresh(
             challenge, localizer, chat_id, user_id, username, timeout
         )
 
         # 检查 photo 是否存在
         if rendered.photo is None:
-            await callback.answer("❌ 生成验证码失败", show_alert=True)
+            await callback.answer(
+                localizer.t("verification.captcha.generate_failed.toast"), show_alert=True
+            )
             return
 
         # 先编辑（media + caption 一步原子，避免「media 新 caption 旧」）；失败则 except 不 commit
@@ -1248,13 +1299,17 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
 
         # 编辑成功后 CAS commit（仅当 captcha session 仍有效才替换答案；timeout 已 claim 则失败）
         if not await verification_service.commit_captcha_refresh(chat_id, user_id, prepared):
-            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            await callback.answer(
+                localizer.t("verification.callback.expired.toast"), show_alert=False
+            )
             return
-        await callback.answer("🔄 已刷新验证码", show_alert=False)
+        await callback.answer(localizer.t("verification.captcha.refreshed.toast"), show_alert=False)
 
     except Exception as e:
         logger.error(f"处理验证码刷新失败: {e}")
-        await callback.answer("❌ 刷新失败，请联系管理员", show_alert=True)
+        await callback.answer(
+            clicker_localizer.t("verification.callback.failed.toast"), show_alert=True
+        )
 
 
 @router.message(F.chat.type == "private", F.text, ~F.web_app_data)
@@ -1289,6 +1344,12 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             return
 
         chat_id = int(chat_id_str)
+
+        # 解析 owner 私聊 locale（选项 B：用户偏好 → 来源群）
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
 
         # ✅ 检查验证状态是否存在
         verification_service = VerificationService()
@@ -1335,7 +1396,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             # ✅ 清除验证状态（提前到可能早退之前，避免遗留状态被超时任务重复处理）
             await verification_service.clear_verification(chat_id, user_id)
 
-            await message.answer("✅ 验证成功！")
+            await message.answer(localizer.t("verification.captcha.input_success.private.message"))
 
             # ✅ 设置"已验证"标记（10 分钟），以便权限恢复/批准失败后用户重新触发入群时跳过验证
             approved_key = RedisKeys.verification_approved(chat_id, user_id)
@@ -1377,12 +1438,10 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 # 恢复成功：approved_key 使命完成，删除避免 10 分钟内重新加入免验证
                 await redis.delete(approved_key)
 
-                # 发送欢迎消息到群组
+                # 发送欢迎消息到群组（masked 可点击 mention，按群 locale 渲染）
                 assert message.from_user  # 类型缩小
-                welcome_msg = await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"✅ 欢迎 {masked_mention_html(message.from_user)} 加入群组！",
-                    parse_mode="HTML",
+                welcome_msg = await send_group_welcome(
+                    bot, chat_id, message.from_user, mention_style="linked"
                 )
 
                 # 30 秒后删除欢迎消息
@@ -1397,7 +1456,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
 
         else:
             # 验证失败 - 清理所有相关键
-            await message.answer("❌ 验证码错误，请重试")
+            await message.answer(localizer.t("verification.captcha.input_wrong.private.message"))
             await redis.delete(waiting_key)
             await redis.delete(waiting_user_key)  # ✅ 删除反向索引
 
@@ -1434,10 +1493,17 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
 @router.callback_query(F.data.startswith("verify_cancel:"))
 async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
     """处理取消验证 - 私聊模式"""
+    # 点击者显式语言偏好（身份确认前的 toast + 异常兜底）
+    clicker_locale = await get_resolver().for_user(callback.from_user.id)
+    clicker_localizer = get_translator().for_locale(clicker_locale)
+
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 验证数据错误", show_alert=True)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.invalid_data.toast"),
+                show_alert=True,
+            )
             return
 
         _, chat_id_str, user_id_str = callback.data.split(":")
@@ -1446,13 +1512,24 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
 
         # 检查是否是本人点击
         if callback.from_user.id != user_id:
-            await callback.answer("❌ 这不是你的验证消息", show_alert=True)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.not_yours.toast"),
+                show_alert=True,
+            )
             return
+
+        # 身份确认后解析 owner 私聊 locale（选项 B：用户偏好 → 来源群）
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
 
         # ✅ 检查验证状态是否还存在
         verification_service = VerificationService()
         if not await verification_service.is_verification_pending(chat_id, user_id):
-            await callback.answer("✅ 此验证消息已失效", show_alert=False)
+            await callback.answer(
+                localizer.t("verification.callback.expired.toast"), show_alert=False
+            )
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
             return
@@ -1471,11 +1548,15 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
         # 清除验证状态
         await verification_service.clear_verification(chat_id, user_id)
 
-        await callback.answer("已取消验证")
+        await callback.answer(localizer.t("verification.callback.cancelled.toast"))
         logger.info(f"用户 {user_id} 取消验证，已被踢出群组 {chat_id}")
 
     except Exception as e:
         logger.error(f"处理取消验证失败: {e}")
+        with contextlib.suppress(Exception):
+            await callback.answer(
+                clicker_localizer.t("verification.callback.failed.toast"), show_alert=True
+            )
 
 
 @router.message(F.web_app_data)
@@ -1488,20 +1569,34 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
     from src.core.config import settings
 
-    # 类型检查
-    if not message.from_user or not message.web_app_data:
+    # 类型检查（缓存 from_user / from_user_id 局部变量，使闭包与异常路径类型安全）
+    from_user = message.from_user
+    if not from_user or not message.web_app_data:
         return
+    from_user_id = from_user.id
 
-    # 调试：记录收到 WebApp 数据
+    # 鉴权前错误通知给真实发送者（from_user 由 Telegram 协议保证可信；
+    # payload user_id 在身份校验通过前不可信，不可用于通知或状态变更）
+    clicker_locale = await get_resolver().for_user(from_user_id)
+    clicker_localizer = get_translator().for_locale(clicker_locale)
+
+    async def send_error(key: str) -> None:
+        """向真实发送者发送验证错误消息（HTML）"""
+        with contextlib.suppress(Exception):
+            await bot.send_message(
+                chat_id=from_user_id,
+                text=clicker_localizer.t(key),
+                parse_mode="HTML",
+            )
+
+    # 记录收到 WebApp 数据（不记录原始/解析后 payload，token/signature 可能泄露）
     logger.info(
-        f"✅ 收到 WebApp 数据 [from_user:{message.from_user.id}] "
+        f"收到 WebApp 数据 [from_user:{from_user_id}] "
         f"[data_length:{len(message.web_app_data.data)}]"
     )
-    logger.debug(f"WebApp 原始数据: {message.web_app_data.data}")
 
     try:
         data = json.loads(message.web_app_data.data)
-        logger.debug(f"WebApp 解析后数据: {data}")
 
         # 支持两种 action 格式：
         # 1. 推荐格式：captcha_success + provider 字段
@@ -1521,6 +1616,18 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
         chat_id = int(data["chat_id"])
         user_id = int(data["user_id"])
+
+        # ✅ 身份校验：message.from_user.id 由 Telegram 协议保证可信（WebApp sendData
+        # 的 from 不可伪造），是比 payload user_id 更强的身份断言。payload user_id 来自
+        # WebApp URL param（非 initData 可信源），攻击者可篡改。不符则拒绝，不操作 token/状态。
+        if from_user_id != user_id:
+            logger.warning(
+                f"WebApp 用户身份不匹配 [from_user:{from_user_id}] "
+                f"[payload_user:{user_id}] [chat:{chat_id}]"
+            )
+            await send_error("verification.webapp.error.generic.private.message")
+            return
+
         verify_token = data["verify_token"]
         signature = data["signature"]
         timestamp = int(data["timestamp"])
@@ -1530,13 +1637,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
         # 1. 验证时间戳（防止重放，5 分钟内有效）
         if abs(time.time() - timestamp) > 300:
             logger.warning(f"{provider.upper()} 回调时间戳过期 [user:{user_id}]")
-            # 通知用户
-            with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text="❌ <b>验证失败</b>\n\n验证请求已过期，请重新尝试。",
-                    parse_mode="HTML",
-                )
+            await send_error("verification.webapp.error.expired.private.message")
             return
 
         # 2. 验证签名（使用统一 CAPTCHA 签名密钥）
@@ -1558,13 +1659,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             logger.warning(
                 f"{provider.upper()} 回调签名无效 [user:{user_id}] [expected:{expected_sig[:8]}...] [got:{signature[:8]}...]"
             )
-            # 通知用户
-            with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text="❌ <b>验证失败</b>\n\n签名验证失败，请联系管理员检查配置。",
-                    parse_mode="HTML",
-                )
+            await send_error("verification.webapp.error.signature.private.message")
             return
 
         # 3. 验证 Redis 中的 token 存在（一次性）
@@ -1579,27 +1674,14 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             logger.warning(
                 f"CAPTCHA 验证 token 不存在或已过期 [provider:{provider}] [user:{user_id}]"
             )
-            # 通知用户
-            with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text="❌ <b>验证失败</b>\n\n验证令牌无效或已使用，请重新尝试。",
-                    parse_mode="HTML",
-                )
+            await send_error("verification.webapp.error.invalid_token.private.message")
             return
 
         # 解析 token（统一格式：provider:token[:key_index]）
         token_parts = stored_token_data.split(":")
         if len(token_parts) < 2 or token_parts[0] != provider:
-            logger.warning(
-                f"CAPTCHA 验证 token 格式错误 [provider:{provider}] [user:{user_id}] [stored:{stored_token_data}]"
-            )
-            with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text="❌ <b>验证失败</b>\n\n验证令牌格式错误，请重新尝试。",
-                    parse_mode="HTML",
-                )
+            logger.warning(f"CAPTCHA 验证 token 格式错误 [provider:{provider}] [user:{user_id}]")
+            await send_error("verification.webapp.error.invalid_token.private.message")
             return
 
         stored_token = token_parts[1]
@@ -1608,13 +1690,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             logger.warning(
                 f"{provider.upper()} token 不匹配 [user:{user_id}] [stored:{stored_token[:8]}...] [got:{verify_token[:8]}...]"
             )
-            # 通知用户
-            with contextlib.suppress(Exception):
-                await bot.send_message(
-                    chat_id=user_id,
-                    text="❌ <b>验证失败</b>\n\n验证令牌无效，请重新尝试。",
-                    parse_mode="HTML",
-                )
+            await send_error("verification.webapp.error.invalid_token.private.message")
             return
 
         # 4. 删除 token（防止重复使用）
@@ -1698,12 +1774,8 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                     bot, user_id, chat_title, "success", group_chat_id=chat_id
                 )
 
-            # 在群内发送欢迎消息
-            user = message.from_user
-            welcome_msg = await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ 欢迎 {format_user_mention(user)} 加入群组！",
-            )
+            # 在群内发送欢迎消息（plain 脱敏 mention，按群 locale 渲染）
+            welcome_msg = await send_group_welcome(bot, chat_id, from_user)
 
             # 5秒后删除欢迎消息
             await asyncio.sleep(5)
@@ -1712,28 +1784,12 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
             logger.info(f"用户 {user_id} {provider.upper()} 验证成功 (群组 {chat_id})")
 
-    except Exception as e:
-        logger.error(f"处理 CAPTCHA 回调失败: {e}")
-
-        # ✅ 异常时也要清除验证状态，避免超时任务踢人
-        try:
-            # 尝试从异常上下文中获取 chat_id 和 user_id
-            if "data" in locals() and "chat_id" in data and "user_id" in data:
-                chat_id = int(data["chat_id"])
-                user_id = int(data["user_id"])
-                verification_service = VerificationService()
-                await verification_service.clear_verification(chat_id, user_id)
-                logger.info(f"异常处理：已清除用户 {user_id} 的验证状态 (群组 {chat_id})")
-
-                # 通知用户验证失败
-                with contextlib.suppress(Exception):
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text="❌ <b>验证失败</b>\n\n处理验证时发生错误，请重新尝试。如果问题持续，请联系管理员。",
-                        parse_mode="HTML",
-                    )
-        except Exception as cleanup_error:
-            logger.error(f"清除验证状态失败: {cleanup_error}")
+    except Exception:
+        # 不依据未鉴权 payload 修改任何验证状态：异常若发生在 clear_verification 之前，
+        # 由 timeout 任务兜底；发生在之后则状态已清。原「按 payload 清状态」可被构造为
+        # 跨用户 DoS（攻击者塞入受害者 chat/user_id 再触发异常），已移除。
+        logger.exception(f"处理 CAPTCHA 回调失败 [from_user:{from_user_id}]")
+        await send_error("verification.webapp.error.generic.private.message")
 
 
 async def handle_verification_success(
