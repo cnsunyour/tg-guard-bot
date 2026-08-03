@@ -1311,40 +1311,45 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
 
 
 @router.message(Command("verifyconfig"))
-async def cmd_verify_config(message: Message) -> None:
+async def cmd_verify_config(message: Message, localizer: BoundLocalizer) -> None:
     """查看验证配置"""
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("admin.verifyconfig.error.group_only.message"))
         return
 
     try:
         # 获取群组配置
         group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
 
-        verify_type_names = {
-            "math": "数学验证",
-            "slider": "滑块验证",
-            "qa": "问答验证",
-            "emoji": "表情验证",
-            "captcha": "图片验证码",
-            "honeypot": "蜜罐验证",
-            "puzzle": "拼图验证",
-            "turnstile": "Turnstile 验证",
-            "friendly": "Friendly Captcha",
-            "hcaptcha": "hCaptcha 图片验证",
-            "mtcaptcha": "MTCaptcha 自适应",
-            "altcha": "ALTCHA 工作证明",
-            "random": "随机验证",
-        }
+        # 验证类型 label（未知类型或 strict 模式抛 KeyError 均回退到 escape 后的 code）
+        verify_type_key = f"admin.common.verification_type.{group.verification_type}.label"
+        try:
+            verify_type_label = localizer.t(verify_type_key)
+            if verify_type_label == verify_type_key:
+                verify_type_label = escape_html(group.verification_type)
+        except KeyError:
+            # strict Translator 缺失 key 抛 KeyError（DEBUG 模式默认启用）
+            verify_type_label = escape_html(group.verification_type)
 
-        config_text = (
-            f"<b>📋 当前验证配置</b>\n\n"
-            f"验证方式: {verify_type_names.get(group.verification_type, group.verification_type)}\n"
-            f"验证超时: {group.verification_timeout} 秒\n"
-            f"反垃圾: {'已启用' if group.antispam_enabled else '已禁用'}\n"
-            f"反垃圾级别: {group.antispam_level}/3\n"
-            f"活跃度系统: {'已启用' if group.activity_enabled else '已禁用'}"
+        antispam_status = localizer.t(
+            "admin.common.status.enabled.label"
+            if group.antispam_enabled
+            else "admin.common.status.disabled.label"
+        )
+        activity_status = localizer.t(
+            "admin.common.status.enabled.label"
+            if group.activity_enabled
+            else "admin.common.status.disabled.label"
+        )
+
+        config_text = localizer.t(
+            "admin.verifyconfig.report.message",
+            verify_type=verify_type_label,
+            timeout=group.verification_timeout,
+            antispam_status=antispam_status,
+            antispam_level=group.antispam_level,
+            activity_status=activity_status,
         )
 
         reply = await message.answer(config_text)
@@ -1358,7 +1363,7 @@ async def cmd_verify_config(message: Message) -> None:
 
     except Exception as e:
         logger.error(f"查看验证配置失败: {e}")
-        reply = await message.answer("❌ 获取配置失败，请重试")
+        reply = await message.answer(localizer.t("admin.verifyconfig.error.load_failed.message"))
         await auto_delete_message(reply)
 
         # 删除管理员的命令消息
