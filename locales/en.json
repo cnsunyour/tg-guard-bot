@@ -1,5 +1,12 @@
 {
   "admin.help.overview.message": "🤖 <b>Telegram Guard Bot</b>\n\nI am a group management bot with the following features:\n\n⚙️ <b>Group configuration</b>\n• /groupset - Group settings (unified entry)\n• /verifyconfig - View verification settings\n\n👮 <b>Group management</b>\n• /kick - Kick member\n• /mute - Mute member\n• /ban - Ban member\n• /warn - Warn member\n• /cleanup - Clean up abnormal users\n\n🚨 <b>Report system</b>\n• /spam or /report - Report/flag spam\n• /reports - View report list (admins)\n• /approve - Accept report (admins)\n• /reject - Reject report (admins)\n\n🗑️ <b>Message deletion</b>\n• /delbefore - Delete messages before\n• /delafter - Delete messages after\n• /delrange - Delete message range\n\n💡 <b>Usage tips</b>\n1️⃣ Ask a super admin to whitelist the group\n2️⃣ Add the Bot to the group and set it as admin\n3️⃣ Use /help &lt;command&gt; for detailed usage\n   Example: /help groupset",
+  "admin.settimeout.error.admin_only.message": "❌ Only administrators can set the verification timeout",
+  "admin.settimeout.error.failed.message": "❌ Failed to save. Please try again",
+  "admin.settimeout.error.group_only.message": "❌ This command can only be used in a group",
+  "admin.settimeout.result.saved.message": "✅ Verification timeout set to {timeout} seconds\n\nAll newly joined users will be verified using this timeout.",
+  "admin.settimeout.validation.missing_arg.message": "❌ Please specify the timeout (seconds)\n\nUsage: /settimeout &lt;seconds&gt;\nRange: 30-300 seconds\nExample: /settimeout 120",
+  "admin.settimeout.validation.not_integer.message": "❌ The timeout must be a number",
+  "admin.settimeout.validation.out_of_range.message": "❌ The timeout must be between 30 and 300 seconds\n\n• Too short may prevent legitimate users from completing verification\n• Too long may keep unverified spam accounts pending for an extended period",
   "antispam.callback.expired.toast": "⚠️ Review expired or already processed",
   "antispam.callback.invalid_data.toast": "❌ Invalid data",
   "antispam.callback.permission_denied.toast": "❌ Admins only",

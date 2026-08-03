@@ -1,5 +1,12 @@
 {
   "admin.help.overview.message": "🤖 <b>Telegram Guard Bot</b>\n\n我是一个群管理机器人，支持以下功能：\n\n⚙️ <b>群组配置</b>\n• /groupset - 群组设置（统一入口）\n• /verifyconfig - 查看验证配置\n\n👮 <b>群管理</b>\n• /kick - 踢出成员\n• /mute - 禁言成员\n• /ban - 封禁成员\n• /warn - 警告成员\n• /cleanup - 清理异常用户\n\n🚨 <b>举报系统</b>\n• /spam 或 /report - 举报/标记垃圾消息\n• /reports - 查看举报列表（管理员）\n• /approve - 接受举报（管理员）\n• /reject - 拒绝举报（管理员）\n\n🗑️ <b>消息删除</b>\n• /delbefore - 删除往前的消息\n• /delafter - 删除往后的消息\n• /delrange - 删除消息范围\n\n💡 <b>使用提示</b>\n1️⃣ 联系超级管理员将群组加入白名单\n2️⃣ 将 Bot 添加到群组并设为管理员\n3️⃣ 使用 /help &lt;命令&gt; 查看命令详细用法\n   示例：/help groupset",
+  "admin.settimeout.error.admin_only.message": "❌ 只有管理员才能设置验证超时时间",
+  "admin.settimeout.error.failed.message": "❌ 设置失败，请重试",
+  "admin.settimeout.error.group_only.message": "❌ 此命令只能在群组中使用",
+  "admin.settimeout.result.saved.message": "✅ 已设置验证超时时间为 {timeout} 秒\n\n所有新加入的用户将使用此超时时间进行验证。",
+  "admin.settimeout.validation.missing_arg.message": "❌ 请指定超时时间（秒）\n\n用法: /settimeout &lt;秒数&gt;\n范围: 30-300 秒\n示例: /settimeout 120",
+  "admin.settimeout.validation.not_integer.message": "❌ 超时时间必须是数字",
+  "admin.settimeout.validation.out_of_range.message": "❌ 超时时间必须在 30-300 秒之间\n\n• 太短可能导致正常用户无法完成验证\n• 太长可能导致垃圾用户占用资源过久",
   "antispam.callback.expired.toast": "⚠️ 此审核已失效或已被处理",
   "antispam.callback.invalid_data.toast": "❌ 数据错误",
   "antispam.callback.permission_denied.toast": "❌ 只有管理员可以操作",

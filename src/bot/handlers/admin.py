@@ -8,7 +8,7 @@ from loguru import logger
 from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.health import get_health_checker
-from src.core.i18n import get_resolver, get_translator
+from src.core.i18n import BoundLocalizer, get_resolver, get_translator
 from src.core.utils import auto_delete_message, check_admin_permission, escape_html
 from src.repositories.group_repo import GroupRepository
 
@@ -1369,16 +1369,16 @@ async def cmd_verify_config(message: Message) -> None:
 
 
 @router.message(Command("settimeout"))
-async def cmd_set_timeout(message: Message, bot: Bot) -> None:
+async def cmd_set_timeout(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """设置验证超时时间"""
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("admin.settimeout.error.group_only.message"))
         return
 
     # 检查管理员权限
     if not await check_admin_permission(message, bot):
-        reply = await message.answer("❌ 只有管理员才能设置验证超时时间")
+        reply = await message.answer(localizer.t("admin.settimeout.error.admin_only.message"))
         await auto_delete_message(reply)
         try:
             await message.delete()
@@ -1394,10 +1394,7 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
             reply = await message.answer(
-                "❌ 请指定超时时间（秒）\n\n"
-                "用法: /settimeout &lt;秒数&gt;\n"
-                "范围: 30-300 秒\n"
-                "示例: /settimeout 120"
+                localizer.t("admin.settimeout.validation.missing_arg.message")
             )
             await auto_delete_message(reply)
             try:
@@ -1410,7 +1407,9 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
         try:
             timeout = int(args[1])
         except ValueError:
-            reply = await message.answer("❌ 超时时间必须是数字")
+            reply = await message.answer(
+                localizer.t("admin.settimeout.validation.not_integer.message")
+            )
             await auto_delete_message(reply)
             try:
                 await message.delete()
@@ -1421,9 +1420,7 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
         # 验证范围
         if not (30 <= timeout <= 300):
             reply = await message.answer(
-                "❌ 超时时间必须在 30-300 秒之间\n\n"
-                "• 太短可能导致正常用户无法完成验证\n"
-                "• 太长可能导致垃圾用户占用资源过久"
+                localizer.t("admin.settimeout.validation.out_of_range.message")
             )
             await auto_delete_message(reply)
             try:
@@ -1437,7 +1434,7 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
         await GroupRepository.update_verification_timeout(message.chat.id, timeout)
 
         reply = await message.answer(
-            f"✅ 已设置验证超时时间为 {timeout} 秒\n\n" "所有新加入的用户将使用此超时时间进行验证。"
+            localizer.t("admin.settimeout.result.saved.message", timeout=timeout)
         )
         await auto_delete_message(reply)
 
@@ -1451,7 +1448,7 @@ async def cmd_set_timeout(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"设置验证超时时间失败: {e}")
-        reply = await message.answer("❌ 设置失败，请重试")
+        reply = await message.answer(localizer.t("admin.settimeout.error.failed.message"))
         await auto_delete_message(reply)
         try:
             await message.delete()
