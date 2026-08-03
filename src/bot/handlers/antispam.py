@@ -34,7 +34,7 @@ from src.bot.handlers.antispam_render import (
 )
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
-from src.core.i18n import get_resolver, get_translator
+from src.core.i18n import BoundLocalizer, get_resolver, get_translator
 from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和键管理
 from src.core.utils import (
     auto_delete_message,
@@ -650,54 +650,84 @@ async def cmd_antispam(message: Message, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("antispam_toggle:"))
-async def on_antispam_toggle(callback: CallbackQuery) -> None:
+async def on_antispam_toggle(callback: CallbackQuery, localizer: BoundLocalizer) -> None:
     """处理反垃圾开关"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.antispam.callback.invalid_data.toast"), show_alert=True
+            )
             return
 
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.antispam.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
 
-        _, chat_id_str, action = callback.data.split(":")
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer(
+                localizer.t("admin.antispam.callback.invalid_data.toast"), show_alert=True
+            )
+            return
+        _, chat_id_str, action = parts
         chat_id = int(chat_id_str)
+
+        # 校验 callback 所属群与 action 白名单
+        if message.chat.id != chat_id or action not in {"on", "off"}:
+            await callback.answer(
+                localizer.t("admin.antispam.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
+            logger.warning(
+                f"无效的反垃圾回调: message_chat_id={message.chat.id}, "
+                f"callback_chat_id={chat_id}, action={action}"
+            )
+            return
 
         # ✅ 权限验证
         if callback.from_user.id not in settings.admin_ids:
             # ✅ P1-10: 使用 Redis 缓存减少 API 调用
             if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):  # type: ignore[arg-type]
-                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.antispam.callback.permission_denied.toast"),
+                    show_alert=True,
+                )
                 logger.warning(
                     f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 反垃圾设置但无权限"
                 )
                 return
 
-        # ✅ 参数白名单验证
-        if action not in ["on", "off"]:
-            await callback.answer("❌ 无效的操作", show_alert=True)
-            logger.warning(f"无效的反垃圾操作: {action}")
-            return
-
         enabled = action == "on"
-
         await GroupRepository.update_antispam_settings(chat_id, enabled)
 
-        status = "已启用" if enabled else "已禁用"
-        await message.edit_text(f"✅ 反垃圾功能{status}")
-        await callback.answer(f"反垃圾{status}")
+        state = "enabled" if enabled else "disabled"
+        status = localizer.t(f"admin.common.status.{state}.label")
+        # 先确认 callback(DB 已持久化),再更新 UI;edit_text 失败不影响已生效的成功
+        await callback.answer(
+            localizer.t(f"admin.antispam.callback.{state}.toast"), show_alert=False
+        )
+        try:
+            await message.edit_text(localizer.t("admin.antispam.result.message", status=status))
+        except Exception as edit_exc:
+            logger.warning(f"反垃圾 toggle edit_text 失败(设置已生效): {edit_exc}")
 
-        logger.info(f"群组 {chat_id} 反垃圾功能{status}")
+        logger.info(f"群组 {chat_id} 反垃圾功能切换为 {state}")
 
+    except ValueError:
+        await callback.answer(
+            localizer.t("admin.antispam.callback.invalid_data.toast"), show_alert=True
+        )
     except Exception as e:
         logger.error(f"切换反垃圾失败: {e}")
-        await callback.answer("❌ 操作失败", show_alert=True)
+        await callback.answer(localizer.t("admin.antispam.callback.failed.toast"), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("antispam_stats:"))
@@ -1039,40 +1069,60 @@ async def cmd_antichannel(message: Message, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("antichannel_toggle:"))
-async def on_antichannel_toggle(callback: CallbackQuery) -> None:
+async def on_antichannel_toggle(callback: CallbackQuery, localizer: BoundLocalizer) -> None:
     """处理反频道马甲开关"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.antichannel.callback.invalid_data.toast"), show_alert=True
+            )
             return
 
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.antichannel.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
 
-        _, chat_id_str, action = callback.data.split(":")
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer(
+                localizer.t("admin.antichannel.callback.invalid_data.toast"), show_alert=True
+            )
+            return
+        _, chat_id_str, action = parts
         chat_id = int(chat_id_str)
+
+        # 校验 callback 所属群与 action 白名单
+        if message.chat.id != chat_id or action not in {"on", "off"}:
+            await callback.answer(
+                localizer.t("admin.antichannel.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
+            logger.warning(
+                f"无效的反频道马甲回调: message_chat_id={message.chat.id}, "
+                f"callback_chat_id={chat_id}, action={action}"
+            )
+            return
 
         # ✅ 权限验证
         if callback.from_user.id not in settings.admin_ids:
             # ✅ P1-10: 使用 Redis 缓存减少 API 调用
             if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):  # type: ignore[arg-type]
-                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.antichannel.callback.permission_denied.toast"),
+                    show_alert=True,
+                )
                 logger.warning(
                     f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 反频道马甲设置但无权限"
                 )
                 return
-
-        # ✅ 参数白名单验证
-        if action not in ["on", "off"]:
-            await callback.answer("❌ 无效的操作", show_alert=True)
-            logger.warning(f"收到无效的反频道马甲开关操作: {action}")
-            return
 
         # 更新配置
         enabled = action == "on"
@@ -1080,25 +1130,35 @@ async def on_antichannel_toggle(callback: CallbackQuery) -> None:
         group.anti_channel_enabled = enabled
         await GroupRepository.update_antichannel_settings(chat_id, enabled)
 
-        status_text = "✅ 已启用" if enabled else "❌ 已禁用"
-        await callback.answer(f"反频道马甲功能 {status_text}", show_alert=False)
+        # 状态双层:common.status → groupset.status(emoji 在 catalog,与 groupset 子菜单一致)
+        state = "enabled" if enabled else "disabled"
+        common_status = localizer.t(f"admin.common.status.{state}.label")
+        status = localizer.t(f"admin.groupset.status.{state}.label", status=common_status)
 
-        # 更新消息
-        await message.edit_text(
-            f"🎭 <b>反频道马甲配置</b>\n\n"
-            f"当前状态: {status_text}\n\n"
-            f"💡 <b>说明</b>：\n"
-            f"• 启用后，禁止用户以频道身份发言\n"
-            f"• 频道马甲消息会被删除，并记录警告\n"
-            f"• 有助于减少广告和频道宣传",
-            parse_mode="HTML",
+        # 先确认 callback(DB 已持久化),再更新 UI;edit_text 失败不影响已生效的成功
+        await callback.answer(
+            localizer.t(f"admin.antichannel.callback.{state}.toast"), show_alert=False
         )
+        try:
+            # 更新消息(复用 groupset 子菜单说明,消除重复长文案)
+            await message.edit_text(
+                localizer.t("admin.groupset.menu.antichannel.message", status=status),
+                parse_mode="HTML",
+            )
+        except Exception as edit_exc:
+            logger.warning(f"反频道马甲 toggle edit_text 失败(设置已生效): {edit_exc}")
 
-        logger.info(f"群组 {chat_id} 反频道马甲功能已{status_text}")
+        logger.info(f"群组 {chat_id} 反频道马甲功能切换为 {state}")
 
+    except ValueError:
+        await callback.answer(
+            localizer.t("admin.antichannel.callback.invalid_data.toast"), show_alert=True
+        )
     except Exception as e:
         logger.error(f"处理反频道马甲开关失败: {e}")
-        await callback.answer("❌ 操作失败", show_alert=True)
+        await callback.answer(
+            localizer.t("admin.antichannel.callback.failed.toast"), show_alert=True
+        )
 
 
 @router.message(F.text)
