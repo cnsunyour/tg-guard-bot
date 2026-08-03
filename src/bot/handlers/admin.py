@@ -1405,7 +1405,7 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 
 @router.message(Command("activityskip"))
-async def cmd_activity_skip(message: Message, bot: Bot) -> None:
+async def cmd_activity_skip(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     if not message.from_user:
         return
 
@@ -1417,12 +1417,12 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
     """
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("admin.activityskip.error.group_only.message"))
         return
 
     # 检查权限
     if not await check_admin_permission(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("admin.activityskip.error.admin_only.message"))
         return
 
     try:
@@ -1439,13 +1439,15 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
         args = message.text.split()
         if len(args) == 1:
             # 仅查看配置
-            await _show_activity_skip_config(message, group, global_threshold)
+            await _show_activity_skip_config(message, group, global_threshold, localizer)
         else:
             # 设置阈值
             try:
                 new_threshold = int(args[1])
             except ValueError:
-                reply = await message.answer("❌ 阈值必须是数字（0=禁用，&gt;0=启用）")
+                reply = await message.answer(
+                    localizer.t("admin.activityskip.validation.not_integer.message")
+                )
                 await auto_delete_message(reply)
                 try:
                     await message.delete()
@@ -1455,7 +1457,9 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
 
             # 验证范围
             if new_threshold < 0:
-                reply = await message.answer("❌ 阈值不能为负数（0=禁用，&gt;0=启用）")
+                reply = await message.answer(
+                    localizer.t("admin.activityskip.validation.negative.message")
+                )
                 await auto_delete_message(reply)
                 try:
                     await message.delete()
@@ -1465,7 +1469,8 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
 
             # 更新群组配置
             await GroupRepository.update_activity_skip_threshold(message.chat.id, new_threshold)
-            await GroupRepository.update_activity_skip_threshold(message.chat.id, new_threshold)
+            # Repository 使用独立 session,不刷新 detached group;同步展示对象避免报告显示旧阈值
+            group.activity_skip_threshold = new_threshold
 
             logger.info(
                 f"管理员 {message.from_user.id} 在群组 {message.chat.id} "
@@ -1474,12 +1479,12 @@ async def cmd_activity_skip(message: Message, bot: Bot) -> None:
 
             # 显示更新后的配置
             await _show_activity_skip_config(
-                message, group, global_threshold, show_success=True, new_value=new_threshold
+                message, group, global_threshold, localizer, new_value=new_threshold
             )
 
     except Exception as e:
         logger.error(f"处理活跃度跳过阈值命令失败: {e}")
-        reply = await message.answer("❌ 操作失败，请重试")
+        reply = await message.answer(localizer.t("admin.activityskip.error.failed.message"))
         await auto_delete_message(reply)
         try:
             await message.delete()
@@ -1491,57 +1496,54 @@ async def _show_activity_skip_config(
     message: Message,
     group,
     global_threshold: int,
-    show_success: bool = False,
+    localizer: BoundLocalizer,
     new_value: int | None = None,
 ) -> None:
-    """显示活跃度跳过阈值配置信息"""
-    # 计算有效阈值
+    """显示活跃度跳过阈值配置信息
+
+    new_value 非 None 表示刚完成设置,在报告头部追加成功提示;
+    同时表示 group.activity_skip_threshold 已由调用方同步为新值。
+    """
+    # 计算有效阈值 + 三态全局覆盖
     if global_threshold > 0:
         effective_threshold = global_threshold
-        threshold_source = "全局配置"
-        warning = f"⚠️ <b>警告</b>：全局配置生效（阈值 = {global_threshold}），群组配置被覆盖"
+        threshold_source = localizer.t("admin.activityskip.source.global.label")
+        global_mode = localizer.t("admin.activityskip.global_mode.uniform.label")
+        warning_block = (
+            localizer.t(
+                "admin.activityskip.warning.global_override.message",
+                global_threshold=global_threshold,
+            )
+            + "\n\n"
+        )
     elif global_threshold == 0:
         effective_threshold = group.activity_skip_threshold
-        threshold_source = "群组配置"
-        warning = None
+        threshold_source = localizer.t("admin.activityskip.source.group.label")
+        global_mode = localizer.t("admin.activityskip.global_mode.group.label")
+        warning_block = ""
     else:
         effective_threshold = 0
-        threshold_source = "全局禁用"
-        warning = "⚠️ <b>警告</b>：全局禁用活跃度跳过检测，群组配置无效"
+        threshold_source = localizer.t("admin.activityskip.source.disabled.label")
+        global_mode = localizer.t("admin.activityskip.global_mode.disabled.label")
+        warning_block = localizer.t("admin.activityskip.warning.globally_disabled.message") + "\n\n"
 
-    # 构建消息文本
-    text = "<b>📊 活跃度跳过垃圾检测阈值</b>\n\n"
-
-    if show_success and new_value is not None:
-        text += f"✅ 群组阈值已设置为 <b>{new_value}</b>\n\n"
-
-    text += "<b>当前配置：</b>\n"
-    text += f"• 全局阈值: {global_threshold}"
-    if global_threshold > 0:
-        text += " (全局统一)\n"
-    elif global_threshold == 0:
-        text += " (使用群组配置)\n"
+    # 成功块(仅在刚完成设置时渲染)
+    if new_value is not None:
+        success_block = (
+            localizer.t("admin.activityskip.result.saved.message", new_value=new_value) + "\n\n"
+        )
     else:
-        text += " (全局禁用)\n"
+        success_block = ""
 
-    text += f"• 群组阈值: {group.activity_skip_threshold}\n"
-    text += f"• 有效阈值: <b>{effective_threshold}</b> (来源: {threshold_source})\n\n"
-
-    if warning:
-        text += f"{warning}\n\n"
-
-    text += (
-        "<b>功能说明：</b>\n"
-        "• 当用户活跃度 ≥ 有效阈值时，跳过垃圾检测\n"
-        "• 设置为 0 表示禁用此功能\n"
-        "• 建议阈值：50-200（根据群组活跃度调整）\n\n"
-        "<b>配置优先级：</b>\n"
-        "• 全局阈值 &gt; 0：使用全局配置（所有群组统一）\n"
-        "• 全局阈值 = 0：使用群组配置（每个群组独立）\n"
-        "• 全局阈值 &lt; 0：全局禁用（所有群组都不跳过）\n\n"
-        "<b>用法：</b>\n"
-        "• /activityskip - 查看当前配置\n"
-        "• /activityskip <code>[阈值]</code> - 设置群组阈值"
+    text = localizer.t(
+        "admin.activityskip.report.message",
+        success_block=success_block,
+        global_threshold=global_threshold,
+        global_mode=global_mode,
+        group_threshold=group.activity_skip_threshold,
+        effective_threshold=effective_threshold,
+        threshold_source=threshold_source,
+        warning_block=warning_block,
     )
 
     reply = await message.answer(text)
