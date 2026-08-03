@@ -14,6 +14,74 @@ from src.repositories.group_repo import GroupRepository
 
 router = Router(name="admin")
 
+# 验证方式顺序(按钮排列),派生白名单避免重复维护
+_VERIFICATION_TYPES = (
+    "math",
+    "slider",
+    "qa",
+    "emoji",
+    "captcha",
+    "honeypot",
+    "puzzle",
+    "turnstile",
+    "friendly",
+    "hcaptcha",
+    "mtcaptcha",
+    "altcha",
+    "random",
+)
+_VALID_VERIFICATION_TYPES = frozenset(_VERIFICATION_TYPES)
+
+
+def _build_setverify_keyboard(
+    localizer: BoundLocalizer,
+    chat_id: int,
+) -> InlineKeyboardMarkup:
+    """构建验证方式选择键盘(13 按钮,文案走 setverify.verification_type.<type>.button)。"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=localizer.t(f"admin.setverify.verification_type.{verify_type}.button"),
+                    callback_data=f"setverify:{chat_id}:{verify_type}",
+                )
+            ]
+            for verify_type in _VERIFICATION_TYPES
+        ]
+    )
+
+
+def _render_activity_panel(
+    localizer: BoundLocalizer,
+    chat_id: int,
+    enabled: bool,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """渲染活跃度系统设置面板(状态文本 + 启用/禁用键盘)。
+
+    状态文案双层:common.status.<state>.label 注入 activity.status.<state>.label,
+    使 emoji 排列归 catalog管理、公共词项复用。
+    """
+    state = "enabled" if enabled else "disabled"
+    common_status = localizer.t(f"admin.common.status.{state}.label")
+    status = localizer.t(f"admin.activity.status.{state}.label", status=common_status)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.activity.enable.button"),
+                    callback_data=f"activity:{chat_id}:enable",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.activity.disable.button"),
+                    callback_data=f"activity:{chat_id}:disable",
+                )
+            ],
+        ]
+    )
+    return localizer.t("admin.activity.panel.message", status=status), keyboard
+
 
 async def show_command_overview(message: Message) -> None:
     """显示完整命令概览（由 /help 无参时调用，非 /start 路由）。
@@ -603,110 +671,46 @@ async def on_groupset_back(callback: CallbackQuery, bot: Bot) -> None:
 
 
 @router.message(Command("setverify"))
-async def cmd_set_verify(message: Message, bot: Bot) -> None:
+async def cmd_set_verify(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """设置验证方式"""
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("admin.setverify.error.group_only.message"))
         return
 
     # 检查权限（使用统一的权限检查函数）
     if not await check_admin_permission(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("admin.setverify.error.admin_only.message"))
         return
 
     # 显示验证方式选择
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔢 数学验证", callback_data=f"setverify:{message.chat.id}:math"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🎯 滑块验证", callback_data=f"setverify:{message.chat.id}:slider"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="❓ 问答验证", callback_data=f"setverify:{message.chat.id}:qa"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="😊 表情验证", callback_data=f"setverify:{message.chat.id}:emoji"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🖼️ 图片验证码", callback_data=f"setverify:{message.chat.id}:captcha"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🍯 蜜罐验证", callback_data=f"setverify:{message.chat.id}:honeypot"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🧩 拼图验证", callback_data=f"setverify:{message.chat.id}:puzzle"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔐 Turnstile 验证", callback_data=f"setverify:{message.chat.id}:turnstile"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🤝 Friendly Captcha",
-                    callback_data=f"setverify:{message.chat.id}:friendly",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🖼️ hCaptcha 图片验证",
-                    callback_data=f"setverify:{message.chat.id}:hcaptcha",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔒 MTCaptcha 自适应",
-                    callback_data=f"setverify:{message.chat.id}:mtcaptcha",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⚡ ALTCHA 工作证明", callback_data=f"setverify:{message.chat.id}:altcha"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🎲 随机验证", callback_data=f"setverify:{message.chat.id}:random"
-                )
-            ],
-        ]
-    )
+    keyboard = _build_setverify_keyboard(localizer, message.chat.id)
 
-    reply = await message.answer("请选择验证方式：", reply_markup=keyboard)
+    reply = await message.answer(
+        localizer.t("admin.setverify.prompt.message"), reply_markup=keyboard
+    )
     await auto_delete_message(reply)
 
 
 @router.callback_query(F.data.startswith("setverify:"))
-async def on_setverify_callback(callback: CallbackQuery) -> None:
+async def on_setverify_callback(callback: CallbackQuery, localizer: BoundLocalizer) -> None:
     """处理验证方式设置回调"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.setverify.callback.invalid_data.toast"), show_alert=True
+            )
             return
 
         # 类型缩小：确保 message 不是 InaccessibleMessage
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.setverify.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
@@ -714,70 +718,65 @@ async def on_setverify_callback(callback: CallbackQuery) -> None:
         _, chat_id_str, verify_type = callback.data.split(":")
         chat_id = int(chat_id_str)
 
+        # 防御:回调消息所属群与 callback_data 中的 chat_id 必须一致
+        if message.chat.id != chat_id:
+            await callback.answer(
+                localizer.t("admin.setverify.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
+            return
+
         # ✅ 权限验证
         if callback.from_user.id not in settings.admin_ids:
             try:
                 member = await callback.bot.get_chat_member(chat_id, callback.from_user.id)  # type: ignore[union-attr]
                 if member.status not in ["creator", "administrator"]:
-                    await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                    await callback.answer(
+                        localizer.t("admin.setverify.callback.permission_denied.toast"),
+                        show_alert=True,
+                    )
                     logger.warning(
                         f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 设置但无权限"
                     )
                     return
             except Exception as e:
                 logger.error(f"权限检查失败: {e}")
-                await callback.answer("❌ 权限验证失败", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.setverify.callback.permission_check_failed.toast"),
+                    show_alert=True,
+                )
                 return
 
         # ✅ 参数白名单验证
-        if verify_type not in [
-            "math",
-            "slider",
-            "qa",
-            "emoji",
-            "captcha",
-            "honeypot",
-            "puzzle",
-            "turnstile",
-            "friendly",
-            "hcaptcha",
-            "mtcaptcha",
-            "altcha",
-            "random",
-        ]:
-            await callback.answer("❌ 无效的验证类型", show_alert=True)
+        if verify_type not in _VALID_VERIFICATION_TYPES:
+            await callback.answer(
+                localizer.t("admin.setverify.callback.invalid_type.toast"), show_alert=True
+            )
             logger.warning(f"无效的验证类型: {verify_type}")
             return
 
         # 更新验证方式
         await GroupRepository.update_verification_type(chat_id, verify_type)
 
-        verify_type_names = {
-            "math": "数学验证",
-            "slider": "滑块验证",
-            "qa": "问答验证",
-            "emoji": "表情验证",
-            "captcha": "图片验证码",
-            "honeypot": "蜜罐验证",
-            "puzzle": "拼图验证",
-            "turnstile": "Turnstile 验证",
-            "friendly": "Friendly Captcha",
-            "hcaptcha": "hCaptcha 图片验证",
-            "mtcaptcha": "MTCaptcha 自适应",
-            "altcha": "ALTCHA 工作证明",
-            "random": "随机验证",
-        }
-
+        # 成功提示:回显文案复用 common.verification_type.<type>.label(HTML 上下文)
+        verify_type_label = localizer.t(f"admin.common.verification_type.{verify_type}.label")
         await message.edit_text(
-            f"✅ 验证方式已设置为：{verify_type_names.get(verify_type, verify_type)}"
+            localizer.t("admin.setverify.result.saved.message", verify_type=verify_type_label)
         )
-        await callback.answer("设置成功")
+        await callback.answer(localizer.t("admin.setverify.callback.saved.toast"))
 
         logger.info(f"群组 {chat_id} 的验证方式已更新为 {verify_type}")
 
+    except ValueError:
+        # callback.data.split(":") 元素不足或 int() 失败
+        await callback.answer(
+            localizer.t("admin.setverify.callback.invalid_data.toast"), show_alert=True
+        )
     except Exception as e:
         logger.error(f"设置验证方式失败: {e}")
-        await callback.answer("❌ 设置失败，请重试", show_alert=True)
+        await callback.answer(
+            localizer.t("admin.setverify.callback.save_failed.toast"), show_alert=True
+        )
 
 
 @router.message(Command("verifyconfig"))
@@ -1234,58 +1233,23 @@ async def cmd_whitelist(message: Message, localizer: BoundLocalizer) -> None:
 
 
 @router.message(Command("activity"))
-async def cmd_activity(message: Message, bot: Bot) -> None:
+async def cmd_activity(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """控制群组活跃度系统开关"""
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("admin.activity.error.group_only.message"))
         return
 
     # 检查权限
     if not await check_admin_permission(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("admin.activity.error.admin_only.message"))
         return
 
     # 显示活跃度控制面板
     try:
         group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
 
-        status_text = "已启用 ✅" if group.activity_enabled else "已禁用 ❌"
-
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ 启用活跃度系统",
-                        callback_data=f"activity:{message.chat.id}:enable",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="❌ 禁用活跃度系统",
-                        callback_data=f"activity:{message.chat.id}:disable",
-                    )
-                ],
-            ]
-        )
-
-        text = (
-            f"<b>📊 活跃度系统设置</b>\n\n"
-            f"当前状态: {status_text}\n\n"
-            f"<b>🎯 非文本消息限制：</b>\n"
-            f"• <b>启用</b>: 活跃度为 0（从未发言）时禁止发送图片/贴纸/视频等，发一条文本即可解除\n"
-            f"• <b>禁用</b>: 不限制非文本消息（新用户也能发）\n\n"
-            f"<b>📈 活跃度规则：</b>\n"
-            f"• 初始值: 0\n"
-            f"• 文本消息: +1\n"
-            f"• 非文本消息: 不变（当前不扣分）\n"
-            f"• 每日衰减: -1（活跃度 &lt; 10 且当天无消息时，曾发言用户最低保留 1）\n\n"
-            f"<b>🛡️ 其他用途（始终生效）：</b>\n"
-            f"• 垃圾检测误判修正（活跃度越高，误判率越低）\n"
-            f"• 检测豁免阈值（达到阈值可跳过垃圾检测）\n"
-            f"• 宵禁模式发言门槛控制"
-        )
-
+        text, keyboard = _render_activity_panel(localizer, message.chat.id, group.activity_enabled)
         reply = await message.answer(text, reply_markup=keyboard)
         await auto_delete_message(reply)
 
@@ -1297,23 +1261,30 @@ async def cmd_activity(message: Message, bot: Bot) -> None:
 
     except Exception as e:
         logger.error(f"获取群组配置失败: {e}")
-        await message.answer("❌ 获取配置失败，请重试")
+        await message.answer(localizer.t("admin.activity.error.load_failed.message"))
 
 
 @router.callback_query(F.data.startswith("activity:"))
-async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
+async def on_activity_callback(
+    callback: CallbackQuery, bot: Bot, localizer: BoundLocalizer
+) -> None:
     """处理活跃度设置回调"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.activity.callback.invalid_data.toast"), show_alert=True
+            )
             return
 
         # 类型缩小：确保 message 不是 InaccessibleMessage
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.activity.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
@@ -1322,15 +1293,21 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
         _, chat_id_str, action = callback.data.split(":")
         chat_id = int(chat_id_str)
 
-        # 检查权限（回调来自同一用户）
-        if message.chat.id != chat_id:
-            await callback.answer("❌ 无效的操作", show_alert=True)
+        # 检查权限（回调所在群与 callback_data 中的 chat_id 必须一致）
+        if message.chat.id != chat_id or action not in {"enable", "disable"}:
+            await callback.answer(
+                localizer.t("admin.activity.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
             return
 
         # 检查是否是管理员
         if callback.from_user.id not in settings.admin_ids:
             if not await PermissionCache.is_admin(bot, chat_id, callback.from_user.id):
-                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.activity.callback.permission_denied.toast"),
+                    show_alert=True,
+                )
                 return
 
         # 获取群组配置
@@ -1339,69 +1316,45 @@ async def on_activity_callback(callback: CallbackQuery, bot: Bot) -> None:
         # 更新设置
         if action == "enable":
             if group.activity_enabled:
-                await callback.answer("ℹ️ 活跃度系统已经是启用状态", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.activity.callback.already_enabled.toast"),
+                    show_alert=True,
+                )
                 return
 
             await GroupRepository.update_activity_settings(chat_id, True)
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 启用了活跃度系统")
-            await callback.answer("✅ 活跃度系统已启用", show_alert=True)
-
-        elif action == "disable":
+            await callback.answer(
+                localizer.t("admin.activity.callback.enabled.toast"), show_alert=True
+            )
+        else:  # action == "disable"
             if not group.activity_enabled:
-                await callback.answer("ℹ️ 活跃度系统已经是禁用状态", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.activity.callback.already_disabled.toast"),
+                    show_alert=True,
+                )
                 return
 
             await GroupRepository.update_activity_settings(chat_id, False)
             logger.info(f"管理员 {callback.from_user.id} 在群组 {chat_id} 禁用了活跃度系统")
-            await callback.answer("✅ 活跃度系统已禁用", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.activity.callback.disabled.toast"), show_alert=True
+            )
 
-        # 重新获取群组配置，确保状态是最新的
+        # 重新获取群组配置,确保状态是最新的
         group = await GroupRepository.get_or_create(chat_id)
 
         # 更新消息
-        status_text = "已启用 ✅" if group.activity_enabled else "已禁用 ❌"
-
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="✅ 启用活跃度系统",
-                        callback_data=f"activity:{chat_id}:enable",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="❌ 禁用活跃度系统",
-                        callback_data=f"activity:{chat_id}:disable",
-                    )
-                ],
-            ]
-        )
-
-        text = (
-            f"<b>📊 活跃度系统设置</b>\n\n"
-            f"当前状态: {status_text}\n\n"
-            f"<b>🎯 非文本消息限制：</b>\n"
-            f"• <b>启用</b>: 活跃度为 0（从未发言）时禁止发送图片/贴纸/视频等，发一条文本即可解除\n"
-            f"• <b>禁用</b>: 不限制非文本消息（新用户也能发）\n\n"
-            f"<b>📈 活跃度规则：</b>\n"
-            f"• 初始值: 0\n"
-            f"• 文本消息: +1\n"
-            f"• 非文本消息: 不变（当前不扣分）\n"
-            f"• 每日衰减: -1（活跃度 &lt; 10 且当天无消息时，曾发言用户最低保留 1）\n\n"
-            f"<b>🛡️ 其他用途（始终生效）：</b>\n"
-            f"• 垃圾检测误判修正（活跃度越高，误判率越低）\n"
-            f"• 检测豁免阈值（达到阈值可跳过垃圾检测）\n"
-            f"• 宵禁模式发言门槛控制"
-        )
-
+        text, keyboard = _render_activity_panel(localizer, chat_id, group.activity_enabled)
         await message.edit_text(text, reply_markup=keyboard)
 
     except ValueError:
-        await callback.answer("❌ 无效的回调数据", show_alert=True)
+        await callback.answer(
+            localizer.t("admin.activity.callback.invalid_data.toast"), show_alert=True
+        )
     except Exception as e:
         logger.error(f"处理活跃度设置回调失败: {e}")
-        await callback.answer("❌ 操作失败，请重试", show_alert=True)
+        await callback.answer(localizer.t("admin.activity.callback.failed.toast"), show_alert=True)
 
 
 @router.message(Command("activityskip"))
