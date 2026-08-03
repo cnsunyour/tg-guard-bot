@@ -1071,42 +1071,48 @@ async def cmd_stats(message: Message, localizer: BoundLocalizer) -> None:
         await message.answer(localizer.t("admin.stats.failed.message"))
 
 
-async def _list_whitelist(message: Message) -> None:
+async def _list_whitelist(message: Message, localizer: BoundLocalizer) -> None:
     """列出所有白名单群组"""
     try:
         # 获取所有白名单群组
         groups = await GroupRepository.get_whitelisted_groups()
 
         if not groups:
-            await message.answer("📋 当前没有白名单群组")
+            await message.answer(localizer.t("admin.whitelist.list.empty.message"))
             return
 
-        text = f"📋 <b>白名单群组列表</b> (共 {len(groups)} 个)\n\n"
-
+        header = localizer.t("admin.whitelist.list.header.message", count=len(groups))
+        parts = [header]
         for i, group in enumerate(groups, 1):
-            title = escape_html(group.title) if group.title else "未知群组"
-            text += f"{i}. <b>{title}</b>\n"
-            text += f"   ID: <code>{group.id}</code>\n"
+            title = (
+                escape_html(group.title)
+                if group.title
+                else localizer.t("admin.common.unknown_group.label")
+            )
+            parts.append(
+                localizer.t(
+                    "admin.whitelist.list.row.message",
+                    index=i,
+                    title=title,
+                    chat_id=group.id,
+                )
+            )
             if i < len(groups):
-                text += "\n"
+                parts.append("\n")
 
-        await message.answer(text)
+        await message.answer("".join(parts))
 
-    except Exception as e:
-        logger.error(f"获取白名单列表失败: {e}")
-        await message.answer("❌ 获取白名单列表失败，请重试")
+    except Exception:
+        logger.exception("获取白名单列表失败")
+        await message.answer(localizer.t("admin.whitelist.list.failed.message"))
 
 
-async def _add_whitelist(message: Message, args: list[str]) -> None:
+async def _add_whitelist(message: Message, args: list[str], localizer: BoundLocalizer) -> None:
     """添加群组到白名单"""
     try:
         # 检查参数
         if len(args) < 3:
-            await message.answer(
-                "❌ 用法错误\n\n"
-                "<b>用法</b>: /whitelist add &lt;chat_id&gt; [群组名称]\n"
-                "<b>示例</b>: /whitelist add -1001234567890 测试群组"
-            )
+            await message.answer(localizer.t("admin.whitelist.add.error.missing_arg.message"))
             return
 
         chat_id = int(args[2])
@@ -1115,9 +1121,12 @@ async def _add_whitelist(message: Message, args: list[str]) -> None:
         # 获取或创建群组记录
         group = await GroupRepository.get_or_create(chat_id, title)
 
+        # 群组显示标识：title 已 escape，无 title 用 chat_id（数字无需转义）
+        group_display = escape_html(group.title) if group.title else chat_id
+
         if group.is_whitelisted:
             await message.answer(
-                f"ℹ️ 群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 已在白名单中"
+                localizer.t("admin.whitelist.add.already_in.message", group=group_display)
             )
             return
 
@@ -1128,27 +1137,21 @@ async def _add_whitelist(message: Message, args: list[str]) -> None:
             return
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 添加到白名单")
-        await message.answer(
-            f"✅ 已将群组 <b>{escape_html(group.title) if group.title else chat_id}</b> 添加到白名单"
-        )
+        await message.answer(localizer.t("admin.whitelist.add.saved.message", group=group_display))
 
     except ValueError:
-        await message.answer("❌ chat_id 格式错误，必须是数字")
-    except Exception as e:
-        logger.error(f"添加白名单失败: {e}")
-        await message.answer("❌ 添加白名单失败，请重试")
+        await message.answer(localizer.t("admin.whitelist.add.error.invalid_id.message"))
+    except Exception:
+        logger.exception("添加白名单失败")
+        await message.answer(localizer.t("admin.whitelist.add.error.failed.message"))
 
 
-async def _remove_whitelist(message: Message, args: list[str]) -> None:
+async def _remove_whitelist(message: Message, args: list[str], localizer: BoundLocalizer) -> None:
     """从白名单移除群组"""
     try:
         # 检查参数
         if len(args) != 3:
-            await message.answer(
-                "❌ 用法错误\n\n"
-                "<b>用法</b>: /whitelist remove &lt;chat_id&gt;\n"
-                "<b>示例</b>: /whitelist remove -1001234567890"
-            )
+            await message.answer(localizer.t("admin.whitelist.remove.error.missing_arg.message"))
             return
 
         chat_id = int(args[2])
@@ -1156,12 +1159,17 @@ async def _remove_whitelist(message: Message, args: list[str]) -> None:
         # 检查群组是否存在
         group = await GroupRepository.get_by_id(chat_id)
         if not group:
-            await message.answer(f"❌ 未找到群组 {chat_id}")
+            await message.answer(
+                localizer.t("admin.whitelist.remove.error.not_found.message", chat_id=chat_id)
+            )
             return
 
+        group_display = escape_html(group.title) if group.title else chat_id
+
         if not group.is_whitelisted:
-            title_safe = escape_html(group.title) if group.title else chat_id
-            await message.answer(f"ℹ️ 群组 <b>{title_safe}</b> 不在白名单中")
+            await message.answer(
+                localizer.t("admin.whitelist.remove.not_in.message", group=group_display)
+            )
             return
 
         # 从白名单移除
@@ -1171,18 +1179,19 @@ async def _remove_whitelist(message: Message, args: list[str]) -> None:
             return
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
-        title_safe = escape_html(group.title) if group.title else chat_id
-        await message.answer(f"✅ 已将群组 <b>{title_safe}</b> 从白名单移除")
+        await message.answer(
+            localizer.t("admin.whitelist.remove.saved.message", group=group_display)
+        )
 
     except ValueError:
-        await message.answer("❌ chat_id 格式错误，必须是数字")
-    except Exception as e:
-        logger.error(f"移除白名单失败: {e}")
-        await message.answer("❌ 移除白名单失败，请重试")
+        await message.answer(localizer.t("admin.whitelist.remove.error.invalid_id.message"))
+    except Exception:
+        logger.exception("移除白名单失败")
+        await message.answer(localizer.t("admin.whitelist.remove.error.failed.message"))
 
 
 @router.message(Command("whitelist"))
-async def cmd_whitelist(message: Message) -> None:
+async def cmd_whitelist(message: Message, localizer: BoundLocalizer) -> None:
     """白名单管理（仅超级管理员）
 
     用法：
@@ -1195,7 +1204,7 @@ async def cmd_whitelist(message: Message) -> None:
 
     # 检查是否是超级管理员
     if message.from_user.id not in settings.admin_ids:
-        await message.answer("❌ 只有超级管理员可以使用此命令")
+        await message.answer(localizer.t("admin.whitelist.error.permission_denied.message"))
         return
 
     if not message.text:
@@ -1205,29 +1214,23 @@ async def cmd_whitelist(message: Message) -> None:
 
     # 无参数 - 列出白名单
     if len(args) == 1:
-        await _list_whitelist(message)
+        await _list_whitelist(message, localizer)
         return
 
     subcommand = args[1].lower()
 
     # add 子命令
     if subcommand == "add":
-        await _add_whitelist(message, args)
+        await _add_whitelist(message, args, localizer)
         return
 
     # remove 子命令
     if subcommand == "remove":
-        await _remove_whitelist(message, args)
+        await _remove_whitelist(message, args, localizer)
         return
 
     # 未知子命令
-    await message.answer(
-        "❌ 未知子命令\n\n"
-        "<b>用法</b>:\n"
-        "• /whitelist - 列出所有白名单群组\n"
-        "• /whitelist add &lt;chat_id&gt; [群组名称] - 添加群组到白名单\n"
-        "• /whitelist remove &lt;chat_id&gt; - 从白名单移除群组"
-    )
+    await message.answer(localizer.t("admin.whitelist.error.unknown_subcommand.message"))
 
 
 @router.message(Command("activity"))
