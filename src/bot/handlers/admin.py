@@ -32,6 +32,11 @@ _VERIFICATION_TYPES = (
 )
 _VALID_VERIFICATION_TYPES = frozenset(_VERIFICATION_TYPES)
 
+# /groupset 子菜单类型白名单(校验 callback_data)
+_GROUPSET_MENU_TYPES = frozenset(
+    {"verify", "timeout", "antispam", "antichannel", "activity", "activityskip"}
+)
+
 
 def _build_setverify_keyboard(
     localizer: BoundLocalizer,
@@ -81,6 +86,108 @@ def _render_activity_panel(
         ]
     )
     return localizer.t("admin.activity.panel.message", status=status), keyboard
+
+
+def _groupset_status_label(localizer: BoundLocalizer, enabled: bool) -> str:
+    """groupset 主菜单状态文案:common.status 注入 groupset.status(emoji 在 catalog)。"""
+    state = "enabled" if enabled else "disabled"
+    common_status = localizer.t(f"admin.common.status.{state}.label")
+    return localizer.t(f"admin.groupset.status.{state}.label", status=common_status)
+
+
+def _with_groupset_back_button(
+    localizer: BoundLocalizer,
+    chat_id: int,
+    keyboard: InlineKeyboardMarkup | None = None,
+) -> InlineKeyboardMarkup:
+    """在给定键盘末尾追加"返回主菜单"按钮(无键盘则仅返回按钮行)。
+
+    不修改 3c7 的 _build_setverify_keyboard / _render_activity_panel 公共 API,
+    groupset 子菜单在此追加返回按钮。
+    """
+    rows = [list(row) for row in keyboard.inline_keyboard] if keyboard else []
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=localizer.t("admin.groupset.back.button"),
+                callback_data=f"groupset_back:{chat_id}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _render_groupset_main_menu(
+    localizer: BoundLocalizer,
+    chat_id: int,
+    verification_type: str | None,
+    *,
+    antispam_enabled: bool,
+    antichannel_enabled: bool,
+    activity_enabled: bool,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """渲染 groupset 主菜单(状态报告 + 6 配置入口按钮)。
+
+    verification_type 非白名单值(含 None)统一回退到 unknown 短标签。
+    """
+    verification_key = (
+        verification_type if verification_type in _VALID_VERIFICATION_TYPES else "unknown"
+    )
+    verification_label = localizer.t(
+        f"admin.groupset.verification_type.{verification_key}.short.label"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.verify.button"),
+                    callback_data=f"groupset_menu:{chat_id}:verify",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.timeout.button"),
+                    callback_data=f"groupset_menu:{chat_id}:timeout",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.antispam.button"),
+                    callback_data=f"groupset_menu:{chat_id}:antispam",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.antichannel.button"),
+                    callback_data=f"groupset_menu:{chat_id}:antichannel",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.activity.button"),
+                    callback_data=f"groupset_menu:{chat_id}:activity",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.activityskip.button"),
+                    callback_data=f"groupset_menu:{chat_id}:activityskip",
+                )
+            ],
+        ]
+    )
+
+    return (
+        localizer.t(
+            "admin.groupset.main.message",
+            verification_type=verification_label,
+            antispam_status=_groupset_status_label(localizer, antispam_enabled),
+            antichannel_status=_groupset_status_label(localizer, antichannel_enabled),
+            activity_status=_groupset_status_label(localizer, activity_enabled),
+        ),
+        keyboard,
+    )
 
 
 async def show_command_overview(message: Message) -> None:
@@ -171,131 +278,86 @@ async def cmd_help(message: Message, localizer: BoundLocalizer) -> None:
 
 
 @router.message(Command("groupset"))
-async def cmd_groupset(message: Message, bot: Bot) -> None:
+async def cmd_groupset(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """群组设置主菜单（统一配置入口）"""
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("admin.groupset.error.group_only.message"))
         return
 
     # 检查权限
     if not await check_admin_permission(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("admin.groupset.error.admin_only.message"))
         return
 
     # 获取当前配置状态
     try:
         group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
-
-        # 验证方式显示
-        verify_type_map = {
-            "math": "🔢 数学",
-            "slider": "🎯 滑块",
-            "qa": "❓ 问答",
-            "emoji": "😊 表情",
-            "captcha": "🖼️ 图片",
-            "honeypot": "🍯 蜜罐",
-            "puzzle": "🧩 拼图",
-            "turnstile": "🔐 Turnstile",
-            "friendly": "🤝 Friendly",
-            "hcaptcha": "🖼️ hCaptcha",
-            "mtcaptcha": "🔒 MTCaptcha",
-            "altcha": "⚡ ALTCHA",
-            "random": "🎲 随机",
-        }
-        verify_text = verify_type_map.get(group.verification_type, "未知")
-
-        antispam_text = "✅" if group.antispam_enabled else "❌"
-        antichannel_text = "✅" if group.anti_channel_enabled else "❌"
-        activity_text = "✅" if group.activity_enabled else "❌"
-
     except Exception as e:
         logger.error(f"获取群组配置失败: {e}")
-        verify_text = "未知"
-        antispam_text = "❌"
-        antichannel_text = "❌"
-        activity_text = "❌"
+        reply = await message.answer(localizer.t("admin.groupset.error.load_failed.message"))
+        await auto_delete_message(reply)
+        return
 
-    # 显示配置菜单
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔐 验证方式设置",
-                    callback_data=f"groupset_menu:{message.chat.id}:verify",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⏱️ 验证超时设置",
-                    callback_data=f"groupset_menu:{message.chat.id}:timeout",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🛡️ 反垃圾配置",
-                    callback_data=f"groupset_menu:{message.chat.id}:antispam",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🎭 反频道马甲配置",
-                    callback_data=f"groupset_menu:{message.chat.id}:antichannel",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📊 活跃度系统配置",
-                    callback_data=f"groupset_menu:{message.chat.id}:activity",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📈 活跃度跳过阈值",
-                    callback_data=f"groupset_menu:{message.chat.id}:activityskip",
-                )
-            ],
-        ]
+    text, keyboard = _render_groupset_main_menu(
+        localizer,
+        message.chat.id,
+        group.verification_type,
+        antispam_enabled=group.antispam_enabled,
+        antichannel_enabled=group.anti_channel_enabled,
+        activity_enabled=group.activity_enabled,
     )
-
-    reply = await message.answer(
-        f"⚙️ <b>群组设置</b>\n\n"
-        f"<b>当前配置：</b>\n"
-        f"• 验证方式：{verify_text}\n"
-        f"• 反垃圾：{antispam_text}\n"
-        f"• 反频道马甲：{antichannel_text}\n"
-        f"• 活跃度系统：{activity_text}\n\n"
-        f"请选择要配置的功能：",
-        reply_markup=keyboard,
-    )
+    reply = await message.answer(text, reply_markup=keyboard)
     await auto_delete_message(reply)
 
 
 @router.callback_query(F.data.startswith("groupset_menu:"))
-async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
+async def on_groupset_menu(callback: CallbackQuery, bot: Bot, localizer: BoundLocalizer) -> None:
     """处理群组设置菜单回调"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.groupset.callback.invalid_data.toast"), show_alert=True
+            )
             return
 
         # 类型缩小：确保 message 不是 InaccessibleMessage
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.groupset.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
 
-        _, chat_id_str, menu_type = callback.data.split(":")
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer(
+                localizer.t("admin.groupset.callback.invalid_data.toast"), show_alert=True
+            )
+            return
+        _, chat_id_str, menu_type = parts
         chat_id = int(chat_id_str)
+
+        # 校验 callback 所属群与 menu_type 白名单
+        if message.chat.id != chat_id or menu_type not in _GROUPSET_MENU_TYPES:
+            await callback.answer(
+                localizer.t("admin.groupset.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
+            return
 
         # 权限验证
         if callback.from_user.id not in settings.admin_ids:
             if not await PermissionCache.is_admin(bot, chat_id, callback.from_user.id):
-                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.groupset.callback.permission_denied.toast"),
+                    show_alert=True,
+                )
                 return
 
         # 获取群组配置
@@ -303,371 +365,181 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot) -> None:
 
         # 根据菜单类型显示不同的配置界面
         if menu_type == "verify":
-            # 验证方式设置
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🔢 数学验证", callback_data=f"setverify:{chat_id}:math"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🎯 滑块验证", callback_data=f"setverify:{chat_id}:slider"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="❓ 问答验证", callback_data=f"setverify:{chat_id}:qa"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="😊 表情验证", callback_data=f"setverify:{chat_id}:emoji"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🖼️ 图片验证码", callback_data=f"setverify:{chat_id}:captcha"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🍯 蜜罐验证", callback_data=f"setverify:{chat_id}:honeypot"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🧩 拼图验证", callback_data=f"setverify:{chat_id}:puzzle"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🔐 Turnstile 验证", callback_data=f"setverify:{chat_id}:turnstile"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🤝 Friendly Captcha",
-                            callback_data=f"setverify:{chat_id}:friendly",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🖼️ hCaptcha 图片验证",
-                            callback_data=f"setverify:{chat_id}:hcaptcha",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🔒 MTCaptcha 自适应",
-                            callback_data=f"setverify:{chat_id}:mtcaptcha",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="⚡ ALTCHA 工作证明", callback_data=f"setverify:{chat_id}:altcha"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🎲 随机验证", callback_data=f"setverify:{chat_id}:random"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
-                        )
-                    ],
-                ]
-            )
-            await message.edit_text("请选择验证方式：", reply_markup=keyboard)
-
-        elif menu_type == "timeout":
-            # 验证超时设置 - 显示当前配置和设置方法
-            timeout = group.verification_timeout or settings.verification_timeout
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
-                        )
-                    ]
-                ]
+            keyboard = _with_groupset_back_button(
+                localizer, chat_id, _build_setverify_keyboard(localizer, chat_id)
             )
             await message.edit_text(
-                f"⏱️ <b>验证超时设置</b>\n\n"
-                f"当前超时时间：{timeout} 秒\n\n"
-                f"<b>修改方法：</b>\n"
-                f"发送命令：/settimeout &lt;秒数&gt;\n"
-                f"范围：30-300 秒\n"
-                f"示例：/settimeout 120",
-                reply_markup=keyboard,
+                localizer.t("admin.setverify.prompt.message"), reply_markup=keyboard
+            )
+
+        elif menu_type == "timeout":
+            timeout = group.verification_timeout or settings.verification_timeout
+            await message.edit_text(
+                localizer.t("admin.groupset.menu.timeout.message", timeout=timeout),
+                reply_markup=_with_groupset_back_button(localizer, chat_id),
             )
 
         elif menu_type == "antispam":
-            # 反垃圾配置
-            current_status = "✅ 已启用" if group.antispam_enabled else "❌ 已禁用"
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="✅ 启用反垃圾", callback_data=f"antispam_toggle:{chat_id}:on"
+                            text=localizer.t("admin.groupset.menu.antispam.enable.button"),
+                            callback_data=f"antispam_toggle:{chat_id}:on",
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text="❌ 禁用反垃圾", callback_data=f"antispam_toggle:{chat_id}:off"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
+                            text=localizer.t("admin.groupset.menu.antispam.disable.button"),
+                            callback_data=f"antispam_toggle:{chat_id}:off",
                         )
                     ],
                 ]
             )
             await message.edit_text(
-                f"🛡️ <b>反垃圾配置</b>\n\n"
-                f"当前状态: {current_status}\n\n"
-                f"💡 <b>说明</b>：\n"
-                f"• 启用后，自动检测并删除垃圾消息\n"
-                f"• 使用 AI + 规则引擎多层检测\n"
-                f"• 可通过 /spam 命令手动标记训练",
-                reply_markup=keyboard,
+                localizer.t(
+                    "admin.groupset.menu.antispam.message",
+                    status=_groupset_status_label(localizer, group.antispam_enabled),
+                ),
+                reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard),
             )
 
         elif menu_type == "antichannel":
-            # 反频道马甲配置
-            current_status = "✅ 已启用" if group.anti_channel_enabled else "❌ 已禁用"
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="✅ 启用反频道马甲",
+                            text=localizer.t("admin.groupset.menu.antichannel.enable.button"),
                             callback_data=f"antichannel_toggle:{chat_id}:on",
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text="❌ 禁用反频道马甲",
+                            text=localizer.t("admin.groupset.menu.antichannel.disable.button"),
                             callback_data=f"antichannel_toggle:{chat_id}:off",
                         )
                     ],
-                    [
-                        InlineKeyboardButton(
-                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
-                        )
-                    ],
                 ]
             )
             await message.edit_text(
-                f"🎭 <b>反频道马甲配置</b>\n\n"
-                f"当前状态: {current_status}\n\n"
-                f"💡 <b>说明</b>：\n"
-                f"• 启用后，禁止用户以频道身份发言\n"
-                f"• 频道马甲消息会被删除，并记录警告\n"
-                f"• 有助于减少广告和频道宣传",
-                reply_markup=keyboard,
+                localizer.t(
+                    "admin.groupset.menu.antichannel.message",
+                    status=_groupset_status_label(localizer, group.anti_channel_enabled),
+                ),
+                reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard),
             )
 
         elif menu_type == "activity":
-            # 活跃度系统配置
-            status_text = "已启用 ✅" if group.activity_enabled else "已禁用 ❌"
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="✅ 启用活跃度系统",
-                            callback_data=f"activity:{chat_id}:enable",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="❌ 禁用活跃度系统",
-                            callback_data=f"activity:{chat_id}:disable",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
-                        )
-                    ],
-                ]
-            )
+            text, keyboard = _render_activity_panel(localizer, chat_id, group.activity_enabled)
             await message.edit_text(
-                f"📊 <b>活跃度系统设置</b>\n\n"
-                f"当前状态: {status_text}\n\n"
-                f"<b>🎯 非文本消息限制：</b>\n"
-                f"• <b>启用</b>: 活跃度为 0（从未发言）时禁止发送图片/贴纸/视频等，发一条文本即可解除\n"
-                f"• <b>禁用</b>: 不限制非文本消息（新用户也能发）\n\n"
-                f"<b>📈 活跃度规则：</b>\n"
-                f"• 初始值: 0\n"
-                f"• 文本消息: +1\n"
-                f"• 非文本消息: 不变（当前不扣分）\n"
-                f"• 每日衰减: -1（活跃度 &lt; 10 且当天无消息时，曾发言用户最低保留 1）\n\n"
-                f"<b>🛡️ 其他用途（始终生效）：</b>\n"
-                f"• 垃圾检测误判修正（活跃度越高，误判率越低）\n"
-                f"• 检测豁免阈值（达到阈值可跳过垃圾检测）\n"
-                f"• 宵禁模式发言门槛控制",
-                reply_markup=keyboard,
+                text, reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard)
             )
 
         elif menu_type == "activityskip":
-            # 活跃度跳过阈值配置
             global_threshold = settings.activity_skip_spam_check_threshold
             group_threshold = group.activity_skip_threshold
-
             if global_threshold > 0:
                 effective_threshold = global_threshold
-                threshold_source = "全局配置"
+                threshold_source = localizer.t("admin.activityskip.source.global.label")
             elif global_threshold == 0:
                 effective_threshold = group_threshold
-                threshold_source = "群组配置"
+                threshold_source = localizer.t("admin.activityskip.source.group.label")
             else:
                 effective_threshold = 0
-                threshold_source = "全局禁用"
-
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="« 返回主菜单", callback_data=f"groupset_back:{chat_id}"
-                        )
-                    ]
-                ]
-            )
+                threshold_source = localizer.t("admin.activityskip.source.disabled.label")
             await message.edit_text(
-                f"📈 <b>活跃度跳过阈值设置</b>\n\n"
-                f"当前配置：\n"
-                f"• 群组阈值：{group_threshold}\n"
-                f"• 全局阈值：{global_threshold}\n"
-                f"• 有效阈值：{effective_threshold}（来自{threshold_source}）\n\n"
-                f"<b>说明：</b>\n"
-                f"• 活跃度 ≥ 阈值的用户跳过反垃圾检测\n"
-                f"• 设为 0 表示禁用此功能\n\n"
-                f"<b>修改方法：</b>\n"
-                f"发送命令：/activityskip &lt;阈值&gt;\n"
-                f"示例：/activityskip 10",
-                reply_markup=keyboard,
+                localizer.t(
+                    "admin.groupset.menu.activityskip.message",
+                    group_threshold=group_threshold,
+                    global_threshold=global_threshold,
+                    effective_threshold=effective_threshold,
+                    threshold_source=threshold_source,
+                ),
+                reply_markup=_with_groupset_back_button(localizer, chat_id),
             )
 
         await callback.answer()
 
+    except ValueError:
+        # callback.data 分割不足或 int() 失败
+        await callback.answer(
+            localizer.t("admin.groupset.callback.invalid_data.toast"), show_alert=True
+        )
     except Exception as e:
         logger.error(f"处理群组设置菜单回调失败: {e}")
-        await callback.answer("❌ 操作失败", show_alert=True)
+        await callback.answer(localizer.t("admin.groupset.callback.failed.toast"), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("groupset_back:"))
-async def on_groupset_back(callback: CallbackQuery, bot: Bot) -> None:
+async def on_groupset_back(callback: CallbackQuery, bot: Bot, localizer: BoundLocalizer) -> None:
     """返回群组设置主菜单"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.groupset.callback.invalid_data.toast"), show_alert=True
+            )
             return
 
         # 类型缩小：确保 message 不是 InaccessibleMessage
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("admin.groupset.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
 
-        _, chat_id_str = callback.data.split(":")
+        parts = callback.data.split(":")
+        if len(parts) != 2:
+            await callback.answer(
+                localizer.t("admin.groupset.callback.invalid_data.toast"), show_alert=True
+            )
+            return
+        _, chat_id_str = parts
         chat_id = int(chat_id_str)
+
+        # 校验 callback 所属群
+        if message.chat.id != chat_id:
+            await callback.answer(
+                localizer.t("admin.groupset.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
+            return
 
         # 权限验证
         if callback.from_user.id not in settings.admin_ids:
             if not await PermissionCache.is_admin(bot, chat_id, callback.from_user.id):
-                await callback.answer("❌ 只有管理员可以修改设置", show_alert=True)
+                await callback.answer(
+                    localizer.t("admin.groupset.callback.permission_denied.toast"),
+                    show_alert=True,
+                )
                 return
 
         # 获取当前配置状态
         group = await GroupRepository.get_or_create(chat_id)
 
-        # 验证方式显示
-        verify_type_map = {
-            "math": "🔢 数学",
-            "slider": "🎯 滑块",
-            "qa": "❓ 问答",
-            "emoji": "😊 表情",
-            "captcha": "🖼️ 图片",
-            "honeypot": "🍯 蜜罐",
-            "puzzle": "🧩 拼图",
-            "turnstile": "🔐 Turnstile",
-            "friendly": "🤝 Friendly",
-            "hcaptcha": "🖼️ hCaptcha",
-            "mtcaptcha": "🔒 MTCaptcha",
-            "altcha": "⚡ ALTCHA",
-            "random": "🎲 随机",
-        }
-        verify_text = verify_type_map.get(group.verification_type, "未知")
-
-        antispam_text = "✅" if group.antispam_enabled else "❌"
-        antichannel_text = "✅" if group.anti_channel_enabled else "❌"
-        activity_text = "✅" if group.activity_enabled else "❌"
-
-        # 显示主菜单
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🔐 验证方式设置",
-                        callback_data=f"groupset_menu:{chat_id}:verify",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="⏱️ 验证超时设置",
-                        callback_data=f"groupset_menu:{chat_id}:timeout",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🛡️ 反垃圾配置",
-                        callback_data=f"groupset_menu:{chat_id}:antispam",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🎭 反频道马甲配置",
-                        callback_data=f"groupset_menu:{chat_id}:antichannel",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="📊 活跃度系统配置",
-                        callback_data=f"groupset_menu:{chat_id}:activity",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="📈 活跃度跳过阈值",
-                        callback_data=f"groupset_menu:{chat_id}:activityskip",
-                    )
-                ],
-            ]
+        text, keyboard = _render_groupset_main_menu(
+            localizer,
+            chat_id,
+            group.verification_type,
+            antispam_enabled=group.antispam_enabled,
+            antichannel_enabled=group.anti_channel_enabled,
+            activity_enabled=group.activity_enabled,
         )
-
-        await message.edit_text(
-            f"⚙️ <b>群组设置</b>\n\n"
-            f"<b>当前配置：</b>\n"
-            f"• 验证方式：{verify_text}\n"
-            f"• 反垃圾：{antispam_text}\n"
-            f"• 反频道马甲：{antichannel_text}\n"
-            f"• 活跃度系统：{activity_text}\n\n"
-            f"请选择要配置的功能：",
-            reply_markup=keyboard,
-        )
+        await message.edit_text(text, reply_markup=keyboard)
         await callback.answer()
 
+    except ValueError:
+        await callback.answer(
+            localizer.t("admin.groupset.callback.invalid_data.toast"), show_alert=True
+        )
     except Exception as e:
         logger.error(f"返回群组设置主菜单失败: {e}")
-        await callback.answer("❌ 操作失败", show_alert=True)
+        await callback.answer(localizer.t("admin.groupset.callback.failed.toast"), show_alert=True)
 
 
 @router.message(Command("setverify"))
