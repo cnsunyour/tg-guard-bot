@@ -41,33 +41,17 @@ def punishment_label(localizer: BoundLocalizer, key: PunishmentKey) -> str:
     return localizer.t(f"antispam.punishment.{key}.label")
 
 
-def _parse_reason_code(reason: str) -> tuple[str, dict[str, str]]:
-    """解析编码字符串为 (code, params)。
+# 需要参数的 code 及其必需参数集（缺参数则按旧格式 escape 原样显示）
+# 防 AI 自由文本恰好为纯 code 名（如 "rule_match"）导致 catalog 缺占位符
+_REQUIRED_REASON_PARAMS: dict[str, frozenset[str]] = {
+    "rule_match": frozenset({"description"}),
+    "suspicious_domain": frozenset({"domain"}),
+    "contact_info": frozenset({"type"}),
+}
 
-    格式: "code" 或 "code:key=value,key2=value2"
-    返回: ("code", {"key": "value", "key2": "value2"})
-    """
-    if ":" not in reason:
-        return reason, {}
-    code, params_str = reason.split(":", 1)
-    params = {}
-    for pair in params_str.split(","):
-        if "=" in pair:
-            key, value = pair.split("=", 1)
-            params[key.strip()] = value.strip()
-    return code, params
-
-
-def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
-    """渲染单条原因（code 化 + 兼容旧格式）。
-
-    - code 化原因: "tg_invite" → catalog "antispam.reason.tg_invite.label"
-    - 旧格式/AI 自由文本: escape_html 原样显示
-    """
-    code, params = _parse_reason_code(reason)
-
-    # 白名单已知 code，未知 code 当作旧格式 escape 原样显示
-    known_codes = {
+# 白名单已知 code（无必需参数的 code 也列入）
+_KNOWN_REASON_CODES = frozenset(
+    {
         "tg_invite",
         "rule_match",
         "suspicious_domain",
@@ -77,31 +61,63 @@ def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
         "channel_mention",
         "emoji_flood",
     }
+)
 
-    if code not in known_codes:
+
+def _parse_reason_code(reason: str) -> tuple[str, dict[str, str]]:
+    """解析编码字符串为 (code, params)。
+
+    格式: "code" 或 "code:key=value"。每种 code 最多 1 个参数，
+    value 取第一个 ``=`` 后的全部内容（保留逗号，避免 description
+    含逗号时被截断）。
+    """
+    if ":" not in reason:
+        return reason, {}
+    code, params_str = reason.split(":", 1)
+    if "=" not in params_str:
+        return code, {}
+    key, value = params_str.split("=", 1)
+    return code, {key.strip(): value.strip()}
+
+
+def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
+    """渲染单条原因（code 化 + 兼容旧格式）。
+
+    - code 化原因: "tg_invite" → catalog "antispam.reason.tg_invite.label"
+    - 旧格式/AI 自由文本: escape_html 原样显示
+    - 缺必需参数的 code（含 AI 自由文本恰好匹配 code 名）→ escape 原样显示
+    """
+    code, params = _parse_reason_code(reason)
+
+    if code not in _KNOWN_REASON_CODES:
         # 旧格式字符串或 AI 自由文本，escape 原样显示
         return escape_html(reason)
 
+    # 校验必需参数：缺失则按旧格式 escape（防 TranslationError / 显示裸 catalog key）
+    required = _REQUIRED_REASON_PARAMS.get(code)
+    if required and not required <= params.keys():
+        return escape_html(reason)
+
     # contact_info 特殊处理：type 子 code 需二次映射
-    if code == "contact_info" and "type" in params:
+    if code == "contact_info":
         contact_type = params["type"]
         # type 是子 code(wechat/qq/phone)，映射为独立 label
-        try:
-            type_label = localizer.t(f"antispam.reason.contact_type.{contact_type}.label")
-            return localizer.t("antispam.reason.contact_info.label", type=type_label)
-        except KeyError:
-            # 未知 contact_type，降级为原样 escape
-            return escape_html(reason)
+        type_label = localizer.t(f"antispam.reason.contact_type.{contact_type}.label")
+        return localizer.t("antispam.reason.contact_info.label", type=type_label)
 
-    # rule_match 需注入 description 占位符
-    if code == "rule_match" and "description" in params:
-        # description 是规则描述（中文），需 escape
-        params["description"] = escape_html(params["description"])
+    # rule_match 需注入 description 占位符（规则描述含中文，需 escape）
+    if code == "rule_match":
+        return localizer.t(
+            "antispam.reason.rule_match.label",
+            description=escape_html(params["description"]),
+        )
 
-    # suspicious_domain 需注入 domain 占位符
-    if code == "suspicious_domain" and "domain" in params:
-        # domain 是技术标识符（如 ".tk"），无需 escape 但保险起见仍 escape
-        params["domain"] = escape_html(params["domain"])
+    # suspicious_domain 需注入 domain 占位符（技术标识符，escape 防注入）
+    if code == "suspicious_domain":
+        return localizer.t(
+            "antispam.reason.suspicious_domain.label",
+            domain=escape_html(params["domain"]),
+        )
 
     # 据 code 选 catalog key 渲染
     try:
