@@ -241,27 +241,33 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
 
         # 频道马甲消息：删除消息并警告
         channel_title = (
-            message.sender_chat.title
-            if message.sender_chat and message.sender_chat.title
-            else "未知频道"
+            message.sender_chat.title if message.sender_chat and message.sender_chat.title else None
         )
         sender_chat_id = message.sender_chat.id if message.sender_chat else 0
+        channel_title_for_log = channel_title or "<unknown>"
         logger.warning(
-            f"检测到频道马甲消息 [群组:{message.chat.id}] [频道:{channel_title}({sender_chat_id})]"
+            f"检测到频道马甲消息 [群组:{message.chat.id}] "
+            f"[频道:{channel_title_for_log}({sender_chat_id})]"
         )
 
         # 删除消息
         with contextlib.suppress(Exception):
             await message.delete()
 
+        # 群 locale 渲染警告(channel_title 是 Telegram 提供的群名,escape 后注入)
+        group_locale = await get_resolver().for_group(message.chat.id)
+        localizer = get_translator().for_locale(group_locale)
+        channel_title_display = escape_html(
+            channel_title or localizer.t("antispam.channel_impersonation.unknown_channel.label")
+        )
+
         # 发送警告通知(如果有实际用户)
         if message.from_user:
             user_mention = format_user_mention(message.from_user)
-            warning_text = (
-                f"⚠️ {user_mention}\n\n"
-                f"检测到您使用频道身份 <b>{channel_title}</b> 发言。\n"
-                f"本群禁止使用频道马甲发言，您的消息已被删除。\n\n"
-                f"💡 请使用您的个人账号正常发言。"
+            warning_text = localizer.t(
+                "antispam.channel_impersonation.warning.user.message",
+                user=user_mention,
+                channel=channel_title_display,
             )
 
             # 发送警告并自动删除
@@ -279,15 +285,16 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
             )
         else:
             # 没有实际用户信息，仅在群组发送提示
-            warning_text = (
-                f"⚠️ 检测到频道 <b>{channel_title}</b> 的消息。\n\n"
-                f"本群禁止使用频道身份发言，该消息已被删除。"
+            warning_text = localizer.t(
+                "antispam.channel_impersonation.warning.anonymous.message",
+                channel=channel_title_display,
             )
             warning_msg = await message.answer(warning_text, parse_mode="HTML")
             await auto_delete_message(warning_msg, delay=30)
 
         logger.info(
-            f"已处理频道马甲消息 [群组:{message.chat.id}] [频道:{channel_title}({sender_chat_id})]"
+            f"已处理频道马甲消息 [群组:{message.chat.id}] "
+            f"[频道:{channel_title_for_log}({sender_chat_id})]"
         )
         return True
 
@@ -337,8 +344,10 @@ async def check_non_text_message(
                 f"[用户:{message.from_user.id}] [类型:{message_type}] [活跃度:{current_activity}]"
             )
 
-            # 私聊通知用户
-            await notify_activity_restriction(bot, message.from_user.id, current_activity)
+            # 私聊通知用户(私聊目的地用 for_private_from_group:用户偏好优先,否则来源群)
+            await notify_activity_restriction(
+                bot, message.from_user.id, current_activity, group_chat_id=message.chat.id
+            )
 
         except Exception as e:
             logger.error(f"删除非文本消息失败: {e}")
@@ -350,25 +359,33 @@ async def check_non_text_message(
     return False  # 允许通过
 
 
-async def notify_activity_restriction(bot: Bot, user_id: int, current_activity: int) -> None:
+async def notify_activity_restriction(
+    bot: Bot,
+    user_id: int,
+    current_activity: int,
+    *,
+    group_chat_id: int,
+) -> None:
     """私聊通知用户活跃度限制
 
     Args:
         bot: Bot 实例
         user_id: 用户 ID
         current_activity: 当前活跃度
+        group_chat_id: 触发限制的来源群(用于解析私聊 locale:用户偏好优先,否则来源群)
     """
     try:
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=group_chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
         await bot.send_message(
             chat_id=user_id,
-            text=(
-                "⚠️ **消息被限制**\n\n"
-                f"您当前的活跃度为 **{current_activity}**，无法发送非文本消息。\n\n"
-                "📝 **如何恢复:**\n"
-                "发送文本消息可以增加活跃度，每条文本消息 +1 活跃度。\n\n"
-                "💡 当活跃度 &gt; 0 时，即可发送图片、贴纸等非文本消息。"
+            text=localizer.t(
+                "antispam.activity_restriction.private.message",
+                activity=current_activity,
             ),
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
         logger.debug(f"已私聊通知用户 {user_id} 活跃度限制")
     except Exception as e:
