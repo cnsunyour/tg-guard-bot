@@ -320,6 +320,65 @@ SYSTEM_PROMPT_VISION_WITH_CONTEXT = """你是垃圾信息检测助手。结合�
 
 
 # ============================================================================
+# reason 输出语言控制（按群组 locale 让 AI 返回对应语言的 reason）
+# ============================================================================
+
+_REASON_LANGUAGE_NAMES: dict[str | None, str] = {
+    None: "简体中文",
+    "zh-Hans": "简体中文",
+    "zh-Hant": "繁體中文",
+    "en": "English",
+}
+
+# AI 未返回 reason 时按 locale 提供兜底文案（避免固定中文"无理由"破坏 i18n）
+_REASON_FALLBACKS: dict[str | None, str] = {
+    None: "未提供判断理由",
+    "zh-Hans": "未提供判断理由",
+    "zh-Hant": "未提供判斷理由",
+    "en": "No reason provided",
+}
+
+
+def _reason_language_name(locale: str | None) -> str:
+    """将应用 locale 转为 prompt 使用的语言名；未知值降级为简体中文。"""
+    return _REASON_LANGUAGE_NAMES.get(locale, _REASON_LANGUAGE_NAMES[None])
+
+
+def _reason_fallback(locale: str | None) -> str:
+    """AI 未返回 reason 时提供同语言兜底文案。"""
+    return _REASON_FALLBACKS.get(locale, _REASON_FALLBACKS[None])
+
+
+# AI 检测未启用时的 reason 兜底（按 locale）
+_AI_DISABLED_REASONS: dict[str | None, str] = {
+    None: "AI 检测未启用",
+    "zh-Hans": "AI 检测未启用",
+    "zh-Hant": "AI 偵測未啟用",
+    "en": "AI detection disabled",
+}
+
+
+def _ai_disabled_reason(locale: str | None) -> str:
+    """AI 检测未启用时按 locale 返回 reason。"""
+    return _AI_DISABLED_REASONS.get(locale, _AI_DISABLED_REASONS[None])
+
+
+def _build_system_prompt(base_prompt: str, locale: str | None) -> str:
+    """为检测 prompt 追加 reason 输出语言约束。
+
+    不用 ``.format()``（prompt 内 JSON 示例的 ``{}`` 会被误识别），
+    改用字符串拼接追加独立指令段。
+    """
+    language = _reason_language_name(locale)
+    return (
+        f"{base_prompt}\n\n"
+        "**重要：reason 输出语言**\n"
+        f"reason 字段必须只使用{language}返回；"
+        "即使待检测内容或上述示例使用其他语言，也不要改变 reason 的输出语言。"
+    )
+
+
+# ============================================================================
 # AI 服务商抽象基类
 # ============================================================================
 
@@ -392,7 +451,12 @@ class AIServiceProvider(ABC):
         pass
 
     @abstractmethod
-    async def detect(self, text: str, use_context_prompt: bool = False) -> AIDetectionResult:
+    async def detect(
+        self,
+        text: str,
+        use_context_prompt: bool = False,
+        locale: str | None = None,
+    ) -> AIDetectionResult:
         """检测文本是否为垃圾信息
 
         Args:
@@ -506,12 +570,18 @@ class AIServiceProvider(ABC):
             return f"{error_type} [message={message}]"
         return error_type
 
-    async def _call_api(self, text: str, use_context_prompt: bool = False) -> dict[str, Any]:
+    async def _call_api(
+        self,
+        text: str,
+        use_context_prompt: bool = False,
+        locale: str | None = None,
+    ) -> dict[str, Any]:
         """调用 OpenAI 兼容 API
 
         Args:
             text: 待检测文本
             use_context_prompt: 是否使用上下文 Prompt
+            locale: 群组 locale，控制 reason 输出语言（None → 简体中文）
 
         Returns:
             API 响应 JSON
@@ -519,8 +589,9 @@ class AIServiceProvider(ABC):
         Raises:
             AIServiceError: HTTP 请求错误或响应解析错误
         """
-        # 选择 Prompt
-        system_prompt = SYSTEM_PROMPT_WITH_CONTEXT if use_context_prompt else SYSTEM_PROMPT
+        # 选择 Prompt 并按 locale 追加 reason 语言约束
+        base_prompt = SYSTEM_PROMPT_WITH_CONTEXT if use_context_prompt else SYSTEM_PROMPT
+        system_prompt = _build_system_prompt(base_prompt, locale)
 
         # 构建请求
         url = f"{self.config.api_base.rstrip('/')}/chat/completions"
@@ -579,7 +650,9 @@ class AIServiceProvider(ABC):
 
         return result
 
-    def _process_result(self, result: dict[str, Any]) -> AIDetectionResult:
+    def _process_result(
+        self, result: dict[str, Any], locale: str | None = None
+    ) -> AIDetectionResult:
         """处理 API 响应，转换为统一格式
 
         Args:
@@ -613,9 +686,9 @@ class AIServiceProvider(ABC):
             logger.warning(f"AI 返回无效 confidence: {raw_confidence}，错误: {e}，使用默认值 0.0")
             confidence = 0.0
 
-        # 强制转换 reason 为字符串
-        raw_reason = result.get("reason", "无理由")
-        reason = str(raw_reason) if raw_reason else "无理由"
+        # 强制转换 reason 为字符串（AI 未返回时按 locale 兜底）
+        raw_reason = result.get("reason")
+        reason = str(raw_reason) if raw_reason else _reason_fallback(locale)
 
         # 根据阈值判断
         final_is_spam = is_spam and confidence >= self.config.threshold
@@ -651,6 +724,7 @@ class AIServiceProvider(ABC):
         *,
         caption: str | None = None,
         context_text: str | None = None,
+        locale: str | None = None,
     ) -> AIDetectionResult:
         """Vision 直判图片是否为垃圾（带重试）
 
@@ -659,6 +733,7 @@ class AIServiceProvider(ABC):
             mime: 图片 MIME 类型（如 image/jpeg）
             caption: 图片自带的文字说明（可选）
             context_text: 格式化后的群组对话上下文（可选）
+            locale: 群组 locale，控制 reason 输出语言（None → 简体中文）
 
         Returns:
             AIDetectionResult，details 含 extracted_text
@@ -667,7 +742,8 @@ class AIServiceProvider(ABC):
             AIServiceError: 所有重试失败
         """
         use_context = bool(context_text and context_text.strip())
-        system_prompt = SYSTEM_PROMPT_VISION_WITH_CONTEXT if use_context else SYSTEM_PROMPT_VISION
+        base_prompt = SYSTEM_PROMPT_VISION_WITH_CONTEXT if use_context else SYSTEM_PROMPT_VISION
+        system_prompt = _build_system_prompt(base_prompt, locale)
 
         text_parts: list[str] = []
         if use_context:
@@ -694,7 +770,7 @@ class AIServiceProvider(ABC):
         for attempt in range(self.config.max_retries + 1):
             try:
                 raw = await self._call_api_vision(messages)
-                detection = self._process_vision_result(raw)
+                detection = self._process_vision_result(raw, locale)
                 detection.attempt_count = attempt + 1
                 return detection
             except Exception as e:
@@ -772,7 +848,9 @@ class AIServiceProvider(ABC):
 
         return result
 
-    def _process_vision_result(self, result: dict[str, Any]) -> AIDetectionResult:
+    def _process_vision_result(
+        self, result: dict[str, Any], locale: str | None = None
+    ) -> AIDetectionResult:
         """将 Vision 响应转为 AIDetectionResult（含 extracted_text）"""
         import math
 
@@ -795,8 +873,8 @@ class AIServiceProvider(ABC):
             logger.warning(f"Vision 无效 confidence: {raw_confidence} ({e})，使用 0.0")
             confidence = 0.0
 
-        raw_reason = result.get("reason", "无理由")
-        reason = str(raw_reason) if raw_reason else "无理由"
+        raw_reason = result.get("reason")
+        reason = str(raw_reason) if raw_reason else _reason_fallback(locale)
         extracted_text = str(result.get("extracted_text", "") or "")
 
         final_is_spam = is_spam and confidence >= self.config.threshold
@@ -862,7 +940,12 @@ class PrimaryAIServiceProvider(AIServiceProvider):
         """检查主服务商是否可用"""
         return self.config.enabled and bool(self.config.api_key)
 
-    async def detect(self, text: str, use_context_prompt: bool = False) -> AIDetectionResult:
+    async def detect(
+        self,
+        text: str,
+        use_context_prompt: bool = False,
+        locale: str | None = None,
+    ) -> AIDetectionResult:
         """检测文本是否为垃圾信息（带重试）"""
         # 文本长度限制
         if len(text) > self.config.max_length:
@@ -874,8 +957,8 @@ class PrimaryAIServiceProvider(AIServiceProvider):
         # 带重试的 API 调用
         for attempt in range(self.config.max_retries + 1):
             try:
-                result = await self._call_api(text, use_context_prompt)
-                detection_result = self._process_result(result)
+                result = await self._call_api(text, use_context_prompt, locale)
+                detection_result = self._process_result(result, locale)
                 detection_result.attempt_count = attempt + 1
                 return detection_result
             except Exception as e:
@@ -934,7 +1017,12 @@ class BackupAIServiceProvider(AIServiceProvider):
             and settings.ai_spam_enabled  # 备份服务商需要主服务启用
         )
 
-    async def detect(self, text: str, use_context_prompt: bool = False) -> AIDetectionResult:
+    async def detect(
+        self,
+        text: str,
+        use_context_prompt: bool = False,
+        locale: str | None = None,
+    ) -> AIDetectionResult:
         """检测文本是否为垃圾信息（带重试）"""
         # 文本长度限制
         if len(text) > self.config.max_length:
@@ -946,8 +1034,8 @@ class BackupAIServiceProvider(AIServiceProvider):
         # 带重试的 API 调用
         for attempt in range(self.config.max_retries + 1):
             try:
-                result = await self._call_api(text, use_context_prompt)
-                detection_result = self._process_result(result)
+                result = await self._call_api(text, use_context_prompt, locale)
+                detection_result = self._process_result(result, locale)
                 detection_result.attempt_count = attempt + 1
                 return detection_result
             except Exception as e:
@@ -997,7 +1085,12 @@ class VisionServiceProvider(AIServiceProvider):
         """
         return self.config.enabled and bool(self.config.api_key) and self.supports_vision
 
-    async def detect(self, text: str, use_context_prompt: bool = False) -> AIDetectionResult:
+    async def detect(
+        self,
+        text: str,
+        use_context_prompt: bool = False,
+        locale: str | None = None,
+    ) -> AIDetectionResult:
         """Vision provider 不参与文本检测（契约保护）
 
         HybridAIDetector 的文本路径只走 self.primary / self.backup，
@@ -1190,11 +1283,12 @@ class HybridAIDetector:
             return 0.0
         return stats.success_count / total
 
-    async def detect(self, text: str) -> dict[str, Any]:
+    async def detect(self, text: str, locale: str | None = None) -> dict[str, Any]:
         """检测文本是否为垃圾信息（尝试所有服务商）
 
         Args:
             text: 待检测文本
+            locale: 群组 locale，控制 reason 输出语言
 
         Returns:
             检测结果字典
@@ -1203,7 +1297,7 @@ class HybridAIDetector:
         if self.primary.is_available and not self._is_circuit_open(self.primary):
             try:
                 logger.debug(f"🔍 尝试使用 {self.primary.name} 服务商检测...")
-                result = await self.primary.detect(text)
+                result = await self.primary.detect(text, locale=locale)
                 self._record_success(self.primary)
                 logger.info(
                     f"✅ {self.primary.name} 检测成功 [is_spam={result.is_spam}] "
@@ -1239,7 +1333,7 @@ class HybridAIDetector:
             logger.info(f"🔄 切换到 {self.backup.name} 服务商...")
             try:
                 logger.debug(f"🔍 尝试使用 {self.backup.name} 服务商检测...")
-                result = await self.backup.detect(text)
+                result = await self.backup.detect(text, locale=locale)
                 self._record_success(self.backup)
                 logger.info(
                     f"✅ {self.backup.name} 检测成功 [is_spam={result.is_spam}] "
@@ -1280,20 +1374,24 @@ class HybridAIDetector:
         raise RuntimeError(f"AI 检测失败: primary={primary_error}, backup={backup_error}")
 
     async def detect_with_context(
-        self, text: str, context_text: str | None = None
+        self,
+        text: str,
+        context_text: str | None = None,
+        locale: str | None = None,
     ) -> dict[str, Any]:
         """带上下文的垃圾检测
 
         Args:
             text: 待检测文本
             context_text: 上下文文本（格式化后的对话上下文）
+            locale: 群组 locale，控制 reason 输出语言
 
         Returns:
             检测结果字典
         """
         # 如果没有上下文，使用普通检测
         if not context_text:
-            return await self.detect(text)
+            return await self.detect(text, locale)
 
         # 文本长度限制（上下文 + 待检测文本）
         total_length = len(context_text)
@@ -1307,13 +1405,15 @@ class HybridAIDetector:
             else:
                 # 上下文过长，放弃使用上下文
                 logger.warning(f"上下文过长，使用普通检测 [total_length={total_length}]")
-                return await self.detect(text)
+                return await self.detect(text, locale)
 
         # 尝试主服务商
         if self.primary.is_available and not self._is_circuit_open(self.primary):
             try:
                 logger.debug(f"🔍 尝试使用 {self.primary.name} 服务商检测（带上下文）...")
-                result = await self.primary.detect(context_text, use_context_prompt=True)
+                result = await self.primary.detect(
+                    context_text, use_context_prompt=True, locale=locale
+                )
                 self._record_success(self.primary)
                 logger.info(
                     f"✅ {self.primary.name} 检测成功 [is_spam={result.is_spam}] "
@@ -1349,7 +1449,9 @@ class HybridAIDetector:
             logger.info(f"🔄 切换到 {self.backup.name} 服务商...")
             try:
                 logger.debug(f"🔍 尝试使用 {self.backup.name} 服务商检测（带上下文）...")
-                result = await self.backup.detect(context_text, use_context_prompt=True)
+                result = await self.backup.detect(
+                    context_text, use_context_prompt=True, locale=locale
+                )
                 self._record_success(self.backup)
                 logger.info(
                     f"✅ {self.backup.name} 检测成功 [is_spam={result.is_spam}] "
@@ -1396,6 +1498,7 @@ class HybridAIDetector:
         *,
         caption: str | None = None,
         context_text: str | None = None,
+        locale: str | None = None,
     ) -> dict[str, Any]:
         """带上下文的 Vision 直判图片（主备回退）
 
@@ -1404,6 +1507,7 @@ class HybridAIDetector:
             mime: 图片 MIME 类型
             caption: 图片说明（可选）
             context_text: 格式化后的群组对话上下文（可选）
+            locale: 群组 locale，控制 reason 输出语言
 
         Returns:
             检测结果 dict（字段对齐 detect_with_context）
@@ -1445,6 +1549,7 @@ class HybridAIDetector:
                     mime,
                     caption=caption,
                     context_text=context_text,
+                    locale=locale,
                 )
                 self._record_success(provider)
                 logger.info(
@@ -1591,11 +1696,12 @@ class AISpamDetector:
         self._detector = HybridAIDetector()
         self.enabled = self._detector.primary.is_available
 
-    async def detect(self, text: str) -> dict[str, Any]:
+    async def detect(self, text: str, locale: str | None = None) -> dict[str, Any]:
         """检测文本是否为垃圾信息
 
         Args:
             text: 待检测文本
+            locale: 群组 locale，控制 reason 输出语言
 
         Returns:
             检测结果字典
@@ -1606,20 +1712,24 @@ class AISpamDetector:
                 "is_spam": False,
                 "confidence": 0.0,
                 "stage": "ai_api",
-                "reasons": ["AI 检测未启用"],
+                "reasons": [_ai_disabled_reason(locale)],
                 "details": {"enabled": False},
             }
 
-        return await self._detector.detect(text)
+        return await self._detector.detect(text, locale)
 
     async def detect_with_context(
-        self, text: str, context_text: str | None = None
+        self,
+        text: str,
+        context_text: str | None = None,
+        locale: str | None = None,
     ) -> dict[str, Any]:
         """带上下文的垃圾检测
 
         Args:
             text: 待检测文本
             context_text: 上下文文本（格式化后的对话上下文）
+            locale: 群组 locale，控制 reason 输出语言
 
         Returns:
             检测结果字典
@@ -1630,11 +1740,11 @@ class AISpamDetector:
                 "is_spam": False,
                 "confidence": 0.0,
                 "stage": "ai_api",
-                "reasons": ["AI 检测未启用"],
+                "reasons": [_ai_disabled_reason(locale)],
                 "details": {"enabled": False},
             }
 
-        return await self._detector.detect_with_context(text, context_text)
+        return await self._detector.detect_with_context(text, context_text, locale)
 
     @property
     def vision_enabled(self) -> bool:
@@ -1655,8 +1765,12 @@ class AISpamDetector:
         *,
         caption: str | None = None,
         context_text: str | None = None,
+        locale: str | None = None,
     ) -> dict[str, Any]:
         """Vision 直判图片（带上下文 + 主备回退）
+
+        Args:
+            locale: 群组 locale，控制 reason 输出语言
 
         Raises:
             VisionUnsupportedError: AI 未启用或没有支持 vision 的 provider
@@ -1665,7 +1779,7 @@ class AISpamDetector:
         if not self.vision_enabled:
             raise VisionUnsupportedError("Vision 未启用或无可用 provider")
         return await self._detector.detect_image_with_context(
-            image_b64, mime, caption=caption, context_text=context_text
+            image_b64, mime, caption=caption, context_text=context_text, locale=locale
         )
 
     async def close(self):

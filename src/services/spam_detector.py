@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.core.config import settings
 from src.core.executor import run_in_executor  # ✅ P1-11: 导入线程池执行器
+from src.core.i18n import get_resolver
 from src.core.utils import mask_text
 from src.ml.ai_detector import (
     VisionAllFailedError,
@@ -234,9 +235,10 @@ class SpamDetector:
 
         # 并行执行传统检测和 AI 检测
         try:
+            locale = await get_resolver().for_group(chat_id)
             results = await asyncio.gather(
                 self.detect(text, user_id, chat_id, activity),  # 传统三阶段
-                self.ai_detector.detect(text),  # AI API 检测
+                self.ai_detector.detect(text, locale=locale),  # AI API 检测
                 return_exceptions=True,
             )
 
@@ -313,9 +315,12 @@ class SpamDetector:
 
         # 并行执行传统检测和 AI 上下文检测
         try:
+            locale = await get_resolver().for_group(chat_id)
             results = await asyncio.gather(
                 self.detect(text, user_id, chat_id, activity),  # 传统三阶段
-                self.ai_detector.detect_with_context(text, context_text),  # AI 上下文检测
+                self.ai_detector.detect_with_context(
+                    text, context_text, locale=locale
+                ),  # AI 上下文检测
                 return_exceptions=True,
             )
 
@@ -765,12 +770,14 @@ class SpamDetector:
             return empty_result
 
         try:
+            locale = await get_resolver().for_group(chat_id)
             return await self._detect_image_via_vision(
                 image_path=image_path,
                 user_id=user_id,
                 chat_id=chat_id,
                 caption=caption,
                 context_text=context_text,
+                locale=locale,
                 activity=activity,
                 skip_auto_train=skip_auto_train,
             )
@@ -791,6 +798,7 @@ class SpamDetector:
         chat_id: int,
         caption: str | None,
         context_text: str | None,
+        locale: str | None,
         activity: int | None,
         skip_auto_train: bool,
     ) -> DetectionResult:
@@ -809,10 +817,12 @@ class SpamDetector:
             mime,
             caption=caption,
             context_text=context_text,
+            locale=locale,
         )
 
         extracted_text = str(ai_result.get("details", {}).get("extracted_text", "") or "")
-        ai_reason = ai_result["reasons"][0] if ai_result.get("reasons") else "AI Vision 判定"
+        # reasons 直接透传 AI 返回的多语言 reason（避免固定中文"图片 AI 视觉"混排）
+        ai_reasons = [str(r) for r in ai_result.get("reasons", []) if r]
 
         # 训练样本入库用的文本兜底：Vision 识别不出文字时，用占位符避免写空串
         sample_text = extracted_text or f"[图片]{caption or ''}".strip() or "[图片]"
@@ -823,7 +833,7 @@ class SpamDetector:
             "original_confidence": float(ai_result["confidence"]),
             "activity_reduction": 0.0,
             "stage": "ai_vision",
-            "reasons": ["图片 AI 视觉", ai_reason],
+            "reasons": ai_reasons,
             "details": {
                 **ai_result.get("details", {}),
                 "recognized_text": sample_text,
@@ -849,7 +859,7 @@ class SpamDetector:
             logger.info(
                 f"检测到图片垃圾信息（Vision）[用户:{user_id}] "
                 f"[置信度:{result['confidence']:.2f}] "
-                f"[原因:{ai_reason}]"
+                f"[原因:{', '.join(ai_reasons)}]"
             )
         else:
             logger.debug(
