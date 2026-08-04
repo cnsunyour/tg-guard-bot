@@ -942,10 +942,13 @@ async def cmd_stats(message: Message, localizer: BoundLocalizer) -> None:
         await message.answer(localizer.t("admin.stats.failed.message"))
 
 
+# 白名单列表单消息字符预算：Telegram 上限 4096，留余量给 HTML 实体膨胀 + 多语言文案
+_WHITELIST_PAGE_CHAR_LIMIT = 3500
+
+
 async def _list_whitelist(message: Message, localizer: BoundLocalizer) -> None:
-    """列出所有白名单群组"""
+    """列出所有白名单群组（渲染后超字符预算则自动分多条消息发送）"""
     try:
-        # 获取所有白名单群组
         groups = await GroupRepository.get_whitelisted_groups()
 
         if not groups:
@@ -953,25 +956,47 @@ async def _list_whitelist(message: Message, localizer: BoundLocalizer) -> None:
             return
 
         header = localizer.t("admin.whitelist.list.header.message", count=len(groups))
-        parts = [header]
+        # 按渲染后字符数分页：第 1 页用 header，续页用 continuation 标识 + 页码
+        pages: list[str] = []
+        page_parts: list[str] = [header]
+        page_length = len(header)
+        page_number = 1
+        page_has_rows = False
+
         for i, group in enumerate(groups, 1):
             title = (
                 escape_html(group.title)
                 if group.title
                 else localizer.t("admin.common.unknown_group.label")
             )
-            parts.append(
-                localizer.t(
-                    "admin.whitelist.list.row.message",
-                    index=i,
-                    title=title,
-                    chat_id=group.id,
-                )
+            row = localizer.t(
+                "admin.whitelist.list.row.message",
+                index=i,
+                title=title,
+                chat_id=group.id,
             )
-            if i < len(groups):
-                parts.append("\n")
+            separator = "\n" if page_has_rows else ""
+            # 加入本行会超预算：封存当前页，开新页（续页标识 + 递增页码）
+            if (
+                page_has_rows
+                and page_length + len(separator) + len(row) > _WHITELIST_PAGE_CHAR_LIMIT
+            ):
+                pages.append("".join(page_parts))
+                page_number += 1
+                continuation = localizer.t(
+                    "admin.whitelist.list.continuation.message",
+                    page=page_number,
+                )
+                page_parts = [continuation, row]
+                page_length = len(continuation) + len(row)
+            else:
+                page_parts.extend((separator, row))
+                page_length += len(separator) + len(row)
+            page_has_rows = True
 
-        await message.answer("".join(parts))
+        pages.append("".join(page_parts))
+        for page in pages:
+            await message.answer(page)
 
     except Exception:
         logger.exception("获取白名单列表失败")

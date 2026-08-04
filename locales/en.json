@@ -218,6 +218,7 @@
   "admin.whitelist.add.saved.message": "✅ Group <b>{group}</b> added to the whitelist",
   "admin.whitelist.error.permission_denied.message": "❌ Only super administrators can use this command",
   "admin.whitelist.error.unknown_subcommand.message": "❌ Unknown subcommand\n\n<b>Usage</b>:\n• /whitelist - List all whitelisted groups\n• /whitelist add &lt;chat_id&gt; [group_name] - Add a group to the whitelist\n• /whitelist remove &lt;chat_id&gt; - Remove a group from the whitelist",
+  "admin.whitelist.list.continuation.message": "📄 <b>Whitelisted groups (continued)</b> · Page {page}\n\n",
   "admin.whitelist.list.empty.message": "📋 No whitelisted groups",
   "admin.whitelist.list.failed.message": "❌ Failed to load the whitelist. Please try again",
   "admin.whitelist.list.header.message": "📋 <b>Whitelisted groups</b> ({count})\n\n",

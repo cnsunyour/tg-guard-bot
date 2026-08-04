@@ -218,6 +218,7 @@
   "admin.whitelist.add.saved.message": "✅ 已將群組 <b>{group}</b> 新增到白名單",
   "admin.whitelist.error.permission_denied.message": "❌ 只有超級管理員可以使用此命令",
   "admin.whitelist.error.unknown_subcommand.message": "❌ 未知子命令\n\n<b>用法</b>:\n• /whitelist - 列出所有白名單群組\n• /whitelist add &lt;chat_id&gt; [群組名稱] - 新增群組到白名單\n• /whitelist remove &lt;chat_id&gt; - 從白名單移除群組",
+  "admin.whitelist.list.continuation.message": "📄 <b>白名單群組列表（續）</b> · 第 {page} 頁\n\n",
   "admin.whitelist.list.empty.message": "📋 目前沒有白名單群組",
   "admin.whitelist.list.failed.message": "❌ 讀取白名單列表失敗，請重試",
   "admin.whitelist.list.header.message": "📋 <b>白名單群組列表</b> (共 {count} 個)\n\n",
