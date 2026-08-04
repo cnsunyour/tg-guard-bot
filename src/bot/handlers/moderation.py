@@ -1178,11 +1178,9 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 from src.services.spam_detector import get_detector
 
                 detector = get_detector()
-                triggered, train_message = await detector.check_and_auto_train(
-                    admin_ids=settings.admin_ids
-                )
-                if triggered:
-                    logger.info(f"样本添加后触发自动训练: {train_message}")
+                train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
+                if train_result is not None:
+                    logger.info(f"样本添加后触发自动训练 [结果:{train_result.code.value}]")
             except Exception as e:
                 logger.error(f"检查自动训练失败: {e}")
 
@@ -1436,11 +1434,9 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
             from src.services.spam_detector import get_detector
 
             detector = get_detector()
-            triggered, train_message = await detector.check_and_auto_train(
-                admin_ids=settings.admin_ids
-            )
-            if triggered:
-                logger.info(f"样本添加后触发自动训练: {train_message}")
+            train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
+            if train_result is not None:
+                logger.info(f"样本添加后触发自动训练 [结果:{train_result.code.value}]")
         except Exception as e:
             logger.error(f"检查自动训练失败: {e}")
 

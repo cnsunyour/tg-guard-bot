@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.bot.handlers import antispam as handler
+from src.services.spam_detector import RetrainCode, RetrainResult
 
 pytestmark = pytest.mark.unit
 
@@ -172,12 +173,22 @@ async def test_retrain_non_super_admin(mocker) -> None:
     localizer.t.assert_called_once_with("admin.antispam.retrain.permission_denied.toast")
 
 
-async def test_retrain_success_escapes_message(mocker) -> None:
-    """合法 → start.toast + result.success.message(message escape_html 注入)。"""
+async def test_retrain_success_formats_accuracy_and_metrics(mocker) -> None:
+    """success code → accuracy 格式化为百分比 + 4 个数字占位符。"""
     localizer = _localizer()
     mocker.patch.object(handler.settings, "admin_ids", {42})
     detector = MagicMock()
-    detector.retrain_model = AsyncMock(return_value=(True, "训练成功！准确率: 95%"))
+    detector.retrain_model = AsyncMock(
+        return_value=RetrainResult(
+            code=RetrainCode.success,
+            params={
+                "accuracy": 0.95,
+                "total_samples": 100,
+                "spam_samples": 30,
+                "normal_samples": 70,
+            },
+        )
+    )
     mocker.patch.object(handler, "get_detector", return_value=detector)
     cb = _callback(data=f"antispam_retrain:{CHAT_ID}")
 
@@ -187,21 +198,29 @@ async def test_retrain_success_escapes_message(mocker) -> None:
     assert next(
         c for c in localizer.t.call_args_list if c.args == ("admin.antispam.retrain.start.toast",)
     )
-    # result.success.message
+    # result.success.message,accuracy → accuracy_percent "95.00%"
     result = next(
         c
         for c in localizer.t.call_args_list
         if c.args == ("admin.antispam.retrain.result.success.message",)
     )
-    assert result.kwargs["message"] == "训练成功！准确率: 95%"
+    assert result.kwargs["accuracy_percent"] == "95.00%"
+    assert result.kwargs["total_samples"] == 100
+    assert result.kwargs["spam_samples"] == 30
+    assert result.kwargs["normal_samples"] == 70
 
 
-async def test_retrain_html_in_message_escaped(mocker) -> None:
-    """detector 返回含 HTML 字符的 message → escape_html 注入。"""
+async def test_retrain_failed_escapes_error(mocker) -> None:
+    """failed code → error escape_html 注入。"""
     localizer = _localizer()
     mocker.patch.object(handler.settings, "admin_ids", {42})
     detector = MagicMock()
-    detector.retrain_model = AsyncMock(return_value=(False, "<script>x</script>"))
+    detector.retrain_model = AsyncMock(
+        return_value=RetrainResult(
+            code=RetrainCode.failed,
+            params={"error": "<script>x</script>"},
+        )
+    )
     mocker.patch.object(handler, "get_detector", return_value=detector)
     cb = _callback(data=f"antispam_retrain:{CHAT_ID}")
 
@@ -210,9 +229,54 @@ async def test_retrain_html_in_message_escaped(mocker) -> None:
     result = next(
         c
         for c in localizer.t.call_args_list
-        if c.args == ("admin.antispam.retrain.result.failure.message",)
+        if c.args == ("admin.antispam.retrain.result.failed.message",)
     )
-    assert result.kwargs["message"] == "&lt;script&gt;x&lt;/script&gt;"
+    assert result.kwargs["error"] == "&lt;script&gt;x&lt;/script&gt;"
+
+
+async def test_retrain_insufficient_samples(mocker) -> None:
+    """insufficient_samples code → {current}/{min_required} 占位符。"""
+    localizer = _localizer()
+    mocker.patch.object(handler.settings, "admin_ids", {42})
+    detector = MagicMock()
+    detector.retrain_model = AsyncMock(
+        return_value=RetrainResult(
+            code=RetrainCode.insufficient_samples,
+            params={"current": 3, "min_required": 10},
+        )
+    )
+    mocker.patch.object(handler, "get_detector", return_value=detector)
+    cb = _callback(data=f"antispam_retrain:{CHAT_ID}")
+
+    await handler.on_antispam_retrain(cb, localizer)
+
+    result = next(
+        c
+        for c in localizer.t.call_args_list
+        if c.args == ("admin.antispam.retrain.result.insufficient_samples.message",)
+    )
+    assert result.kwargs["current"] == 3
+    assert result.kwargs["min_required"] == 10
+
+
+async def test_retrain_save_failed(mocker) -> None:
+    """save_failed code → 无占位符。"""
+    localizer = _localizer()
+    mocker.patch.object(handler.settings, "admin_ids", {42})
+    detector = MagicMock()
+    detector.retrain_model = AsyncMock(
+        return_value=RetrainResult(code=RetrainCode.save_failed, params={})
+    )
+    mocker.patch.object(handler, "get_detector", return_value=detector)
+    cb = _callback(data=f"antispam_retrain:{CHAT_ID}")
+
+    await handler.on_antispam_retrain(cb, localizer)
+
+    assert next(
+        c
+        for c in localizer.t.call_args_list
+        if c.args == ("admin.antispam.retrain.result.save_failed.message",)
+    )
 
 
 # ===== on_antispam_confirm_menu =====

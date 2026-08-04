@@ -4,6 +4,9 @@
 """
 
 import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, TypedDict
 
 from loguru import logger
@@ -33,6 +36,34 @@ class DetectionResult(TypedDict):
     stage: str | None
     reasons: list[str]
     details: dict[str, Any]
+
+
+class RetrainCode(StrEnum):
+    """retrain_model 稳定结果 code(handler 据 code 选 catalog key 渲染)。"""
+
+    insufficient_samples = "insufficient_samples"
+    save_failed = "save_failed"
+    success = "success"
+    failed = "failed"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RetrainResult:
+    """retrain_model 结果:稳定 code + 渲染参数(不含中文文案)。
+
+    success 由 code 计算,避免 success=True/code=failed 非法组合。
+    """
+
+    code: RetrainCode
+    params: Mapping[str, str | int | float]
+
+    @property
+    def success(self) -> bool:
+        return self.code is RetrainCode.success
+
+
+# 最少训练样本数(独立常量,供结果 params 与校验共用)
+_MIN_TRAINING_SAMPLES = 10
 
 
 class SpamDetector:
@@ -467,10 +498,10 @@ class SpamDetector:
                 )
 
                 # 检查是否触发自动训练
-                triggered, message = await self.check_and_auto_train(admin_ids=settings.admin_ids)
+                train_result = await self.check_and_auto_train(admin_ids=settings.admin_ids)
 
-                if triggered:
-                    logger.info(f"AI 样本触发自动训练: {message}")
+                if train_result is not None:
+                    logger.info(f"AI 样本触发自动训练 [结果:{train_result.code.value}]")
 
         except Exception as e:
             logger.error(f"AI 样本入库失败 [用户:{user_id}]: {e}")
@@ -535,10 +566,10 @@ class SpamDetector:
                 )
 
                 # 检查是否触发自动训练
-                triggered, message = await self.check_and_auto_train(admin_ids=settings.admin_ids)
+                train_result = await self.check_and_auto_train(admin_ids=settings.admin_ids)
 
-                if triggered:
-                    logger.info(f"AI 负样本触发自动训练: {message}")
+                if train_result is not None:
+                    logger.info(f"AI 负样本触发自动训练 [结果:{train_result.code.value}]")
 
         except Exception as e:
             logger.error(f"AI 负样本入库失败 [用户:{user_id}]: {e}")
@@ -877,21 +908,27 @@ class SpamDetector:
             logger.error(f"获取统计信息失败: {e}")
             return {}
 
-    async def retrain_model(self, admin_ids: list[int] | None = None) -> tuple[bool, str]:
+    async def retrain_model(self, admin_ids: list[int] | None = None) -> RetrainResult:
         """重新训练模型
 
         Args:
             admin_ids: 管理员 ID 列表，用于发送训练完成通知
 
         Returns:
-            (是否成功, 消息)
+            稳定结果 code 与渲染参数(不含中文文案,由 handler 渲染)
         """
         try:
             # 获取训练数据
             texts, labels = await SpamRepository.get_training_data()
 
-            if len(texts) < 10:
-                return False, f"训练样本不足: {len(texts)}，至少需要 10 个样本"
+            if len(texts) < _MIN_TRAINING_SAMPLES:
+                return RetrainResult(
+                    code=RetrainCode.insufficient_samples,
+                    params={
+                        "current": len(texts),
+                        "min_required": _MIN_TRAINING_SAMPLES,
+                    },
+                )
 
             # 训练分类器
             # ✅ P1-11: 模型训练是 CPU 密集型操作，在线程池中运行
@@ -901,7 +938,7 @@ class SpamDetector:
             saved = self.classifier.save_model()
 
             if not saved:
-                return False, "模型训练成功但保存失败"
+                return RetrainResult(code=RetrainCode.save_failed, params={})
 
             # 更新上次训练时的样本数量
             from src.repositories.spam_repo import update_last_train_count
@@ -916,32 +953,44 @@ class SpamDetector:
             redis = get_redis()
             await redis.set(RedisKeys.last_train_time(), str(time.time()))
 
-            message = (
-                f"模型训练成功！\n"
-                f"准确率: {accuracy:.2%}\n"
-                f"总样本: {metrics['total_samples']}\n"
-                f"垃圾样本: {metrics['spam_samples']}\n"
-                f"正常样本: {metrics['normal_samples']}"
+            logger.info(
+                f"模型训练成功 [准确率:{accuracy:.2%}] "
+                f"[总样本:{metrics['total_samples']}] "
+                f"[垃圾样本:{metrics['spam_samples']}] "
+                f"[正常样本:{metrics['normal_samples']}]"
             )
 
-            logger.info(message)
+            result = RetrainResult(
+                code=RetrainCode.success,
+                params={
+                    "accuracy": float(accuracy),
+                    "total_samples": int(metrics["total_samples"]),
+                    "spam_samples": int(metrics["spam_samples"]),
+                    "normal_samples": int(metrics["normal_samples"]),
+                },
+            )
 
             # 如果提供了管理员 ID，发送通知
             if admin_ids:
-                await self._notify_admins_training_complete(admin_ids, message)
+                await self._notify_admins_training_complete(admin_ids, result)
 
-            return True, message
+            return result
 
         except Exception as e:
             logger.error(f"重新训练模型失败: {e}")
-            return False, f"训练失败: {e!s}"
+            return RetrainResult(
+                code=RetrainCode.failed,
+                params={"error": str(e)},
+            )
 
-    async def _notify_admins_training_complete(self, admin_ids: list[int], message: str) -> None:
-        """通知管理员训练完成
+    async def _notify_admins_training_complete(
+        self, admin_ids: list[int], result: RetrainResult
+    ) -> None:
+        """通知管理员训练完成(逐管理员按其 for_user locale 渲染)
 
         Args:
             admin_ids: 管理员 ID 列表
-            message: 训练结果消息
+            result: 训练成功结果(仅 success 时调用)
         """
         try:
             from aiogram import Bot
@@ -949,29 +998,36 @@ class SpamDetector:
             from aiogram.enums import ParseMode
 
             from src.core.config import settings
+            from src.core.i18n import get_resolver, get_translator
 
             bot = Bot(
                 token=settings.bot_token,
                 default=DefaultBotProperties(parse_mode=ParseMode.HTML),
             )
-
-            notification = f"🤖 <b>反垃圾模型自动训练完成</b>\n\n{message}"
-
-            for admin_id in admin_ids:
-                try:
-                    await bot.send_message(admin_id, notification)
-                    logger.info(f"训练完成通知已发送给管理员 {admin_id}")
-                except Exception as e:
-                    logger.warning(f"发送训练通知给管理员 {admin_id} 失败: {e}")
-
-            await bot.session.close()
-
+            try:
+                for admin_id in admin_ids:
+                    try:
+                        locale = await get_resolver().for_user(admin_id)
+                        localizer = get_translator().for_locale(locale)
+                        notification = localizer.t(
+                            "admin.antispam.auto_train.notification.success.message",
+                            accuracy_percent=f"{float(result.params['accuracy']):.2%}",
+                            total_samples=result.params["total_samples"],
+                            spam_samples=result.params["spam_samples"],
+                            normal_samples=result.params["normal_samples"],
+                        )
+                        await bot.send_message(admin_id, notification)
+                        logger.info(f"训练完成通知已发送给管理员 {admin_id}")
+                    except Exception as e:
+                        logger.warning(f"发送训练通知给管理员 {admin_id} 失败: {e}")
+            finally:
+                await bot.session.close()
         except Exception as e:
             logger.error(f"发送训练完成通知失败: {e}")
 
     async def check_and_auto_train(
         self, admin_ids: list[int] | None = None, threshold: int | None = None
-    ) -> tuple[bool, str | None]:
+    ) -> RetrainResult | None:
         """检查是否需要自动训练，如果需要则触发训练
 
         Args:
@@ -979,7 +1035,8 @@ class SpamDetector:
             threshold: 触发自动训练的新样本阈值（None 则使用配置 AUTO_TRAIN_THRESHOLD）
 
         Returns:
-            (是否触发了训练, 消息)
+            已执行训练时返回训练结果(RetrainResult);冷却/未达阈值/检查异常返回 None。
+            检查异常属运行故障(非 retrain 业务结果),仅内部日志,不传播。
         """
         try:
             import time
@@ -1006,7 +1063,7 @@ class SpamDetector:
                         f"训练冷却中: 已过 {elapsed_hours:.1f} 小时，"
                         f"还需 {remaining_hours:.1f} 小时（冷却时间 {settings.auto_train_cooldown_hours} 小时）"
                     )
-                    return False, None
+                    return None
 
             # 获取当前样本总数
             current_count = await SpamRepository.count_samples()
@@ -1026,20 +1083,18 @@ class SpamDetector:
                 logger.info(f"检测到 {new_samples} 个新样本（阈值={threshold}），触发自动训练...")
 
                 # 触发训练
-                success, message = await self.retrain_model(admin_ids)
+                result = await self.retrain_model(admin_ids)
 
-                if success:
+                if result.success:
                     # 更新上次训练时间
                     await redis.set(RedisKeys.last_train_time(), str(time.time()))
-                    return True, f"自动训练成功: {message}"
-                else:
-                    return False, f"自动训练失败: {message}"
+                return result
 
-            return False, None
+            return None
 
         except Exception as e:
             logger.error(f"检查自动训练失败: {e}")
-            return False, f"检查失败: {e!s}"
+            return None
 
 
 # 全局检测器实例

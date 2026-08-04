@@ -51,7 +51,7 @@ from src.repositories.group_repo import GroupRepository
 from src.services.activity import ActivityService  # 活跃度服务
 from src.services.context_service import ContextService  # 上下文服务
 from src.services.moderation import ModerationService
-from src.services.spam_detector import get_detector
+from src.services.spam_detector import RetrainCode, get_detector
 from src.services.spam_review import (
     SpamMessageType,
     SpamReviewState,
@@ -943,16 +943,20 @@ async def on_antispam_retrain(callback: CallbackQuery, localizer: BoundLocalizer
         await callback.answer(localizer.t("admin.antispam.retrain.start.toast"), show_alert=False)
 
         detector = get_detector()
-        # TODO(i18n): detector.retrain_model() 返回中文业务消息,应改为稳定 code + 参数由 handler 渲染
-        success, message_text = await detector.retrain_model()
+        result = await detector.retrain_model()
 
-        result_key = (
-            "admin.antispam.retrain.result.success.message"
-            if success
-            else "admin.antispam.retrain.result.failure.message"
-        )
+        # 据 code 选 catalog key + params 渲染(accuracy 格式化为百分比,error escape)
+        params = dict(result.params)
+        if result.code is RetrainCode.success:
+            params["accuracy_percent"] = f"{float(params.pop('accuracy')):.2%}"
+        elif result.code is RetrainCode.failed:
+            params["error"] = escape_html(str(params["error"]))
+
         await message.edit_text(
-            localizer.t(result_key, message=escape_html(str(message_text))),
+            localizer.t(
+                f"admin.antispam.retrain.result.{result.code.value}.message",
+                **params,
+            ),
             parse_mode="HTML",
         )
 
@@ -2801,11 +2805,9 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
 
             # 检查是否需要自动训练
             try:
-                triggered, train_message = await detector.check_and_auto_train(
-                    admin_ids=settings.admin_ids
-                )
-                if triggered:
-                    logger.info(f"反馈添加后触发自动训练: {train_message}")
+                train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
+                if train_result is not None:
+                    logger.info(f"反馈添加后触发自动训练 [结果:{train_result.code.value}]")
             except Exception as e:
                 logger.error(f"检查自动训练失败: {e}")
         else:
