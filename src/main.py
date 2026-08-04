@@ -213,94 +213,15 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
 
 async def setup_bot_commands(bot: Bot) -> None:
-    """设置 Bot 命令自动完成提示"""
-    from aiogram.types import (
-        BotCommand,
-        BotCommandScopeAllChatAdministrators,
-        BotCommandScopeAllGroupChats,
-        BotCommandScopeAllPrivateChats,
-    )
+    """设置默认 locale 的全局命令菜单兜底（4 scope）。
 
-    # 私聊命令列表（普通用户 + 超级管理员命令）
-    private_commands = [
-        # 普通命令
-        BotCommand(command="start", description="启动 Bot / 查看帮助"),
-        BotCommand(command="help", description="查看帮助信息"),
-        # 超级管理员命令
-        BotCommand(command="health", description="健康检查（仅超管）"),
-        BotCommand(command="stats", description="统计信息（仅超管）"),
-        BotCommand(command="whitelist", description="白名单管理（仅超管）"),
-    ]
+    具体私聊/群聊的命令在 /lang 写穿后由 sync_chat_commands 按 locale 覆盖。
+    """
+    from src.bot.commands import setup_fallback_commands
+    from src.core.i18n import get_translator
 
-    # 群组普通成员命令列表（仅基础功能）
-    group_member_commands = [
-        BotCommand(command="help", description="查看帮助信息"),
-        BotCommand(command="spam", description="举报垃圾消息"),
-        BotCommand(command="report", description="举报垃圾消息"),
-    ]
-
-    # 群组管理员命令列表（完整管理功能）
-    group_admin_commands = [
-        # 群组配置
-        BotCommand(command="groupset", description="⚙️ 群组设置（统一入口）"),
-        BotCommand(command="setverify", description="设置验证方式"),
-        BotCommand(command="settimeout", description="设置验证超时时间"),
-        BotCommand(command="verifyconfig", description="查看验证配置"),
-        BotCommand(command="antispam", description="反垃圾配置"),
-        BotCommand(command="antichannel", description="反频道马甲配置"),
-        BotCommand(command="activity", description="活跃度系统开关"),
-        BotCommand(command="activityskip", description="活跃度跳过阈值"),
-        BotCommand(command="curfew", description="宵禁模式配置"),
-        # 群成员管理
-        BotCommand(command="kick", description="踢出成员"),
-        BotCommand(command="mute", description="禁言成员"),
-        BotCommand(command="unmute", description="解除禁言"),
-        BotCommand(command="ban", description="封禁成员"),
-        BotCommand(command="unban", description="解除封禁"),
-        BotCommand(command="warn", description="警告成员"),
-        BotCommand(command="warnings", description="查看警告记录"),
-        BotCommand(command="clearwarnings", description="清除警告"),
-        BotCommand(command="cleanup", description="清理异常用户"),
-        # 消息管理
-        BotCommand(command="delbefore", description="删除往前的消息"),
-        BotCommand(command="delafter", description="删除往后的消息"),
-        BotCommand(command="delrange", description="删除消息范围"),
-        # 举报系统
-        BotCommand(command="spam", description="举报垃圾消息"),
-        BotCommand(command="report", description="举报垃圾消息"),
-        BotCommand(command="notspam", description="标记非垃圾消息"),
-        BotCommand(command="nospam", description="标记非垃圾消息"),
-        BotCommand(command="unspam", description="标记非垃圾消息"),
-        BotCommand(command="reports", description="查看举报列表"),
-        BotCommand(command="approve", description="处理举报"),
-        # 帮助
-        BotCommand(command="help", description="查看帮助信息"),
-    ]
-
-    try:
-        # 设置私聊命令
-        await bot.set_my_commands(
-            commands=private_commands,
-            scope=BotCommandScopeAllPrivateChats(),
-        )
-        logger.info(f"✅ 已设置私聊命令列表 ({len(private_commands)} 个命令)")
-
-        # 设置群组普通成员命令（优先级较低）
-        await bot.set_my_commands(
-            commands=group_member_commands,
-            scope=BotCommandScopeAllGroupChats(),
-        )
-        logger.info(f"✅ 已设置群组普通成员命令列表 ({len(group_member_commands)} 个命令)")
-
-        # 设置群组管理员命令（优先级较高，会覆盖普通成员的命令）
-        await bot.set_my_commands(
-            commands=group_admin_commands,
-            scope=BotCommandScopeAllChatAdministrators(),
-        )
-        logger.info(f"✅ 已设置群组管理员命令列表 ({len(group_admin_commands)} 个命令)")
-
-    except Exception as e:
-        logger.error(f"设置命令列表失败: {e}")
+    localizer = get_translator().for_locale(settings.default_locale)
+    await setup_fallback_commands(bot, localizer)
 
 
 async def on_startup(bot: Bot) -> None:

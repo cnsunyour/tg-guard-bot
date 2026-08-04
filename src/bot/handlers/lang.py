@@ -20,6 +20,7 @@ from aiogram.types import (
 )
 from loguru import logger
 
+from src.bot.commands import sync_chat_commands
 from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.i18n.resolver import LocaleResolver
@@ -322,6 +323,15 @@ async def on_lang_callback(
     if not saved:
         await callback.answer(localizer.t("lang.change.save_failed.toast"), show_alert=True)
         return
+
+    # locale 已持久化；命令菜单同步失败只记日志，不回滚 locale。
+    # 不传 language_code，命令语言只由 Bot 内 locale 决定（独立于 Telegram 系统语言）。
+    await sync_chat_commands(
+        bot,
+        translator.for_locale(locale),
+        chat_id=message.chat.id,
+        is_group=scope == "group",
+    )
 
     # 用新 locale 重渲染菜单 + toast，确保立即生效
     await _edit_saved_menu(
