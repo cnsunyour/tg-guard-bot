@@ -54,7 +54,9 @@ def test_rule_engine_with_regex_rules():
     result = engine.analyze("BTC行情分析，私聊带单，日赚十万")
     assert result["is_spam"]
     assert result["confidence"] >= 0.88
-    assert "规则匹配" in result["reasons"][0]
+    # 现在 reasons 是编码格式 "rule_match:description=..."
+    assert result["reasons"][0].startswith("rule_match:description=")
+    assert "加密货币" in result["reasons"][0]
     assert result["details"]["category"] == "crypto_scam"
 
     # 测试违禁药品（应该被 CRITICAL 规则捕获）

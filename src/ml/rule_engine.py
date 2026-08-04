@@ -9,7 +9,7 @@
 import json
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, TypedDict
 from urllib.parse import urlparse
@@ -17,6 +17,23 @@ from urllib.parse import urlparse
 from loguru import logger
 
 from src.core.config import settings
+
+
+class ReasonCode(StrEnum):
+    """检测原因稳定 code（支持 i18n catalog 映射）。
+
+    值格式: "code:key=value,key2=value2"（兼容 Redis state 字符串存储）。
+    handler 解析后据 code 选 catalog key 渲染。
+    """
+
+    tg_invite = "tg_invite"
+    rule_match = "rule_match"
+    suspicious_domain = "suspicious_domain"
+    short_link = "short_link"
+    contact_info = "contact_info"
+    repeated_chars = "repeated_chars"
+    channel_mention = "channel_mention"
+    emoji_flood = "emoji_flood"
 
 
 class AnalysisResult(TypedDict):
@@ -403,7 +420,7 @@ class RuleEngine:
         is_match, rule, matched_text = self.regex_engine.check(text)
         if is_match and rule:
             result["confidence"] = rule.confidence
-            result["reasons"].append(f"规则匹配: {rule.description}")
+            result["reasons"].append(f"{ReasonCode.rule_match}:description={rule.description}")
             result["details"].update(
                 {
                     "rule_id": rule.id,
@@ -431,22 +448,25 @@ class RuleEngine:
         has_contact, contact_type = self.check_contact_info(text)
         if has_contact:
             result["confidence"] = max(result["confidence"], 0.8)
-            result["reasons"].append(f"包含联系方式: {contact_type}")
+            # contact_type 是中文字符串，需映射为子 code
+            contact_subtype_map = {"微信号": "wechat", "QQ号": "qq", "电话号码": "phone"}
+            subtype = contact_subtype_map.get(contact_type, "unknown")
+            result["reasons"].append(f"{ReasonCode.contact_info}:type={subtype}")
 
         # 检查重复字符
         if self.check_repeated_chars(text):
             result["confidence"] = max(result["confidence"], 0.7)
-            result["reasons"].append("重复字符刷屏")
+            result["reasons"].append(ReasonCode.repeated_chars)
 
         # 检查频道提及
         if self.check_channel_mention(text):
             result["confidence"] = max(result["confidence"], 0.6)
-            result["reasons"].append("包含频道提及")
+            result["reasons"].append(ReasonCode.channel_mention)
 
         # 检查 Emoji 刷屏
         if self.check_emoji_flood(text):
             result["confidence"] = max(result["confidence"], 0.65)
-            result["reasons"].append("Emoji 刷屏")
+            result["reasons"].append(ReasonCode.emoji_flood)
 
         if result["confidence"] >= settings.spam_threshold_rule:
             result["is_spam"] = True
@@ -472,7 +492,7 @@ class RuleEngine:
         for pattern in self.TG_INVITE_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
                 logger.debug("检测到 Telegram 邀请链接")
-                return True, urls, "Telegram 邀请链接"
+                return True, urls, ReasonCode.tg_invite
 
         # 检查可疑域名
         for url in urls:
@@ -488,7 +508,7 @@ class RuleEngine:
                 for suspicious in self.SUSPICIOUS_DOMAINS:
                     if domain.endswith(suspicious):
                         logger.debug(f"检测到可疑域名: {domain}")
-                        return True, urls, f"可疑域名: {suspicious}"
+                        return True, urls, f"{ReasonCode.suspicious_domain}:domain={suspicious}"
 
             except Exception as e:
                 logger.warning(f"解析 URL 失败: {url}, 错误: {e}")
@@ -501,7 +521,7 @@ class RuleEngine:
                 domain = parsed.netloc.lower()
                 if any(d in domain for d in short_link_domains):
                     logger.debug(f"检测到短链接: {domain}")
-                    return True, urls, "短链接"
+                    return True, urls, ReasonCode.short_link
             except Exception as e:
                 logger.debug(f"解析短链接失败（非关键）: {url}, 错误: {e}")
 

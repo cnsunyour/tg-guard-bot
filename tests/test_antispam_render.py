@@ -128,7 +128,7 @@ def test_review_prompt_with_recognized_uses_recognized_key_and_escapes_html() ->
         message_type=message_type_label(localizer, state.message_type),
         user="Alice",
         confidence=_format_confidence(state.confidence),
-        reasons=_format_reasons(state.reason_codes),
+        reasons=_format_reasons(localizer, state.reason_codes),
         original=escape_html(state.original_text),
         recognized=escape_html(recognized),
     )
@@ -156,8 +156,11 @@ def test_format_confidence(confidence: float, expected: str) -> None:
     assert _format_confidence(confidence) == expected
 
 
-def test_format_reasons_joins_then_escapes() -> None:
-    assert _format_reasons(("<b>rule</b>", 'vision:"qr"&😀')) == (
+def test_format_reasons_legacy_format_escapes() -> None:
+    """旧格式字符串/AI 自由文本 escape 原样显示（兼容性）。"""
+    localizer = _localizer()
+    # 旧格式中文字符串（非 code）
+    assert _format_reasons(localizer, ("<b>rule</b>", 'vision:"qr"&😀')) == (
         "&lt;b&gt;rule&lt;/b&gt;、vision:&quot;qr&quot;&amp;😀"
     )
 

@@ -5,12 +5,12 @@ Telegram HTML 文本与内联键盘。本模块是纯展示层：
 
 - 不注册 aiogram handler、不访问 Redis、不决定检测或处罚策略；
 - 业务数据来自 ``src/services/spam_review.py`` 的不可变快照，展示文案走 catalog
-  （``antispam.review / immediate / feedback / punishment / message_type``）；
-- escape 策略：``recognized_text`` 截断后 escape、``reason_codes`` join 后 escape；
-  ``offender / operator`` mention 由调用方传入已 escape 的 HTML
-  （``format_user_mention`` / ``format_trusted_user_mention`` 产物），渲染层直接
-  插入不二次转义。确认模式保留并回复原消息，故 ``original_text`` 不复制进提示，
-  仅随 state 供 callback 处罚时取用。
+  （``antispam.review / immediate / feedback / punishment / message_type / reason``）；
+- escape 策略：``recognized_text`` 截断后 escape、``reason_codes`` 解析后按 code
+  渲染或 escape 兼容旧格式；``offender / operator`` mention 由调用方传入已 escape
+  的 HTML（``format_user_mention`` / ``format_trusted_user_mention`` 产物），
+  渲染层直接插入不二次转义。确认模式保留并回复原消息，故 ``original_text`` 不
+  复制进提示，仅随 state 供 callback 处罚时取用。
 
 参考范式：``src/bot/handlers/verification_render.py``。
 """
@@ -41,9 +41,80 @@ def punishment_label(localizer: BoundLocalizer, key: PunishmentKey) -> str:
     return localizer.t(f"antispam.punishment.{key}.label")
 
 
-def _format_reasons(reason_codes: tuple[str, ...]) -> str:
-    """连接并转义状态中的原始原因串（暂未稳定化，按原样 escape 展示）。"""
-    return escape_html("、".join(reason_codes))
+def _parse_reason_code(reason: str) -> tuple[str, dict[str, str]]:
+    """解析编码字符串为 (code, params)。
+
+    格式: "code" 或 "code:key=value,key2=value2"
+    返回: ("code", {"key": "value", "key2": "value2"})
+    """
+    if ":" not in reason:
+        return reason, {}
+    code, params_str = reason.split(":", 1)
+    params = {}
+    for pair in params_str.split(","):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            params[key.strip()] = value.strip()
+    return code, params
+
+
+def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
+    """渲染单条原因（code 化 + 兼容旧格式）。
+
+    - code 化原因: "tg_invite" → catalog "antispam.reason.tg_invite.label"
+    - 旧格式/AI 自由文本: escape_html 原样显示
+    """
+    code, params = _parse_reason_code(reason)
+
+    # 白名单已知 code，未知 code 当作旧格式 escape 原样显示
+    known_codes = {
+        "tg_invite",
+        "rule_match",
+        "suspicious_domain",
+        "short_link",
+        "contact_info",
+        "repeated_chars",
+        "channel_mention",
+        "emoji_flood",
+    }
+
+    if code not in known_codes:
+        # 旧格式字符串或 AI 自由文本，escape 原样显示
+        return escape_html(reason)
+
+    # contact_info 特殊处理：type 子 code 需二次映射
+    if code == "contact_info" and "type" in params:
+        contact_type = params["type"]
+        # type 是子 code(wechat/qq/phone)，映射为独立 label
+        try:
+            type_label = localizer.t(f"antispam.reason.contact_type.{contact_type}.label")
+            return localizer.t("antispam.reason.contact_info.label", type=type_label)
+        except KeyError:
+            # 未知 contact_type，降级为原样 escape
+            return escape_html(reason)
+
+    # rule_match 需注入 description 占位符
+    if code == "rule_match" and "description" in params:
+        # description 是规则描述（中文），需 escape
+        params["description"] = escape_html(params["description"])
+
+    # suspicious_domain 需注入 domain 占位符
+    if code == "suspicious_domain" and "domain" in params:
+        # domain 是技术标识符（如 ".tk"），无需 escape 但保险起见仍 escape
+        params["domain"] = escape_html(params["domain"])
+
+    # 据 code 选 catalog key 渲染
+    try:
+        return localizer.t(f"antispam.reason.{code}.label", **params)
+    except KeyError:
+        # catalog 缺失（不应发生），降级为原样 escape
+        return escape_html(reason)
+
+
+def _format_reasons(localizer: BoundLocalizer, reason_codes: tuple[str, ...]) -> str:
+    """渲染原因列表（code 化 + 兼容旧格式/AI 自由文本）。"""
+    rendered = [_format_single_reason(localizer, reason) for reason in reason_codes]
+    return "、".join(rendered)
 
 
 def _format_confidence(confidence: float) -> str:
@@ -67,7 +138,7 @@ def build_review_prompt(
         "message_type": message_type_label(localizer, state.message_type),
         "user": offender_mention,
         "confidence": _format_confidence(state.confidence),
-        "reasons": _format_reasons(state.reason_codes),
+        "reasons": _format_reasons(localizer, state.reason_codes),
         "original": escape_html(state.original_text[:_RECOGNIZED_TEXT_LIMIT]),
     }
     if state.recognized_text:
@@ -144,7 +215,7 @@ def build_immediate_processed(
         "antispam.immediate.processed.message",
         message_type=message_type_label(localizer, message_type),
         user=offender_mention,
-        reasons=_format_reasons(reason_codes),
+        reasons=_format_reasons(localizer, reason_codes),
         confidence=_format_confidence(confidence),
         punishment=punishment_label(localizer, punishment_key),
         message_id=message_id,
