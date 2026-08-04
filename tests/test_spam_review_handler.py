@@ -15,6 +15,7 @@ import pytest
 
 from src.bot.handlers import antispam
 from src.services import moderation
+from src.services.moderation import ModerationErrorCode, ModerationResult
 from src.services.spam_review import SpamMessageType, SpamReviewState
 
 pytestmark = pytest.mark.unit
@@ -240,7 +241,7 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     _patch_lock(mocker, acquired=True)
     mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
     ban = mocker.patch.object(
-        antispam.ModerationService, "ban_user", new=AsyncMock(return_value=(True, None))
+        antispam.ModerationService, "ban_user", new=AsyncMock(return_value=ModerationResult())
     )
     detector = SimpleNamespace(add_feedback=AsyncMock())
     mocker.patch.object(antispam, "get_detector", return_value=detector)
@@ -286,7 +287,9 @@ async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
     _patch_lock(mocker, acquired=True)
     mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
     mocker.patch.object(
-        antispam.ModerationService, "ban_user", new=AsyncMock(return_value=(False, "forbidden"))
+        antispam.ModerationService,
+        "ban_user",
+        new=AsyncMock(return_value=ModerationResult(code=ModerationErrorCode.operation_failed)),
     )
     consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
 
@@ -297,7 +300,9 @@ async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
     message.edit_text.assert_awaited_once()
     assert message.edit_text.await_args.kwargs["reply_markup"] == "review-keyboard"
     edit_text = message.edit_text.await_args.args[0]
-    assert "forbidden" in edit_text
+    # ban 失败 code 透传为 moderation.error.<code>.message，再注入 review action_failed
+    assert "moderation.error.operation_failed.message" in edit_text
+    assert "antispam.review.action_failed.message" in edit_text
     assert "spam text" in edit_text  # 原 message.text 保留
 
 
@@ -372,12 +377,12 @@ async def test_ban_user_allow_left_bans_a_left_member(mocker) -> None:
     bot.ban_chat_member = AsyncMock()
     mocker.patch.object(moderation.AuditRepository, "log_action", new=AsyncMock())
 
-    success, error = await moderation.ModerationService.ban_user(
+    result = await moderation.ModerationService.ban_user(
         bot, CHAT_ID, OFFENDER_ID, OPERATOR_ID, allow_left=True
     )
 
-    assert success is True
-    assert error is None
+    assert result.success is True
+    assert result.code is None
     bot.ban_chat_member.assert_awaited_once_with(
         chat_id=CHAT_ID, user_id=OFFENDER_ID, revoke_messages=False
     )
@@ -388,12 +393,10 @@ async def test_ban_user_default_rejects_a_left_member() -> None:
     bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status="left"))
     bot.ban_chat_member = AsyncMock()
 
-    success, error = await moderation.ModerationService.ban_user(
-        bot, CHAT_ID, OFFENDER_ID, OPERATOR_ID
-    )
+    result = await moderation.ModerationService.ban_user(bot, CHAT_ID, OFFENDER_ID, OPERATOR_ID)
 
-    assert success is False
-    assert error == "用户不在群组中"
+    assert result.success is False
+    assert result.code is ModerationErrorCode.user_not_in_chat
     bot.ban_chat_member.assert_not_awaited()
 
 
@@ -440,7 +443,7 @@ async def test_apply_immediate_punishment_selects_action_and_records_feedback(
     result = {"confidence": confidence, "reasons": ["rule:url"]}
     mocker.patch.object(antispam.settings, "spam_high_confidence_threshold", 0.8)
     selected_service = mocker.patch.object(
-        antispam.ModerationService, service_name, new=AsyncMock(return_value=(True, None))
+        antispam.ModerationService, service_name, new=AsyncMock(return_value=ModerationResult())
     )
     other_service = mocker.patch.object(
         antispam.ModerationService, other_service_name, new=AsyncMock()
@@ -502,7 +505,7 @@ async def test_apply_immediate_punishment_stops_when_action_fails(mocker) -> Non
     ban = mocker.patch.object(
         antispam.ModerationService,
         "ban_user_temporarily",
-        new=AsyncMock(return_value=(False, "permission denied")),
+        new=AsyncMock(return_value=ModerationResult(code=ModerationErrorCode.operation_failed)),
     )
     mute = mocker.patch.object(antispam.ModerationService, "mute_user", new=AsyncMock())
     get_redis = mocker.patch.object(antispam, "get_redis")
@@ -519,7 +522,7 @@ async def test_apply_immediate_punishment_stops_when_action_fails(mocker) -> Non
     message.delete.assert_awaited_once()
     ban.assert_awaited_once()
     mute.assert_not_awaited()
-    log_error.assert_called_once_with("处罚垃圾用户失败: permission denied")
+    log_error.assert_called_once_with("处罚垃圾用户失败: operation_failed")
     get_redis.assert_not_called()
     get_detector.assert_not_called()
     message.answer.assert_not_awaited()

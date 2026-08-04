@@ -506,7 +506,7 @@ async def _apply_immediate_punishment(
 
         punishment_key: PunishmentKey
         if result["confidence"] >= settings.spam_high_confidence_threshold:
-            success, error_msg = await ModerationService.ban_user_temporarily(
+            punishment = await ModerationService.ban_user_temporarily(
                 bot=bot,
                 chat_id=message.chat.id,
                 user_id=message.from_user.id,
@@ -516,7 +516,7 @@ async def _apply_immediate_punishment(
             )
             punishment_key = "temporary_ban"
         else:
-            success, error_msg = await ModerationService.mute_user(
+            punishment = await ModerationService.mute_user(
                 bot=bot,
                 chat_id=message.chat.id,
                 user_id=message.from_user.id,
@@ -526,8 +526,9 @@ async def _apply_immediate_punishment(
             )
             punishment_key = "mute"
 
-        if not success:
-            logger.error(f"处罚垃圾用户失败: {error_msg}")
+        if not punishment.success:
+            assert punishment.code is not None
+            logger.error(f"处罚垃圾用户失败: {punishment.code.value}")
             return
 
         sample_text = recognized_text or message.text or message.caption or ""
@@ -2592,7 +2593,7 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
         operator_mention = format_trusted_user_mention(callback.from_user)
 
         if action == "ban":
-            success, error_msg = await ModerationService.ban_user(
+            result = await ModerationService.ban_user(
                 bot=bot,
                 chat_id=message.chat.id,
                 user_id=state.offender_user_id,
@@ -2600,15 +2601,18 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                 reason="垃圾信息（管理员确认）",
                 allow_left=True,
             )
-            if not success:
+            if not result.success:
                 # 处罚失败：追加报错到原提示（保留证据 + 按钮），不 callback.answer
                 # （已 answer processing）。codex review P2：勿替换整个 prompt 丢证据
+                assert result.code is not None
                 with contextlib.suppress(Exception):
                     await message.edit_text(
                         f"{message.text or ''}\n\n"
                         + localizer.t(
                             "antispam.review.action_failed.message",
-                            error=error_msg or "",
+                            error=escape_html(
+                                localizer.t(f"moderation.error.{result.code.value}.message")
+                            ),
                         ),
                         reply_markup=message.reply_markup,
                     )

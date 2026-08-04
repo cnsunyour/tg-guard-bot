@@ -63,7 +63,11 @@ async def test_report_callback_rejects_non_admin_clicker(
         patch.object(moderation, "check_admin_permission_strict", new=permission_check),
         patch.object(moderation, process_name, new=process),
     ):
-        await handler(callback, bot)
+        if handler is moderation.on_report_approve:
+            # on_report_approve 在 3c12 新增 localizer 形参（消费 ban 失败 code）
+            await handler(callback, bot, MagicMock())
+        else:
+            await handler(callback, bot)
 
     # 核心断言：权限检查用的是点击者 ID，而非 Bot 的 ID
     permission_check.assert_awaited_once_with(bot, chat_id, clicker_id)
