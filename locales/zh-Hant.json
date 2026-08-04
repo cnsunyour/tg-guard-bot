@@ -133,6 +133,7 @@
   "admin.groupset.verification_type.unknown.short.label": "❔ 未知",
   "admin.health.error_line.message": "\n   錯誤: {error}",
   "admin.health.failed.message": "❌ 健康檢查失敗，請聯絡管理員",
+  "admin.health.group_denied.message": "❌ /health 含敏感運行資訊，基於安全考量僅在私聊中可用，請私聊 Bot 執行",
   "admin.health.permission_denied.message": "❌ 只有超級管理員可以使用此命令",
   "admin.health.report.message": "{status_emoji} <b>系統健康狀態</b>\n\n⏱️ <b>運行時間</b>: {uptime}\n🔄 <b>檢查次數</b>: {check_count}\n\n{db_emoji} <b>資料庫</b>: {db_latency}ms{db_error_line}\n{redis_emoji} <b>Redis</b>: {redis_latency}ms{redis_error_line}{system_block}",
   "admin.health.report.system.message": "\n\n💻 <b>系統資源</b>\n• CPU: {cpu_percent}% ({cpu_count} 核)\n• 記憶體: {mem_used}/{mem_total} MB ({mem_percent}%)\n• 磁碟: {disk_used}/{disk_total} GB ({disk_percent}%)",

@@ -133,6 +133,7 @@
   "admin.groupset.verification_type.unknown.short.label": "❔ Unknown",
   "admin.health.error_line.message": "\n   Error: {error}",
   "admin.health.failed.message": "❌ Health check failed. Please contact an administrator",
+  "admin.health.group_denied.message": "❌ /health contains sensitive runtime info; for security it is only available in private chat. Please run it in a private message",
   "admin.health.permission_denied.message": "❌ Only super administrators can use this command",
   "admin.health.report.message": "{status_emoji} <b>System health</b>\n\n⏱️ <b>Uptime</b>: {uptime}\n🔄 <b>Check count</b>: {check_count}\n\n{db_emoji} <b>Database</b>: {db_latency}ms{db_error_line}\n{redis_emoji} <b>Redis</b>: {redis_latency}ms{redis_error_line}{system_block}",
   "admin.health.report.system.message": "\n\n💻 <b>System resources</b>\n• CPU: {cpu_percent}% ({cpu_count} cores)\n• Memory: {mem_used}/{mem_total} MB ({mem_percent}%)\n• Disk: {disk_used}/{disk_total} GB ({disk_percent}%)",

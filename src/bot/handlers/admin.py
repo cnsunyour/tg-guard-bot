@@ -804,9 +804,13 @@ async def cmd_set_timeout(message: Message, bot: Bot, localizer: BoundLocalizer)
 
 @router.message(Command("health"))
 async def cmd_health(message: Message, localizer: BoundLocalizer) -> None:
-    """健康检查命令（仅超级管理员）"""
-    # 检查是否是超级管理员
+    """健康检查命令（仅超级管理员，且仅私聊——报告含 DB/Redis/system 敏感信息）"""
     if not message.from_user:
+        return
+
+    # 安全加固：健康报告含 DB/Redis/系统状态等敏感信息，群内对所有成员可见，仅私聊执行
+    if message.chat.type in ("group", "supergroup"):
+        await message.answer(localizer.t("admin.health.group_denied.message"))
         return
 
     if message.from_user.id not in settings.admin_ids:
