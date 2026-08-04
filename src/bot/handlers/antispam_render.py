@@ -47,6 +47,20 @@ _REQUIRED_REASON_PARAMS: dict[str, frozenset[str]] = {
     "rule_match": frozenset({"description"}),
     "suspicious_domain": frozenset({"domain"}),
     "contact_info": frozenset({"type"}),
+    "ml_classifier": frozenset({"confidence"}),
+    "embedding_similarity": frozenset({"similarity"}),
+    "reply_relevant": frozenset({"similarity"}),
+    "topic_consistent": frozenset({"similarity"}),
+}
+
+# 数值参数 code → 参数名：confidence/similarity 为服务端 :.2f 格式化产物，
+# 与 rule_match/suspicious_domain 对齐做防御性 escape（防 AI 自由文本伪造
+# code 格式导致 HTML 注入）。all_detectors_failed 无参数，走通用分支。
+_NUMERIC_PARAM_CODE_FIELD: dict[str, str] = {
+    "ml_classifier": "confidence",
+    "embedding_similarity": "similarity",
+    "reply_relevant": "similarity",
+    "topic_consistent": "similarity",
 }
 
 # 白名单已知 code（无必需参数的 code 也列入）
@@ -60,6 +74,11 @@ _KNOWN_REASON_CODES = frozenset(
         "repeated_chars",
         "channel_mention",
         "emoji_flood",
+        "ml_classifier",
+        "embedding_similarity",
+        "all_detectors_failed",
+        "reply_relevant",
+        "topic_consistent",
     }
 )
 
@@ -117,6 +136,15 @@ def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
         return localizer.t(
             "antispam.reason.suspicious_domain.label",
             domain=escape_html(params["domain"]),
+        )
+
+    # 数值参数 code（ml_classifier/embedding_similarity/reply_relevant/topic_consistent）：
+    # confidence/similarity 防御性 escape 后注入（与 rule_match/suspicious_domain 对齐）
+    numeric_field = _NUMERIC_PARAM_CODE_FIELD.get(code)
+    if numeric_field:
+        return localizer.t(
+            f"antispam.reason.{code}.label",
+            **{numeric_field: escape_html(params[numeric_field])},
         )
 
     # 据 code 选 catalog key 渲染

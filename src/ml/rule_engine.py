@@ -22,7 +22,7 @@ from src.core.config import settings
 class ReasonCode(StrEnum):
     """检测原因稳定 code（支持 i18n catalog 映射）。
 
-    值格式: "code:key=value,key2=value2"（兼容 Redis state 字符串存储）。
+    值格式: "code" 或 "code:key=value"（单参数；兼容 Redis state 字符串存储）。
     handler 解析后据 code 选 catalog key 渲染。
     """
 
@@ -34,6 +34,12 @@ class ReasonCode(StrEnum):
     repeated_chars = "repeated_chars"
     channel_mention = "channel_mention"
     emoji_flood = "emoji_flood"
+    # 以下为 spam_detector 传统检测阶段产出的 code（3c13 范围外收尾）
+    ml_classifier = "ml_classifier"
+    embedding_similarity = "embedding_similarity"
+    all_detectors_failed = "all_detectors_failed"
+    reply_relevant = "reply_relevant"
+    topic_consistent = "topic_consistent"
 
 
 class AnalysisResult(TypedDict):

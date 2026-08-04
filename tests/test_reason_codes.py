@@ -201,3 +201,67 @@ def test_format_reasons_unknown_contact_subtype_escapes_original() -> None:
     # 这验证不会抛异常即可
     result = _format_reasons(localizer, ("contact_info:type=telegram",))
     assert "contact_type.telegram" in result
+
+
+# ===== 3c13 范围外收尾：spam_detector 产出的 5 个新 code =====
+def test_reason_code_values_include_spam_detector_codes() -> None:
+    """5 个 spam_detector 产出 code 值稳定（catalog key 依赖）。"""
+    assert ReasonCode.ml_classifier.value == "ml_classifier"
+    assert ReasonCode.embedding_similarity.value == "embedding_similarity"
+    assert ReasonCode.all_detectors_failed.value == "all_detectors_failed"
+    assert ReasonCode.reply_relevant.value == "reply_relevant"
+    assert ReasonCode.topic_consistent.value == "topic_consistent"
+
+
+def test_format_reasons_renders_ml_classifier_with_confidence() -> None:
+    """ml_classifier:confidence=0.85 → catalog key + confidence 注入。"""
+    localizer = _localizer()
+    result = _format_reasons(localizer, ("ml_classifier:confidence=0.85",))
+    assert result == "<antispam.reason.ml_classifier.label:{'confidence': '0.85'}>"
+
+
+def test_format_reasons_renders_embedding_similarity_with_similarity() -> None:
+    """embedding_similarity:similarity=0.92 → catalog key + similarity 注入。"""
+    localizer = _localizer()
+    result = _format_reasons(localizer, ("embedding_similarity:similarity=0.92",))
+    assert result == "<antispam.reason.embedding_similarity.label:{'similarity': '0.92'}>"
+
+
+def test_format_reasons_renders_reply_relevant_and_topic_consistent() -> None:
+    """reply_relevant / topic_consistent → similarity 注入。"""
+    localizer = _localizer()
+    result = _format_reasons(
+        localizer,
+        ("reply_relevant:similarity=0.72", "topic_consistent:similarity=0.85"),
+    )
+    assert result == (
+        "<antispam.reason.reply_relevant.label:{'similarity': '0.72'}>"
+        "、<antispam.reason.topic_consistent.label:{'similarity': '0.85'}>"
+    )
+
+
+def test_format_reasons_renders_all_detectors_failed_no_params() -> None:
+    """all_detectors_failed 无参数 → catalog key（无占位符）。"""
+    localizer = _localizer()
+    result = _format_reasons(localizer, ("all_detectors_failed",))
+    assert result == "<antispam.reason.all_detectors_failed.label>"
+
+
+def test_format_reasons_escapes_numeric_param_to_prevent_injection() -> None:
+    """数值参数 escape（防 AI 自由文本伪造 code 格式注入 HTML）。
+
+    ml_classifier:confidence=<script> → confidence 经 escape_html 后注入。
+    与 rule_match/suspicious_domain 的防御性 escape 对齐。
+    """
+    localizer = _localizer()
+    result = _format_reasons(localizer, ("ml_classifier:confidence=<script>alert(1)</script>",))
+    assert "confidence': '&lt;script&gt;alert(1)&lt;/script&gt;'" in result
+
+
+def test_format_reasons_missing_numeric_param_escapes_original() -> None:
+    """纯 code 名无必需参数（ml_classifier 无 confidence 等）→ escape 原样。"""
+    localizer = _localizer()
+    assert _format_reasons(localizer, ("ml_classifier",)) == "ml_classifier"
+    assert _format_reasons(localizer, ("embedding_similarity",)) == "embedding_similarity"
+    assert _format_reasons(localizer, ("reply_relevant",)) == "reply_relevant"
+    assert _format_reasons(localizer, ("topic_consistent",)) == "topic_consistent"

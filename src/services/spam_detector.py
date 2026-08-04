@@ -23,7 +23,7 @@ from src.ml.ai_detector import (
 )
 from src.ml.classifier import get_classifier
 from src.ml.embedder import get_embedder
-from src.ml.rule_engine import get_rule_engine
+from src.ml.rule_engine import ReasonCode, get_rule_engine
 from src.repositories.spam_repo import SpamRepository
 
 
@@ -163,7 +163,9 @@ class SpamDetector:
                     result["is_spam"] = True
                     result["confidence"] = confidence_ml
                     result["stage"] = "ml_classifier"
-                    result["reasons"].append(f"ML 分类器 (置信度: {confidence_ml:.2f})")
+                    result["reasons"].append(
+                        f"{ReasonCode.ml_classifier}:confidence={confidence_ml:.2f}"
+                    )
 
                     logger.info(
                         f"Stage 2 检测到垃圾信息 [用户:{user_id}] 置信度: {confidence_ml:.2f}"
@@ -186,7 +188,9 @@ class SpamDetector:
                     result["is_spam"] = True
                     result["confidence"] = similarity
                     result["stage"] = "embedding"
-                    result["reasons"].append(f"语义相似度 ({similarity:.2f})")
+                    result["reasons"].append(
+                        f"{ReasonCode.embedding_similarity}:similarity={similarity:.2f}"
+                    )
 
                     logger.info(f"Stage 3 检测到垃圾信息 [用户:{user_id}] 相似度: {similarity:.2f}")
 
@@ -396,7 +400,7 @@ class SpamDetector:
                 "original_confidence": 0.0,
                 "activity_reduction": 0.0,
                 "stage": "failed",
-                "reasons": ["所有检测器都失败"],
+                "reasons": [ReasonCode.all_detectors_failed],
                 "details": {},
             }
 
@@ -666,6 +670,9 @@ class SpamDetector:
 
         confidence_reduction = 0.0
         reasons = []
+        # reason_logs 保留中文明细，仅供日志输出；result["reasons"] 存稳定 code，
+        # 这样数据层 code 化与「日志保持中文」两全（codex 调研发现 L719 日志 join(reasons)）
+        reason_logs = []
 
         try:
             # 1. 检查回复链相关性（优先级最高）
@@ -676,7 +683,10 @@ class SpamDetector:
 
                     if reply_similarity >= settings.reply_similarity_threshold:
                         confidence_reduction += settings.reply_confidence_reduction
-                        reasons.append(f"回复内容相关(相似度{reply_similarity:.2f})")
+                        reasons.append(
+                            f"{ReasonCode.reply_relevant}:similarity={reply_similarity:.2f}"
+                        )
+                        reason_logs.append(f"回复内容相关(相似度{reply_similarity:.2f})")
                         logger.info(
                             f"检测到回复链相关性 [用户:{user_id}] "
                             f"相似度={reply_similarity:.2f}, "
@@ -691,7 +701,8 @@ class SpamDetector:
 
                 if is_consistent:
                     confidence_reduction += settings.context_confidence_reduction
-                    reasons.append(f"与群组话题一致(相似度{similarity:.2f})")
+                    reasons.append(f"{ReasonCode.topic_consistent}:similarity={similarity:.2f}")
+                    reason_logs.append(f"与群组话题一致(相似度{similarity:.2f})")
                     logger.info(
                         f"检测到上下文一致性 [用户:{user_id}] "
                         f"相似度={similarity:.2f}, "
@@ -712,7 +723,7 @@ class SpamDetector:
                     logger.info(
                         f"上下文调整后置信度降至 {adjusted_confidence:.2f} "
                         f"(原始 {original_confidence:.2f}, 降低 {confidence_reduction:.2f}), "
-                        f"改判为正常消息 [用户:{user_id}]: {', '.join(reasons)}"
+                        f"改判为正常消息 [用户:{user_id}]: {', '.join(reason_logs)}"
                     )
                 else:
                     logger.info(
