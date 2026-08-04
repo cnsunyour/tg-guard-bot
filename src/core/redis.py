@@ -159,11 +159,12 @@ class RedisKeys:
         """验证 UI delivery/recovery 状态机键名（不按 flow 分键）。
 
         同一用户同一群组同一时刻只能有一个验证会话；若按 flow 分键，新旧 deep-link
-        可分别取锁并覆盖同一答案。状态值三态：
+        可分别取锁并覆盖同一答案。状态值四态：
 
         - ``undelivered:{session_id}``：私聊发送失败（用户未启动 Bot），可经 /start 恢复
         - ``pending:{session_id}:{revision}:{owner_token}``：某协程取得发送权，UI 未提交
         - ``message:{session_id}:{revision}:{flow}:{message_id}``：UI 已发送，可读 message_id
+        - ``timeout:{session_id}``：timeout 已 claim，二次 claim 返回 stale（防重复处罚）
         """
         return f"verification_recovery:{chat_id}:{user_id}"
 

@@ -6,10 +6,10 @@
 - 并发 /start 只有一个能 reserve（``undelivered`` → ``pending`` CAS）；
 - timeout 携带 ``session_id``，claim 匹配 session 才处理，并从 ``message`` 状态读真实
   message_id（解决 hint 路径 ``message_id=0`` 关联不到新 UI 的问题）；
-- claim 即消费（删主键 + captcha_token，recovery 置 ``timeout``），使 timeout 与用户
-  成功回调互斥、防重复处罚；
-- 成功/超时/管理员清理后旧状态不复活（``clear_verification`` 删全部键，commit/promote
-  CAS 失败即放弃，绝不覆盖新会话）。
+- 成功与 timeout 均通过 Lua claim 原子消费主键（成功 ``claim_success``、超时
+  ``claim_timeout``），使两条路径互斥、防重复处罚/恢复；成功 claim 直接删除 recovery
+  终态（不留 ``success`` 标记），避免阻塞后续新 session 的 reserve；
+- 成功/超时/管理员清理后旧状态不复活（commit/promote CAS 失败即放弃，绝不覆盖新会话）。
 
 状态值四态（各段均无冒号，``:`` 安全分隔）：
 
@@ -23,8 +23,8 @@
 TTL 约定：
 
 - ``pending``：``min(30s, deadline - now)``（覆盖 Telegram send 最坏耗时，崩溃残留自然过期）
-- ``message`` / ``undelivered`` / ``timeout`` / 主键 / deadline / type / captcha_token：
-  ``PEXPIREAT deadline + grace``（grace 让 timeout claim 在原始 deadline 触发时仍能读到）
+- ``message`` / ``undelivered`` / ``timeout`` / 主键 / deadline / type /
+  captcha_token：``PEXPIREAT deadline + grace``（grace 让 claim 在原始 deadline 触发时仍能读到）
 
 deadline 由 reserve Lua 用 Redis ``TIME`` 计算，避免应用节点与 Redis 时钟偏差；timeout
 任务以 claim 返回的剩余毫秒重排，始终以 Redis deadline 为准。
@@ -288,6 +288,68 @@ redis.call("set", KEYS[1], undelivered_value, "PXAT", deadline_ms + grace_ms)
 return 1
 """.strip()
 
+# success claim：答案校验正确后原子消费 challenge，与 timeout claim 互斥。
+#
+# 同时 CAS main 与 deadline：main CAS 防 timeout 已删/改主键；deadline CAS 防新 session
+# 恰好生成相同答案的 ABA（旧答案快照不能消费新会话）。expected_main/expected_deadline
+# 由调用方一次 MGET 同步读取，保证快照一致。
+#
+# type 暂不删除：成功 handler 需在 claim 后读取 flow 区分 join/join_request。该键已有
+# deadline+grace TTL，handler 读取后立即删除；下次 reserve 不查 type，残留不影响新会话。
+#
+# KEYS = [recovery, main, deadline, type, captcha_token]
+# ARGV = [expected_main, expected_deadline, grace_ms]
+# 返回 1=已 claim；0=CAS 失败（timeout 已接管 / session 切换 / 状态损坏 / grace 已过）。
+_CLAIM_SUCCESS_SCRIPT = """
+local expected_main = ARGV[1]
+local expected_deadline = ARGV[2]
+local grace_ms = tonumber(ARGV[3])
+
+if not grace_ms or grace_ms < 0 then
+    return 0
+end
+
+-- deadline CAS（含格式校验：session 非空、deadline_ms 正整数）
+local deadline_raw = redis.call("get", KEYS[3])
+if not deadline_raw or deadline_raw ~= expected_deadline then
+    return 0
+end
+
+local separator = string.find(deadline_raw, ":", 1, true)
+if not separator or separator == 1 then
+    return 0
+end
+local deadline_ms = tonumber(string.sub(deadline_raw, separator + 1))
+if not deadline_ms or deadline_ms <= 0 then
+    return 0
+end
+
+-- main CAS：答案快照未被 timeout 消费/替换
+if redis.call("get", KEYS[2]) ~= expected_main then
+    return 0
+end
+
+-- flow 白名单（防 type 键脏值）
+local flow = redis.call("get", KEYS[4])
+if flow ~= "join" and flow ~= "join_request" then
+    return 0
+end
+
+-- grace 期保护：deadline + grace 已过则不 claim（_FakeRedis 无 TTL 需显式判断；
+-- 真 Redis 此时 deadline 键已自然过期，前面 GET 已返回 nil）
+local clock = redis.call("time")
+local now_ms = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+if now_ms >= deadline_ms + grace_ms then
+    return 0
+end
+
+-- 原子消费：删 recovery/main/deadline/token（type 留给 handler 读 flow 后删）。
+-- deadline/main 删除使后续 claim_timeout 在 GET 阶段即 stale；recovery 删除避免
+-- 阻塞新 session 的 reserve（修复成功后短时重入被旧终态卡死）。
+redis.call("del", KEYS[1], KEYS[2], KEYS[3], KEYS[5])
+return 1
+""".strip()
+
 # claim：timeout 到期后判断是否可执行处罚。session 匹配且 deadline 已到时：
 # - 从 message 状态提取真实 message_id（undelivered/pending 时为 0）；
 # - 删主键 + captcha_token，使 timeout 与用户成功回调互斥；
@@ -527,6 +589,37 @@ async def release_recovery(
         "1" if preserve_challenge else "0",
     )
     return bool(released)
+
+
+async def claim_success(
+    chat_id: int,
+    user_id: int,
+    expected_state_value: str,
+    expected_deadline_value: str,
+) -> bool:
+    """答案正确后原子 claim 成功路径，与 timeout 互斥。
+
+    main 与 deadline 必须都与调用方 MGET 快照一致（双 CAS 防 ABA）。成功时原子删
+    recovery/main/deadline/captcha_token（type 留给成功 handler 读 flow 后删）——deadline/main
+    删除使后续 claim_timeout 在 GET 阶段即 stale，recovery 删除避免阻塞新 session reserve。
+
+    False 表示 timeout 已接管、session 已切换、状态损坏或 grace 期已过。调用方必须
+    视为 expired：不恢复权限，也不执行失败处罚（两条路径原子互斥，对方已处理）。
+    """
+    redis = get_redis()
+    claimed = await redis.eval(
+        _CLAIM_SUCCESS_SCRIPT,
+        5,
+        RedisKeys.verification_recovery(chat_id, user_id),
+        RedisKeys.verification(chat_id, user_id),
+        RedisKeys.verification_deadline(chat_id, user_id),
+        RedisKeys.verification_type(chat_id, user_id),
+        RedisKeys.captcha_token(chat_id, user_id),
+        expected_state_value,
+        expected_deadline_value,
+        VERIFICATION_GRACE_MS,
+    )
+    return bool(claimed)
 
 
 async def claim_timeout(

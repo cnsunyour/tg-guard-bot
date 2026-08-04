@@ -23,6 +23,7 @@ from src.services.verification_recovery import (
     VERIFICATION_GRACE_MS,
     RecoveryReservation,
     VerificationFlow,
+    claim_success,
     commit_recovery,
 )
 
@@ -751,14 +752,20 @@ class VerificationService:
     async def verify_choice_answer(
         chat_id: int, user_id: int, expected_type: str, answer: str
     ) -> ChoiceAnswerResult:
-        """一次 Redis GET 完成 pending、类型及答案校验（消除 TOCTOU）。
+        """读取答案快照，正确时用 Lua 原子 claim 成功路径（消除 TOCTOU）。
 
-        类型不匹配视为过期消息（旧类型按钮点击当前挑战），避免跨类型旧消息
-        碰巧通过当前挑战的 stored 答案。返回 correct / wrong / expired 三态。
+        MGET 一次读 main + deadline 快照；类型不匹配视为过期消息（旧类型按钮点击当前
+        挑战），避免跨类型旧消息碰巧通过当前挑战的 stored 答案。返回 correct/wrong/expired。
+
+        correct 表示 claim_success 已原子消费状态（main/deadline/token 删除，recovery=success）；
+        expired 表示答案对但 claim 失败（timeout 已接管或 session 切换），调用方静默退出。
         """
         redis = get_redis()
-        stored_value = await redis.get(RedisKeys.verification(chat_id, user_id))
-        if not stored_value:
+        stored_value, deadline_value = await redis.mget(
+            RedisKeys.verification(chat_id, user_id),
+            RedisKeys.verification_deadline(chat_id, user_id),
+        )
+        if not stored_value or not deadline_value:
             return "expired"
 
         # partition 校验：type 与 answer 均非空，且 answer 不含冒号
@@ -772,40 +779,39 @@ class VerificationService:
 
         if answer == "trap":
             return "wrong"
-        return "correct" if answer == correct_answer else "wrong"
+        if answer != correct_answer:
+            return "wrong"
+
+        # 答案正确：原子 claim（双 CAS 防 ABA，与 timeout 互斥）
+        claimed = await claim_success(chat_id, user_id, stored_value, deadline_value)
+        return "correct" if claimed else "expired"
 
     @staticmethod
-    async def verify_answer(chat_id: int, user_id: int, answer: str) -> bool:
-        """验证答案是否正确
+    async def verify_answer(chat_id: int, user_id: int, answer: str) -> ChoiceAnswerResult:
+        """验证 captcha 文本答案，正确时用 Lua 原子 claim，返回 correct/wrong/expired。
 
-        特殊情况:
-        - honeypot: answer == "trap" 表示点击了诱饵，返回 False
-        - captcha: 忽略大小写比较
+        仅服务 captcha 文本输入路径（大小写不敏感）。correct/expired 语义同
+        verify_choice_answer。原 honeypot trap 分支随 button 验证移除，文本输入无 trap。
         """
         redis = get_redis()
-        key = RedisKeys.verification(chat_id, user_id)
+        stored_value, deadline_value = await redis.mget(
+            RedisKeys.verification(chat_id, user_id),
+            RedisKeys.verification_deadline(chat_id, user_id),
+        )
+        if not stored_value or not deadline_value:
+            return "expired"
 
-        stored_value = await redis.get(key)
-        if not stored_value:
-            return False  # 验证已过期
+        # partition 校验：必须是 captcha:{大写文本}，文本非空且不含冒号（防损坏值）
+        challenge_type, sep, correct_answer = stored_value.partition(":")
+        if not sep or challenge_type != "captcha" or not correct_answer or ":" in correct_answer:
+            return "expired"
 
-        # 蜜罐陷阱检测
-        if answer == "trap":
-            return False
+        if answer.upper() != correct_answer.upper():
+            return "wrong"
 
-        # 解析存储的值
-        if ":" in stored_value:
-            challenge_type, correct_answer = stored_value.split(":", 1)
-
-            # captcha 验证忽略大小写
-            if challenge_type == "captcha":
-                return answer.upper() == correct_answer.upper()
-
-            # 其他类型精确匹配
-            return answer == correct_answer
-
-        # 不应该到达这里（button 验证已删除）
-        return False
+        # 答案正确：原子 claim（双 CAS 防 ABA，与 timeout 互斥）
+        claimed = await claim_success(chat_id, user_id, stored_value, deadline_value)
+        return "correct" if claimed else "expired"
 
     @staticmethod
     async def clear_verification(chat_id: int, user_id: int) -> None:

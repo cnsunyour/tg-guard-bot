@@ -1391,13 +1391,21 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             # 未点击"输入验证码"按钮
             return
 
-        # 验证答案
-        if await verification_service.verify_answer(chat_id, user_id, text_input):
-            # 验证成功 - 清理所有相关键
+        # 验证答案（正确时内部已原子 claim，与 timeout 互斥）
+        answer_result = await verification_service.verify_answer(chat_id, user_id, text_input)
+
+        if answer_result == "expired":
+            # timeout 已 claim 或 session 已切换：不恢复权限，也不执行失败处罚
+            await redis.delete(waiting_key)
+            await redis.delete(waiting_user_key)  # ✅ 删除反向索引
+            return
+
+        if answer_result == "correct":
+            # claim_success 已清 main/deadline/token；这里清 captcha 输入辅助键
             await redis.delete(waiting_key)
             await redis.delete(waiting_user_key)  # ✅ 删除反向索引
 
-            # 检查验证类型
+            # 检查验证类型（claim 保留 type 供此处读取 flow）
             type_key = RedisKeys.verification_type(chat_id, user_id)
             verification_type = await redis.get(type_key)
             is_join_request = verification_type == "join_request"
@@ -1408,9 +1416,6 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             # 删除验证消息
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id=user_id, message_id=int(message_id_str))
-
-            # ✅ 清除验证状态（提前到可能早退之前，避免遗留状态被超时任务重复处理）
-            await verification_service.clear_verification(chat_id, user_id)
 
             await message.answer(localizer.t("verification.captcha.input_success.private.message"))
 
@@ -1831,9 +1836,8 @@ async def handle_verification_success(
         chat = await bot.get_chat(chat_id)
         chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
-        # 清除验证状态
-        verification_service = VerificationService()
-        await verification_service.clear_verification(chat_id, user_id)
+        # claim_success 已在 verify_choice_answer 内原子消费状态（main/deadline/token 删除，
+        # recovery=success）；此处不再 clear，避免误删后续新会话
 
         # 删除私聊中的验证消息
         with contextlib.suppress(Exception):
