@@ -910,11 +910,16 @@ async def _process_user_join(
                     details={"offenses": cas_result.offenses},
                 )
 
-            # 发送群内通知（30 秒后自动删除）
+            # 发送群内通知（30 秒后自动删除）；locale 解析在 try 内，失败只影响通知
             try:
+                ban_notify_locale = await get_resolver().for_group(chat_id)
+                ban_notify_localizer = get_translator().for_locale(ban_notify_locale)
                 notify_msg = await bot.send_message(
                     chat_id=chat_id,
-                    text=f"🚫 {format_user_mention(user)} 在 CAS 黑名单中，已被自动封禁。",
+                    text=ban_notify_localizer.t(
+                        "verification.join.cas_ban.notify",
+                        user=format_user_mention(user),
+                    ),
                 )
                 await auto_delete_message(notify_msg, delay=30)
             except Exception as e:
@@ -946,19 +951,30 @@ async def _process_user_join(
                     details={"status": status_result.reason},
                 )
 
-            # 发送群内通知（30 秒后自动删除）
+            # 发送群内通知（30 秒后自动删除）；locale 解析在 try 内，失败只影响通知
             try:
-                status_map = {
-                    "restricted": "被 Telegram 限制",
-                    "scam": "被标记为诈骗账号",
-                    "fake": "被标记为虚假账号",
-                    "deleted": "已删除账号",
+                ban_notify_locale = await get_resolver().for_group(chat_id)
+                ban_notify_localizer = get_translator().for_locale(ban_notify_locale)
+                # reason → catalog key 显式映射，未知值统一 unknown.label
+                # （防脏值/未来新增状态拼出不存在的 key）
+                status_label_key_map = {
+                    "restricted": "verification.join.status_ban.restricted.label",
+                    "scam": "verification.join.status_ban.scam.label",
+                    "fake": "verification.join.status_ban.fake.label",
+                    "deleted": "verification.join.status_ban.deleted.label",
                 }
-                reason = status_result.reason or "未知状态"
-                status_text = status_map.get(reason, reason)
+                status_label_key = status_label_key_map.get(
+                    status_result.reason or "",
+                    "verification.join.status_ban.unknown.label",
+                )
+                status_text = ban_notify_localizer.t(status_label_key)
                 notify_msg = await bot.send_message(
                     chat_id=chat_id,
-                    text=f"🚫 {format_user_mention(user)} {status_text}，已被自动封禁。",
+                    text=ban_notify_localizer.t(
+                        "verification.join.status_ban.notify",
+                        user=format_user_mention(user),
+                        status=status_text,
+                    ),
                 )
                 await auto_delete_message(notify_msg, delay=30)
             except Exception as e:
