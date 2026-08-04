@@ -21,6 +21,7 @@ from src.bot.commands import (
     CommandSpec,
     _specs,
     build_commands,
+    rehydrate_custom_locale_commands,
     setup_fallback_commands,
     sync_chat_commands,
 )
@@ -185,3 +186,72 @@ def test_all_command_description_keys_exist_in_three_locales() -> None:
         catalog = json.loads((root / "locales" / f"{locale}.json").read_text("utf-8"))
         missing = expected_keys - set(catalog)
         assert not missing, f"{locale} 缺命令翻译: {missing}"
+
+
+# ===== rehydrate_custom_locale_commands（P1：启动恢复已保存 locale）=====
+async def test_rehydrate_syncs_groups_and_users_with_custom_locale(mocker) -> None:
+    """非默认 locale 的群/用户 → 启动时逐个 sync 命令菜单。"""
+    bot = MagicMock()
+    bot.set_my_commands = AsyncMock()
+    translator = MagicMock()
+    translator.for_locale = MagicMock(side_effect=lambda loc: _real_localizer(loc))
+
+    mocker.patch(
+        "src.repositories.group_repo.GroupRepository.get_groups_with_custom_locale",
+        new=AsyncMock(return_value=[(-100, "en"), (-200, "zh-Hant")]),
+    )
+    mocker.patch(
+        "src.repositories.user_settings_repo.UserSettingsRepository.get_users_with_custom_locale",
+        new=AsyncMock(return_value=[(12345, "en")]),
+    )
+
+    await rehydrate_custom_locale_commands(bot, translator, "zh-Hans")
+
+    # 2 群（每群 2 scope：成员+管理员）+ 1 用户（1 scope）= 5 次 set_my_commands
+    assert bot.set_my_commands.await_count == 5
+    # translator.for_locale 被群/用户的 locale 各调用
+    called_locales = {call.args[0] for call in translator.for_locale.call_args_list}
+    assert called_locales == {"en", "zh-Hant"}
+
+
+async def test_rehydrate_skips_when_all_default_locale(mocker) -> None:
+    """无非默认 locale → 不调 set_my_commands。"""
+    bot = MagicMock()
+    bot.set_my_commands = AsyncMock()
+    translator = MagicMock()
+    translator.for_locale = MagicMock(side_effect=lambda loc: _real_localizer(loc))
+
+    mocker.patch(
+        "src.repositories.group_repo.GroupRepository.get_groups_with_custom_locale",
+        new=AsyncMock(return_value=[]),
+    )
+    mocker.patch(
+        "src.repositories.user_settings_repo.UserSettingsRepository.get_users_with_custom_locale",
+        new=AsyncMock(return_value=[]),
+    )
+
+    await rehydrate_custom_locale_commands(bot, translator, "zh-Hans")
+
+    bot.set_my_commands.assert_not_awaited()
+
+
+async def test_rehydrate_db_failure_does_not_block(mocker) -> None:
+    """DB 查询失败仅记日志，不阻断（另一类查询仍尝试）。"""
+    bot = MagicMock()
+    bot.set_my_commands = AsyncMock()
+    translator = MagicMock()
+    translator.for_locale = MagicMock(side_effect=lambda loc: _real_localizer(loc))
+
+    mocker.patch(
+        "src.repositories.group_repo.GroupRepository.get_groups_with_custom_locale",
+        new=AsyncMock(side_effect=RuntimeError("db down")),
+    )
+    mocker.patch(
+        "src.repositories.user_settings_repo.UserSettingsRepository.get_users_with_custom_locale",
+        new=AsyncMock(return_value=[(12345, "en")]),
+    )
+
+    # 不抛异常
+    await rehydrate_custom_locale_commands(bot, translator, "zh-Hans")
+    # 用户查询成功 → 仍 sync 用户（1 scope）
+    assert bot.set_my_commands.await_count == 1

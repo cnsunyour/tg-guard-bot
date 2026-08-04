@@ -39,3 +39,17 @@ class UserSettingsRepository:
             )
             await session.execute(statement)
             await session.commit()
+
+    @staticmethod
+    async def get_users_with_custom_locale(default_locale: str) -> list[tuple[int, str]]:
+        """获取所有 locale 与默认值不同的用户（user_id, locale）。
+
+        用于启动时恢复命令菜单（3c3）：非默认 locale 的用户需 sync 对应语言命令。
+        """
+        async with get_db_session() as session:
+            result = await session.execute(
+                select(UserSettings.user_id, UserSettings.locale)
+                .where(UserSettings.locale != default_locale)
+                .order_by(UserSettings.user_id)
+            )
+            return [(row[0], row[1]) for row in result.all()]

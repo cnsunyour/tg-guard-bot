@@ -8,21 +8,25 @@ locale 决定（独立于 Telegram 系统语言）。
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from aiogram import Bot
 from aiogram.types import (
     BotCommand,
-    BotCommandScope,
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
     BotCommandScopeChatAdministrators,
     BotCommandScopeDefault,
+    BotCommandScopeUnion,
 )
 from loguru import logger
 
 from src.core.i18n.translator import BoundLocalizer
+
+if TYPE_CHECKING:
+    from src.core.i18n.translator import Translator
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +109,7 @@ async def _set_scope_commands(
     bot: Bot,
     localizer: BoundLocalizer,
     specs: Sequence[CommandSpec],
-    scope: BotCommandScope,
+    scope: BotCommandScopeUnion,
     scope_name: str,
 ) -> None:
     """独立更新一个 scope；失败仅记日志并保留 Telegram 端旧菜单（不回滚 locale）。"""
@@ -121,8 +125,8 @@ async def _set_scope_commands(
     )
 
 
-# type alias 用于 targets 元组类型标注
-type _ScopeTarget = tuple[str, Sequence[CommandSpec], BotCommandScope]
+# type alias 用于 targets 元组类型标注（aiogram set_my_commands 接受的 scope 联合）
+type _ScopeTarget = tuple[str, Sequence[CommandSpec], BotCommandScopeUnion]
 
 
 async def setup_fallback_commands(bot: Bot, localizer: BoundLocalizer) -> None:
@@ -139,6 +143,43 @@ async def setup_fallback_commands(bot: Bot, localizer: BoundLocalizer) -> None:
     )
     for scope_name, specs, scope in targets:
         await _set_scope_commands(bot, localizer, specs, scope, scope_name)
+
+
+async def rehydrate_custom_locale_commands(
+    bot: Bot,
+    translator: "Translator",
+    default_locale: str,
+) -> None:
+    """启动时恢复已保存的非默认 locale 命令菜单（3c3 P1）。
+
+    首次部署本特性时，DB 里可能已有 groups.locale / user_settings.locale 的非默认值。
+    仅设全局兜底会让这些 chat 仍显示默认语言菜单，直到用户重新 /lang。
+    遍历非默认 locale 的群/用户，逐个 sync 命令菜单使其立即生效。
+    """
+    # 延迟 import 避免循环依赖（commands 在启动早期被 main 调用）
+    from src.repositories.group_repo import GroupRepository
+    from src.repositories.user_settings_repo import UserSettingsRepository
+
+    try:
+        groups = await GroupRepository.get_groups_with_custom_locale(default_locale)
+    except Exception as exc:
+        logger.error(f"读取非默认 locale 群组失败，跳过命令菜单恢复: {exc}")
+        groups = []
+    for chat_id, locale in groups:
+        await sync_chat_commands(bot, translator.for_locale(locale), chat_id=chat_id, is_group=True)
+
+    try:
+        users = await UserSettingsRepository.get_users_with_custom_locale(default_locale)
+    except Exception as exc:
+        logger.error(f"读取非默认 locale 用户失败，跳过命令菜单恢复: {exc}")
+        users = []
+    for user_id, locale in users:
+        await sync_chat_commands(
+            bot, translator.for_locale(locale), chat_id=user_id, is_group=False
+        )
+
+    if groups or users:
+        logger.info(f"已恢复非默认 locale 命令菜单 [群组:{len(groups)}] [用户:{len(users)}]")
 
 
 async def sync_chat_commands(

@@ -213,15 +213,18 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
 
 async def setup_bot_commands(bot: Bot) -> None:
-    """设置默认 locale 的全局命令菜单兜底（4 scope）。
+    """设置默认 locale 的全局命令菜单兜底（4 scope）+ 恢复已保存的非默认 locale 命令。
 
     具体私聊/群聊的命令在 /lang 写穿后由 sync_chat_commands 按 locale 覆盖。
     """
-    from src.bot.commands import setup_fallback_commands
+    from src.bot.commands import rehydrate_custom_locale_commands, setup_fallback_commands
     from src.core.i18n import get_translator
 
-    localizer = get_translator().for_locale(settings.default_locale)
+    translator = get_translator()
+    localizer = translator.for_locale(settings.default_locale)
     await setup_fallback_commands(bot, localizer)
+    # 恢复 DB 中已保存的非默认 locale 命令菜单（首次部署 3c3 时生效）
+    await rehydrate_custom_locale_commands(bot, translator, settings.default_locale)
 
 
 async def on_startup(bot: Bot) -> None:

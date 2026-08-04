@@ -326,6 +326,11 @@ async def on_lang_callback(
 
     # locale 已持久化；命令菜单同步失败只记日志，不回滚 locale。
     # 不传 language_code，命令语言只由 Bot 内 locale 决定（独立于 Telegram 系统语言）。
+    #
+    # 已知限制（codex review P2）：同一 chat 并发 /lang 时，先 commit 的 callback
+    # 可能在后 commit 的之后完成 sync，导致 Telegram 菜单与最终 DB locale 短暂不一致。
+    # 恢复路径：启动 rehydrate_custom_locale_commands 会按 DB 权威 locale 重新 sync；
+    # 或用户再点一次 /lang。per-chat 锁可彻底消除但 ROI 不足（极低频边缘场景）。
     await sync_chat_commands(
         bot,
         translator.for_locale(locale),
