@@ -86,6 +86,100 @@ _INFLIGHT_RELEASE_SCRIPT = (
     'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) end return 0'
 )
 
+# 原子绑定当前 captcha session 与 recovery UI 到 waiting 键。
+#
+# GET deadline 再 SET waiting 有 TOCTOU；且旧验证消息的 callback_data 不含 session，若不校验
+# recovery message_id，点击旧按钮会把旧 UI 错绑到新 session。Lua 内原子校验
+# deadline/main(captcha:)/recovery(message:{session}:...:{message_id}) + recovery message_id
+# == 点击消息 + deadline 未到，才 SET waiting `{session}:{message_id}` + waiting_user（PXAT deadline）。
+#
+# KEYS = [deadline, main, recovery, waiting, waiting_user]
+# ARGV = [message_id, chat_id]
+# 成功返回 "{session}:{message_id}"，失败返回 0。
+_CAPTCHA_WAITING_SET_SCRIPT = """
+local deadline_raw = redis.call("get", KEYS[1])
+local state_raw = redis.call("get", KEYS[2])
+local recovery_raw = redis.call("get", KEYS[3])
+if not deadline_raw or not state_raw or not recovery_raw then
+    return 0
+end
+
+local session, deadline_text = string.match(deadline_raw, "^([^:]+):(%d+)$")
+local deadline_ms = tonumber(deadline_text)
+if not session or not deadline_ms then
+    return 0
+end
+
+if not string.match(state_raw, "^captcha:[^:]+$") then
+    return 0
+end
+
+-- recovery 必须匹配当前 session：promote 后 message:{session}:...:{message_id}（校验
+-- message_id == 点击消息），或 send→promote 窗口 pending:{session}:...（仅校验 session，
+-- message_id 由随后的 promote 写入；该窗口极短，放宽 message_id 避免合法点击被判 expired）
+local recovery_message_session = string.match(recovery_raw, "^message:([^:]+):[^:]+:[^:]+:%d+$")
+if recovery_message_session then
+    if recovery_message_session ~= session then
+        return 0
+    end
+    local recovery_message_id = string.match(recovery_raw, ":(%d+)$")
+    if recovery_message_id ~= ARGV[1] then
+        return 0
+    end
+else
+    local recovery_pending_session = string.match(recovery_raw, "^pending:([^:]+):[^:]+:[^:]+$")
+    if not recovery_pending_session or recovery_pending_session ~= session then
+        return 0
+    end
+end
+
+local clock = redis.call("time")
+local now_ms = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+if now_ms >= deadline_ms then
+    return 0
+end
+
+local waiting_value = session .. ":" .. ARGV[1]
+redis.call("set", KEYS[4], waiting_value, "PXAT", deadline_ms)
+redis.call("set", KEYS[5], ARGV[2], "PXAT", deadline_ms)
+return waiting_value
+""".strip()
+
+# captcha waiting 的 compare-and-delete：仅删调用方实际读到的 waiting 值，防并发点击新 session
+# 写入的值被旧协程误删。
+#
+# KEYS = [waiting, waiting_user]
+# ARGV = [expected_waiting_value, expected_chat_id]
+_CAPTCHA_WAITING_CLEAR_SCRIPT = """
+if redis.call("get", KEYS[1]) ~= ARGV[1] then
+    return 0
+end
+redis.call("del", KEYS[1])
+if redis.call("get", KEYS[2]) == ARGV[2] then
+    redis.call("del", KEYS[2])
+end
+return 1
+""".strip()
+
+
+async def _clear_captcha_waiting_if_match(
+    chat_id: int,
+    user_id: int,
+    expected_waiting_value: str,
+) -> bool:
+    """仅清除调用方实际读取到的 waiting，避免误删并发写入的新 session 值。"""
+    redis = get_redis()
+    return bool(
+        await redis.eval(
+            _CAPTCHA_WAITING_CLEAR_SCRIPT,
+            2,
+            RedisKeys.captcha_waiting(chat_id, user_id),
+            RedisKeys.captcha_waiting_user(user_id),
+            expected_waiting_value,
+            str(chat_id),
+        )
+    )
+
 
 @contextlib.asynccontextmanager
 async def _verification_inflight_lock(lock_key: str) -> AsyncIterator[bool]:
@@ -1217,23 +1311,31 @@ async def on_captcha_input_request(callback: CallbackQuery) -> None:
         )
         localizer = get_translator().for_locale(private_locale)
 
-        # 获取群组配置的超时时间
-        group_repo = GroupRepository()
-        group_config = await group_repo.get(chat_id)
-        timeout = group_config.verification_timeout if group_config else 120
-
-        # 设置等待输入状态（TTL 稍长一点留缓冲）
+        # 原子校验 deadline/main/recovery 后绑定 session：防 GET→SET 竞态，且 recovery
+        # message_id 校验拒绝新 session 建立后点击残留旧验证消息的按钮。
         redis = get_redis()
         waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
-        await redis.setex(waiting_key, timeout + 10, str(callback.message.message_id))
-
-        # ✅ 安全修复：设置反向索引，避免 Redis SCAN DoS 攻击
         waiting_user_key = RedisKeys.captcha_waiting_user(user_id)
-        await redis.setex(waiting_user_key, timeout + 10, str(chat_id))
-
-        await callback.answer(
-            localizer.t("verification.captcha.input_prompt.toast"), show_alert=False
+        waiting_value = await redis.eval(
+            _CAPTCHA_WAITING_SET_SCRIPT,
+            5,
+            RedisKeys.verification_deadline(chat_id, user_id),
+            RedisKeys.verification(chat_id, user_id),
+            RedisKeys.verification_recovery(chat_id, user_id),
+            waiting_key,
+            waiting_user_key,
+            str(callback.message.message_id),
+            str(chat_id),
         )
+
+        if waiting_value:
+            await callback.answer(
+                localizer.t("verification.captcha.input_prompt.toast"), show_alert=False
+            )
+        else:
+            await callback.answer(
+                localizer.t("verification.callback.expired.toast"), show_alert=False
+            )
 
     except Exception as e:
         logger.error(f"处理验证码输入请求失败: {e}")
@@ -1383,36 +1485,62 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             await redis.delete(waiting_key)
             return
 
-        # 检查验证状态类型
-        verification_key = RedisKeys.verification(chat_id, user_id)
-        stored_value = await redis.get(verification_key)
-        if not stored_value or not stored_value.startswith("captcha:"):
-            # 不是 captcha 验证或已过期
-            return
-
-        # 检查是否在等待输入状态
+        # 检查是否在等待输入状态（state 类型校验由下方 clear_token.state_value 完成）
         waiting_key = RedisKeys.captcha_waiting(chat_id, user_id)
-        message_id_str = await redis.get(waiting_key)
+        waiting_value = await redis.get(waiting_key)
 
-        if not message_id_str:
+        if not waiting_value:
             # 未点击"输入验证码"按钮
             return
 
-        # 副作用前捕获快照（wrong 路径 ban 经网络，clear 须用旧 session 快照防删新 session）
+        # waiting 值：新格式 {session}:{message_id} 或旧格式 {message_id}（滚动发布残留）
+        waiting_session, sep, message_id_str = waiting_value.partition(":")
+        if not sep:
+            message_id_str = waiting_session  # 旧格式：纯 message_id，无 session
+            waiting_session = ""
+
+        # MGET(main, deadline, recovery) 快照：session 绑定校验 + wrong 路径 clear CAS
         clear_token = await verification_service.capture_clear_token(chat_id, user_id)
-        # 验证答案（正确时内部已原子 claim，与 timeout 互斥）
-        answer_result = await verification_service.verify_answer(chat_id, user_id, text_input)
+        deadline_value = clear_token.deadline_value or ""
+        deadline_session = deadline_value.rpartition(":")[0] if ":" in deadline_value else ""
+
+        # 校验 state 是 captcha + waiting session 匹配当前 deadline session
+        state_value = clear_token.state_value
+        state_is_captcha = state_value is not None and state_value.startswith("captcha:")
+        if not state_is_captcha or not deadline_session or not message_id_str.isdigit():
+            await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
+            return
+
+        if waiting_session:
+            # 新格式：session 必须匹配当前 deadline（P2.2 核心：防旧 waiting 用新 session main）
+            if waiting_session != deadline_session:
+                await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
+                return
+        else:
+            # 旧格式：校验 waiting message_id 仍是当前 session 的 recovery UI（防残留误用）
+            recovery_parts = (clear_token.recovery_value or "").split(":")
+            if not (
+                len(recovery_parts) == 5
+                and recovery_parts[1] == deadline_session
+                and recovery_parts[4] == message_id_str
+            ):
+                await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
+                return
+
+        # 验证答案（expected_deadline_value 堵校验后到 verify_answer MGET 间的 session 切换；
+        # 正确时内部 claim_success 与 timeout 互斥）
+        answer_result = await verification_service.verify_answer(
+            chat_id, user_id, text_input, expected_deadline_value=deadline_value
+        )
 
         if answer_result == "expired":
             # timeout 已 claim 或 session 已切换：不恢复权限，也不执行失败处罚
-            await redis.delete(waiting_key)
-            await redis.delete(waiting_user_key)  # ✅ 删除反向索引
+            await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
             return
 
         if answer_result == "correct":
             # claim_success 已清 main/deadline/token；这里清 captcha 输入辅助键
-            await redis.delete(waiting_key)
-            await redis.delete(waiting_user_key)  # ✅ 删除反向索引
+            await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
 
             # 检查验证类型（claim 保留 type 供此处读取 flow）
             type_key = RedisKeys.verification_type(chat_id, user_id)
@@ -1487,8 +1615,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
         else:
             # 验证失败 - 清理所有相关键
             await message.answer(localizer.t("verification.captcha.input_wrong.private.message"))
-            await redis.delete(waiting_key)
-            await redis.delete(waiting_user_key)  # ✅ 删除反向索引
+            await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
 
             # 根据验证类型决定踢出或拒绝
             type_key = RedisKeys.verification_type(chat_id, user_id)

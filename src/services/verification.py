@@ -790,11 +790,18 @@ class VerificationService:
         return "correct" if claimed else "expired"
 
     @staticmethod
-    async def verify_answer(chat_id: int, user_id: int, answer: str) -> ChoiceAnswerResult:
+    async def verify_answer(
+        chat_id: int,
+        user_id: int,
+        answer: str,
+        *,
+        expected_deadline_value: str,
+    ) -> ChoiceAnswerResult:
         """验证 captcha 文本答案，正确时用 Lua 原子 claim，返回 correct/wrong/expired。
 
-        仅服务 captcha 文本输入路径（大小写不敏感）。correct/expired 语义同
-        verify_choice_answer。原 honeypot trap 分支随 button 验证移除，文本输入无 trap。
+        仅服务 captcha 文本输入路径（大小写不敏感）。``expected_deadline_value`` 把 waiting
+        快照绑定到本次 MGET，防 handler 校验 waiting 后 session 切换、再用新 main 判定旧输入。
+        correct/expired 语义同 verify_choice_answer。原 honeypot trap 分支随 button 验证移除。
         """
         redis = get_redis()
         stored_value, deadline_value = await redis.mget(
@@ -802,6 +809,8 @@ class VerificationService:
             RedisKeys.verification_deadline(chat_id, user_id),
         )
         if not stored_value or not deadline_value:
+            return "expired"
+        if deadline_value != expected_deadline_value:
             return "expired"
 
         # partition 校验：必须是 captcha:{大写文本}，文本非空且不含冒号（防损坏值）

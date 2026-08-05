@@ -106,7 +106,9 @@ async def test_verify_answer_three_state(
         new=AsyncMock(return_value=claim_granted),
     )
 
-    result = await VerificationService.verify_answer(-100, 42, answer)
+    result = await VerificationService.verify_answer(
+        -100, 42, answer, expected_deadline_value=DEADLINE
+    )
 
     assert result == expected
     redis.mget.assert_awaited_once_with(
@@ -117,3 +119,22 @@ async def test_verify_answer_three_state(
         success_claim.assert_awaited_once_with(-100, 42, stored, DEADLINE)
     else:
         success_claim.assert_not_awaited()
+
+
+async def test_verify_answer_rejects_session_switch_before_comparing_answer(mocker) -> None:
+    """waiting 捕获旧 deadline 后切到新 session：不得用新 main 返回 wrong/correct。"""
+    redis = AsyncMock()
+    redis.mget.return_value = ["captcha:NEWCODE", "session-b:1240000"]
+    mocker.patch.object(verification, "get_redis", return_value=redis)
+    success_claim = mocker.patch.object(
+        verification,
+        "claim_success",
+        new=AsyncMock(return_value=True),
+    )
+
+    result = await VerificationService.verify_answer(
+        -100, 42, "OLDCODE", expected_deadline_value=DEADLINE
+    )
+
+    assert result == "expired"
+    success_claim.assert_not_awaited()

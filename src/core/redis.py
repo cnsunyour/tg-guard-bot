@@ -170,19 +170,17 @@ class RedisKeys:
 
     @staticmethod
     def captcha_waiting(chat_id: int, user_id: int) -> str:
-        """验证码输入等待状态键名
+        """验证码输入等待辅助键名（输入模式 UI 状态，非状态机 5 键）。
 
-        用于标记用户正在等待输入验证码，存储验证消息 ID
+        值存 ``{session_id}:{message_id}``（按 session deadline 到期）；滚动发布期间可能读到
+        旧格式 ``{message_id}``，消费者仅在 message_id 仍匹配当前 recovery UI 时兼容。残留由
+        读时校验清理（on_captcha_text_input 校验 session 匹配）。
         """
         return f"captcha_waiting:{chat_id}:{user_id}"
 
     @staticmethod
     def captcha_waiting_user(user_id: int) -> str:
-        """验证码等待反向索引键名
-
-        用于从用户 ID 快速查找等待的验证码所属群组，避免 Redis SCAN 操作
-        存储格式: "{chat_id}"
-        """
+        """验证码等待反向索引辅助键名（存 ``{chat_id}``，与 captcha_waiting 同 Lua 写入同到期）。"""
         return f"captcha_waiting_user:{user_id}"
 
     @staticmethod
