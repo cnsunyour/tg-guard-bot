@@ -64,6 +64,7 @@ from src.services.verification_hint import (
     try_extend_hint,
 )
 from src.services.verification_recovery import (
+    VerificationClearToken,
     claim_timeout,
     commit_recovery,
     new_revision_id,
@@ -341,6 +342,10 @@ async def check_user_spam_info(
                 f"原因: {', '.join(result.get('reasons', ['未知']))}"
             )
 
+            # 副作用前捕获快照（decline/ban 经网络，clear 须用旧 session 快照防删新 session）
+            verification_service = VerificationService()
+            clear_token = await verification_service.capture_clear_token(chat_id, user_id)
+
             # 处理加入请求模式：先拒绝加入请求
             if mode == "join_request":
                 try:
@@ -349,9 +354,10 @@ async def check_user_spam_info(
                 except Exception as decline_error:
                     logger.error(f"拒绝加入请求失败: {decline_error}")
 
-                # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
-                verification_service = VerificationService()
-                await verification_service.clear_verification(chat_id, user_id)
+                # ✅ 清除验证状态（CAS 防旧协程删新 session）
+                await verification_service.clear_verification(
+                    chat_id, user_id, expected=clear_token
+                )
 
             # 封禁 1 小时（两种模式通用）
             try:
@@ -1114,6 +1120,8 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
 
         # 一次 GET 校验 pending + 类型 + 答案（消除 TOCTOU，防跨类型旧消息重放）
         verification_service = VerificationService()
+        # 副作用前捕获快照：wrong 路径 ban 经网络，clear 须用旧 session 快照防删新 session
+        clear_token = await verification_service.capture_clear_token(chat_id, user_id)
         answer_result = await verification_service.verify_choice_answer(
             chat_id, user_id, expected_type, answer
         )
@@ -1154,7 +1162,6 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                     user_id=user_id,
                     until_date=datetime.now() + timedelta(hours=1),
                 )
-                await redis.delete(type_key)
             else:
                 # 踢出并封禁 1 小时
                 await bot.ban_chat_member(
@@ -1163,8 +1170,8 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                     until_date=datetime.now() + timedelta(hours=1),
                 )
 
-            # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
-            await verification_service.clear_verification(chat_id, user_id)
+            # ✅ 清除验证状态（CAS 防旧协程删新 session；type 随 clear 原子删，不单独 DEL）
+            await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
             # 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -1391,6 +1398,8 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             # 未点击"输入验证码"按钮
             return
 
+        # 副作用前捕获快照（wrong 路径 ban 经网络，clear 须用旧 session 快照防删新 session）
+        clear_token = await verification_service.capture_clear_token(chat_id, user_id)
         # 验证答案（正确时内部已原子 claim，与 timeout 互斥）
         answer_result = await verification_service.verify_answer(chat_id, user_id, text_input)
 
@@ -1488,7 +1497,6 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             if verification_type == "join_request":
                 # 拒绝加入请求
                 await decline_join_request(bot, chat_id, user_id)
-                await redis.delete(type_key)
             else:
                 # 踢出并封禁 1 小时
                 await bot.ban_chat_member(
@@ -1501,9 +1509,8 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 with contextlib.suppress(Exception):
                     await bot.delete_message(chat_id=user_id, message_id=int(message_id_str))
 
-            # ✅ 清除验证状态，避免 timeout 任务重复处理（修复 HIDE_REQUESTER_MISSING）
-            verification_service = VerificationService()
-            await verification_service.clear_verification(chat_id, user_id)
+            # ✅ 清除验证状态（CAS 防旧协程删新 session；type 随 clear 原子删）
+            await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
             logger.info(f"用户 {user_id} 验证码验证失败")
 
@@ -1555,6 +1562,9 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
             return
 
+        # 副作用前捕获快照（ban 经网络，clear 须用旧 session 快照防删新 session）
+        clear_token = await verification_service.capture_clear_token(chat_id, user_id)
+
         # 踢出并封禁 1 小时
         await bot.ban_chat_member(
             chat_id=chat_id,
@@ -1566,8 +1576,8 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
         with contextlib.suppress(Exception):
             await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
 
-        # 清除验证状态
-        await verification_service.clear_verification(chat_id, user_id)
+        # 清除验证状态（CAS 防旧协程删新 session）
+        await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
         await callback.answer(localizer.t("verification.callback.cancelled.toast"))
         logger.info(f"用户 {user_id} 取消验证，已被踢出群组 {chat_id}")
@@ -1685,6 +1695,10 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
 
         # 3. 验证 Redis 中的 token 存在（一次性）
         redis = get_redis()
+        verification_service = VerificationService()
+        # 副作用前捕获快照：token 校验后 CAS clear 须用旧 session 快照，防 timeout/新 session/
+        # 并发重复回调胜出时仍恢复权限（P2.1 + webapp 竞态）
+        clear_token = await verification_service.capture_clear_token(chat_id, user_id)
 
         # 统一使用 captcha_token 键
         token_key = RedisKeys.captcha_token(chat_id, user_id)
@@ -1714,21 +1728,22 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             await send_error("verification.webapp.error.invalid_token.private.message")
             return
 
-        # 4. 删除 token（防止重复使用）
-        await redis.delete(token_key)
-
-        # 5. 检查验证类型
+        # 4. 检查验证类型；token/type 由下面的 CAS clear 原子消费（不单独 DEL，防删新 session）
         type_key = RedisKeys.verification_type(chat_id, user_id)
         verification_type = await redis.get(type_key)
         is_join_request = verification_type == "join_request"
 
-        # 清除类型标记
-        await redis.delete(type_key)
-
-        # ✅ 6. 立即清除验证状态（防止超时任务踢人）
-        # 无论后续操作是否成功，验证已经通过，不应该再触发超时
-        verification_service = VerificationService()
-        await verification_service.clear_verification(chat_id, user_id)
+        # ✅ 5. CAS 消费当前 session；timeout 已 claim / 新 session 建立 / 并发重复回调胜出时
+        # clear 失败，必须停止（不恢复权限，否则与 timeout 重复或对错 session 操作）
+        cleared = await verification_service.clear_verification(
+            chat_id, user_id, expected=clear_token
+        )
+        if not cleared:
+            logger.info(
+                f"忽略已失效的 WebApp 回调 [provider:{provider}] [user:{user_id}] [chat:{chat_id}]"
+            )
+            await send_error("verification.webapp.error.expired.private.message")
+            return
         logger.info(f"已清除用户 {user_id} 的验证状态 (群组 {chat_id})")
 
         # 7. 验证成功，恢复权限
@@ -1944,11 +1959,12 @@ async def _wait_for_timeout_claim(
     user_id: int,
     session_id: str | None,
     flow: VerificationFlow,
-) -> int | None:
-    """等待 Redis deadline 并 claim；返回 message_id，None 表示 session 已失效无需处理。
+) -> tuple[int, VerificationClearToken] | None:
+    """等待 Redis deadline 并 claim；返回 (message_id, clear_token)，None 表示 session 已失效。
 
-    旧的无 session_id 调用 fail-closed 直接返回 None——退化到 is_verification_pending 会让
-    旧 timeout 误罚新 session。timeout 始终以 Redis deadline 为准（claim 循环按剩余毫秒重排）。
+    clear_token 是 claim 时的状态快照（claim 原子返回），供 ban/decline 网络后 clear CAS，
+    防旧 timeout 协程删新 session。旧的无 session_id 调用 fail-closed 直接返回 None——退化到
+    is_verification_pending 会让旧 timeout 误罚新 session。timeout 始终以 Redis deadline 为准。
     """
     if not session_id:
         logger.warning(f"忽略缺少 session_id 的旧 timeout 任务 [群组:{chat_id}] [用户:{user_id}]")
@@ -1959,7 +1975,10 @@ async def _wait_for_timeout_claim(
         if claim.status == "stale":
             return None
         if claim.status == "claimed":
-            return claim.message_id
+            if claim.clear_token is None:
+                logger.error(f"timeout claim 缺少 clear token [群组:{chat_id}] [用户:{user_id}]")
+                return None
+            return claim.message_id, claim.clear_token
         # wait：按 Redis 剩余毫秒重排（恢复可能延长了 deadline）
         await asyncio.sleep(max(0.001, claim.remaining_ms / 1000))
 
@@ -1974,9 +1993,10 @@ async def handle_verification_timeout(
 ) -> None:
     """处理验证超时 - 私聊验证模式（join flow）"""
     try:
-        message_id = await _wait_for_timeout_claim(chat_id, user_id, session_id, "join")
-        if message_id is None:
+        timeout_claim = await _wait_for_timeout_claim(chat_id, user_id, session_id, "join")
+        if timeout_claim is None:
             return
+        message_id, clear_token = timeout_claim
 
         # 验证超时
         logger.info(f"用户 {user_id} 验证超时（{timeout}秒），开始处理...")
@@ -2021,9 +2041,9 @@ async def handle_verification_timeout(
 
         # 4. 群内不发送任何消息
 
-        # 5. 清除验证状态（claim 已删主键/token，此处清剩余键）
+        # 5. 清除验证状态（claim 已删主键/token，此处清剩余键；CAS 防旧协程删新 session）
         verification_service = VerificationService()
-        await verification_service.clear_verification(chat_id, user_id)
+        await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
         logger.info(f"用户 {user_id} 验证超时处理完成（已踢出+封禁1小时）")
 
@@ -2168,9 +2188,10 @@ async def handle_join_request_timeout(
 ) -> None:
     """处理加入请求验证超时 - 拒绝加入请求（join_request flow）"""
     try:
-        message_id = await _wait_for_timeout_claim(chat_id, user_id, session_id, "join_request")
-        if message_id is None:
+        timeout_claim = await _wait_for_timeout_claim(chat_id, user_id, session_id, "join_request")
+        if timeout_claim is None:
             return
+        message_id, clear_token = timeout_claim
 
         # 验证超时
         logger.info(f"用户 {user_id} 加入请求验证超时（{timeout}秒），开始处理...")
@@ -2220,9 +2241,9 @@ async def handle_join_request_timeout(
                 parse_mode="HTML",
             )
 
-        # 5. 清除验证状态（claim 已删主键/token，此处清剩余键）
+        # 5. 清除验证状态（claim 已删主键/token，此处清剩余键；CAS 防旧协程删新 session）
         verification_service = VerificationService()
-        await verification_service.clear_verification(chat_id, user_id)
+        await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
         logger.info(f"用户 {user_id} 加入请求验证超时处理完成（已拒绝+封禁1小时）")
 

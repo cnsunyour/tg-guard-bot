@@ -22,8 +22,11 @@ from src.data.verification.qa_questions import QA_QUESTIONS
 from src.services.verification_recovery import (
     VERIFICATION_GRACE_MS,
     RecoveryReservation,
+    VerificationClearToken,
     VerificationFlow,
+    capture_verification_clear_token,
     claim_success,
+    clear_verification_state,
     commit_recovery,
 )
 
@@ -814,16 +817,26 @@ class VerificationService:
         return "correct" if claimed else "expired"
 
     @staticmethod
-    async def clear_verification(chat_id: int, user_id: int) -> None:
-        """清除 challenge、session、delivery 与 WebApp token 全部状态键。"""
-        redis = get_redis()
-        await redis.delete(
-            RedisKeys.verification(chat_id, user_id),
-            RedisKeys.verification_type(chat_id, user_id),
-            RedisKeys.verification_deadline(chat_id, user_id),
-            RedisKeys.verification_recovery(chat_id, user_id),
-            RedisKeys.captcha_token(chat_id, user_id),
-        )
+    async def capture_clear_token(chat_id: int, user_id: int) -> VerificationClearToken:
+        """取得 clear CAS 快照。延迟清理路径必须在 Telegram 调用前取得。"""
+        return await capture_verification_clear_token(chat_id, user_id)
+
+    @staticmethod
+    async def clear_verification(
+        chat_id: int,
+        user_id: int,
+        *,
+        expected: VerificationClearToken | None = None,
+    ) -> bool:
+        """按 session 快照清除状态。
+
+        ``expected=None`` 内部捕获当前快照，仅适合无外部等待的"清理当前状态"路径（管理员/
+        恢复）；处罚/成功等延迟路径必须在 Telegram 副作用前 capture 并传入 ``expected``，
+        避免旧协程把新 session 当当前 session 误删。返回是否实际删除。
+        """
+        if expected is None:
+            expected = await capture_verification_clear_token(chat_id, user_id)
+        return await clear_verification_state(chat_id, user_id, expected)
 
     @staticmethod
     async def is_verification_pending(chat_id: int, user_id: int) -> bool:

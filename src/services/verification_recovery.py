@@ -91,12 +91,31 @@ class RecoveryReservation:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationClearToken:
+    """clear CAS 快照；延迟清理路径必须在 Telegram 副作用前取得。
+
+    ``state_value``/``deadline_value``/``recovery_value`` 为捕获时刻的 Redis 值（None=键
+    不存在）。clear Lua 校验当前值仍匹配快照才删，防止旧协程在 grace 期后把新 session
+    当当前 session 误删。
+    """
+
+    state_value: str | None
+    deadline_value: str | None
+    recovery_value: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class TimeoutClaim:
-    """timeout claim 结果。``claimed`` 时 message_id 就绪；``wait`` 时 remaining_ms 用于重排。"""
+    """timeout claim 结果。
+
+    ``claimed`` 时 message_id 就绪、``clear_token`` 携带 claim 时快照（ban 网络后 clear 用）；
+    ``wait`` 时 remaining_ms 用于重排。
+    """
 
     status: TimeoutClaimStatus
     message_id: int = 0
     remaining_ms: int = 0
+    clear_token: VerificationClearToken | None = None
 
 
 def new_session_id() -> str:
@@ -408,9 +427,63 @@ if recovery_raw then
     end
 end
 
+local timeout_value = "timeout:" .. session
 redis.call("del", KEYS[2], KEYS[5])
-redis.call("set", KEYS[1], "timeout:" .. session, "PXAT", deadline_ms + grace_ms)
-return {2, message_id, 0}
+redis.call("set", KEYS[1], timeout_value, "PXAT", deadline_ms + grace_ms)
+-- 附带 claim 时快照（main 已删→None；deadline 未变；recovery=timeout），供 ban 网络后 clear CAS
+return {2, message_id, 0, deadline_raw, timeout_value}
+""".strip()
+
+# clear：按调用方在副作用前取得的状态快照删除整个 verification session。
+#
+# 校验 main + deadline 仍匹配快照（防 session 切换/timeout claim）；deadline 不存在时额外
+# 比较 recovery（覆盖 initial reserve 只写 pending、尚未 commit main/deadline 的窗口）。
+# 调用方必须在 Telegram 网络调用前 capture 快照——若 clear 时才读，旧协程会把新 session
+# 当期望值误删（P2.1 核心）。
+#
+# KEYS = [recovery, main, deadline, type, captcha_token]
+# ARGV = [state_present, expected_state, deadline_present, expected_deadline,
+#         recovery_present, expected_recovery]
+# 返回删除键数（0=CAS 失败，未删）。
+_CLEAR_VERIFICATION_SCRIPT = """
+local state_present = ARGV[1] == "1"
+local expected_state = ARGV[2]
+local deadline_present = ARGV[3] == "1"
+local expected_deadline = ARGV[4]
+local recovery_present = ARGV[5] == "1"
+local expected_recovery = ARGV[6]
+
+local current_state = redis.call("get", KEYS[2])
+if state_present then
+    if current_state ~= expected_state then
+        return 0
+    end
+elseif current_state then
+    return 0
+end
+
+local current_deadline = redis.call("get", KEYS[3])
+if deadline_present then
+    if current_deadline ~= expected_deadline then
+        return 0
+    end
+elseif current_deadline then
+    return 0
+end
+
+-- 已 commit 的 session 以 deadline 为身份；nil deadline 时 recovery 是 reservation 身份
+if not deadline_present then
+    local current_recovery = redis.call("get", KEYS[1])
+    if recovery_present then
+        if current_recovery ~= expected_recovery then
+            return 0
+        end
+    elseif current_recovery then
+        return 0
+    end
+end
+
+return redis.call("del", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
 """.strip()
 
 
@@ -622,6 +695,58 @@ async def claim_success(
     return bool(claimed)
 
 
+async def capture_verification_clear_token(
+    chat_id: int,
+    user_id: int,
+) -> VerificationClearToken:
+    """原子读取 clear CAS 快照。
+
+    延迟清理路径（处罚后/成功后）必须在 Telegram 副作用前调用，避免旧协程在 grace 期后
+    把新 session 当当前 session 误删。
+    """
+    redis = get_redis()
+    state_raw, deadline_raw, recovery_raw = await redis.mget(
+        RedisKeys.verification(chat_id, user_id),
+        RedisKeys.verification_deadline(chat_id, user_id),
+        RedisKeys.verification_recovery(chat_id, user_id),
+    )
+    return VerificationClearToken(
+        state_value=_as_text(state_raw) if state_raw is not None else None,
+        deadline_value=_as_text(deadline_raw) if deadline_raw is not None else None,
+        recovery_value=_as_text(recovery_raw) if recovery_raw is not None else None,
+    )
+
+
+async def clear_verification_state(
+    chat_id: int,
+    user_id: int,
+    expected: VerificationClearToken,
+) -> bool:
+    """仅当当前 session 仍匹配 expected 快照时删除全部状态键。
+
+    main + deadline CAS 防 session 切换/timeout claim；deadline 不存在时比较 recovery
+    （保护 initial reserve 写 pending 未 commit 的窗口）。返回 False 表示状态已变（新
+    session/已 claim/已清理），调用方应放弃后续操作。
+    """
+    redis = get_redis()
+    deleted = await redis.eval(
+        _CLEAR_VERIFICATION_SCRIPT,
+        5,
+        RedisKeys.verification_recovery(chat_id, user_id),
+        RedisKeys.verification(chat_id, user_id),
+        RedisKeys.verification_deadline(chat_id, user_id),
+        RedisKeys.verification_type(chat_id, user_id),
+        RedisKeys.captcha_token(chat_id, user_id),
+        "1" if expected.state_value is not None else "0",
+        expected.state_value or "",
+        "1" if expected.deadline_value is not None else "0",
+        expected.deadline_value or "",
+        "1" if expected.recovery_value is not None else "0",
+        expected.recovery_value or "",
+    )
+    return bool(deleted)
+
+
 async def claim_timeout(
     chat_id: int,
     user_id: int,
@@ -653,7 +778,15 @@ async def claim_timeout(
     if code == 1:
         return TimeoutClaim(status="wait", remaining_ms=max(0, int(result[2])))
     if code == 2:
-        return TimeoutClaim(status="claimed", message_id=max(0, int(result[1])))
+        return TimeoutClaim(
+            status="claimed",
+            message_id=max(0, int(result[1])),
+            clear_token=VerificationClearToken(
+                state_value=None,  # main 已被 claim 删除
+                deadline_value=_as_text(result[3]),
+                recovery_value=_as_text(result[4]),
+            ),
+        )
     return TimeoutClaim(status="stale")
 
 

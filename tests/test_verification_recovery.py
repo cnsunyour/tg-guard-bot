@@ -1,6 +1,6 @@
 """验证 delivery/recovery 状态机测试。
 
-测试策略：_FakeRedis 模拟 redis-py 调用契约 + 6 个 Lua 脚本语义（含 Redis TIME），验证
+测试策略：_FakeRedis 模拟 redis-py 调用契约 + 7 个 Lua 脚本语义（含 Redis TIME），验证
 Python 侧状态机逻辑。不等同于真实 Redis Lua 集成测试（真机验证在 3c1-4b 接入后）。
 
 覆盖 4a 的四个证明点：
@@ -35,7 +35,7 @@ USER_ID = 42
 
 
 class _FakeRedis:
-    """模拟 redis-py 调用契约 + verification_recovery 的 6 个 Lua 脚本语义。
+    """模拟 redis-py 调用契约 + verification_recovery 的 7 个 Lua 脚本语义。
 
     ``now_ms`` 模拟 Redis ``TIME``（毫秒），测试通过推进它验证 deadline 逻辑。
     """
@@ -75,6 +75,8 @@ class _FakeRedis:
             return self._eval_release(keys, args)
         if script == recovery._CLAIM_SUCCESS_SCRIPT:
             return self._eval_claim_success(keys, args)
+        if script == recovery._CLEAR_VERIFICATION_SCRIPT:
+            return self._eval_clear(keys, args)
         if script == recovery._CLAIM_TIMEOUT_SCRIPT:
             return self._eval_claim(keys, args)
         raise AssertionError("unexpected Lua script")
@@ -208,6 +210,43 @@ class _FakeRedis:
         # type 留给成功 handler 读取 flow 后删除
         return 1
 
+    def _eval_clear(self, keys, args):
+        recovery_key, main_key, deadline_key, _type_key, _token_key = keys
+        (
+            state_present,
+            expected_state,
+            deadline_present,
+            expected_deadline,
+            recovery_present,
+            expected_recovery,
+        ) = args
+
+        current_state = self.values.get(main_key)
+        if (state_present == "1" and current_state != expected_state) or (
+            state_present == "0" and current_state is not None
+        ):
+            return 0
+
+        current_deadline = self.values.get(deadline_key)
+        if (deadline_present == "1" and current_deadline != expected_deadline) or (
+            deadline_present == "0" and current_deadline is not None
+        ):
+            return 0
+
+        # nil deadline 时校验 recovery（reservation 身份）
+        if deadline_present == "0":
+            current_recovery = self.values.get(recovery_key)
+            if (recovery_present == "1" and current_recovery != expected_recovery) or (
+                recovery_present == "0" and current_recovery is not None
+            ):
+                return 0
+
+        deleted = 0
+        for key in keys:
+            if self.values.pop(key, None) is not None:
+                deleted += 1
+        return deleted
+
     def _eval_claim(self, keys, args):
         recovery_key, main_key, deadline_key, type_key, token_key = keys
         session, flow = args[:2]
@@ -238,10 +277,11 @@ class _FakeRedis:
         if raw and raw.startswith(f"message:{session}:"):
             message_id = int(raw.rsplit(":", 1)[1])
 
+        timeout_value = f"timeout:{session}"
         self.values.pop(main_key, None)
         self.values.pop(token_key, None)
-        self.values[recovery_key] = f"timeout:{session}"
-        return [2, message_id, 0]
+        self.values[recovery_key] = timeout_value
+        return [2, message_id, 0, deadline_raw, timeout_value]
 
 
 def _patch_redis(mocker, redis: _FakeRedis) -> None:
@@ -298,6 +338,49 @@ async def test_commit_does_not_resurrect_cleared_state(mocker) -> None:
         reservation=reservation,
     )
     assert RedisKeys.verification(CHAT_ID, USER_ID) not in redis.values
+
+
+async def test_stale_clear_does_not_delete_new_session(mocker) -> None:
+    """旧协程持有的 clear token 不能删除 grace 后建立的新 session（P2.1 核心）。"""
+    redis = _FakeRedis()
+    _patch_redis(mocker, redis)
+
+    await _create_committed(redis, "old-session")
+    old_token = await VerificationService.capture_clear_token(CHAT_ID, USER_ID)
+
+    # 模拟旧状态被正常清除后，新 session 已完整建立
+    assert await VerificationService.clear_verification(CHAT_ID, USER_ID, expected=old_token)
+    redis.now_ms += 1_000
+    new = await _create_committed(redis, "new-session")
+    token_key = RedisKeys.captcha_token(CHAT_ID, USER_ID)
+    redis.values[token_key] = "hcaptcha:new-token"
+
+    # 旧协程持旧 token 再清理：CAS 失败（deadline 换新 session），不删新 session
+    assert not await VerificationService.clear_verification(CHAT_ID, USER_ID, expected=old_token)
+    assert redis.values[RedisKeys.verification(CHAT_ID, USER_ID)] == "math:4"
+    assert (
+        redis.values[RedisKeys.verification_deadline(CHAT_ID, USER_ID)]
+        == f"new-session:{new.deadline_ms}"
+    )
+    assert redis.values[RedisKeys.verification_type(CHAT_ID, USER_ID)] == "join"
+    assert redis.values[token_key] == "hcaptcha:new-token"
+
+
+async def test_nil_deadline_clear_does_not_delete_new_reservation(mocker) -> None:
+    """nil deadline 快照也不能删除随后写入的 initial pending reservation。"""
+    redis = _FakeRedis()
+    _patch_redis(mocker, redis)
+
+    empty_token = await VerificationService.capture_clear_token(CHAT_ID, USER_ID)
+    reservation = await reserve_initial_recovery(
+        CHAT_ID, USER_ID, "new-session", timeout_ms=120_000
+    )
+    assert reservation is not None
+
+    assert not await VerificationService.clear_verification(CHAT_ID, USER_ID, expected=empty_token)
+    assert (
+        redis.values[RedisKeys.verification_recovery(CHAT_ID, USER_ID)] == reservation.pending_value
+    )
 
 
 async def test_old_timeout_cannot_claim_new_session(mocker) -> None:
