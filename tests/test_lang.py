@@ -122,6 +122,16 @@ async def test_read_group_locale_queries_db(mocker) -> None:
     assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-Hant"
 
 
+async def test_read_group_locale_normalizes_historical_alias(mocker) -> None:
+    mocker.patch.object(
+        lang_module.GroupRepository,
+        "get",
+        new=AsyncMock(return_value=SimpleNamespace(locale="zh-HK")),
+    )
+
+    assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-Hant"
+
+
 async def test_read_group_locale_missing_group_returns_default(mocker) -> None:
     mocker.patch.object(lang_module.GroupRepository, "get", new=AsyncMock(return_value=None))
     assert await lang_module._read_group_locale(-100, _make_resolver()) == "zh-Hans"
@@ -132,6 +142,16 @@ async def test_read_user_locale_missing_record_returns_default(mocker) -> None:
         lang_module.UserSettingsRepository, "get_locale", new=AsyncMock(return_value=None)
     )
     assert await lang_module._read_user_locale(42, _make_resolver()) == "zh-Hans"
+
+
+async def test_read_user_locale_normalizes_historical_alias(mocker) -> None:
+    mocker.patch.object(
+        lang_module.UserSettingsRepository,
+        "get_locale",
+        new=AsyncMock(return_value="en-GB"),
+    )
+
+    assert await lang_module._read_user_locale(42, _make_resolver()) == "en"
 
 
 # ==================== on_lang_callback 主链与拒绝路径 ====================

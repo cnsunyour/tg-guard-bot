@@ -146,11 +146,10 @@ async def setup_fallback_commands(bot: Bot, localizer: BoundLocalizer) -> None:
 
 
 def _safe_localizer(translator: "Translator", locale: str, context: str) -> BoundLocalizer | None:
-    """启动恢复容错：不支持的 locale（DB 脏数据/历史值）跳过，不崩溃启动。
+    """启动恢复容错：无法归一的 locale 跳过，不崩溃启动。
 
     rehydrate 处理 DB 中已有的 locale，可能含 i18n 之前写入的 Telegram language_code
-    历史值（如 zh-CN）；translator 严格模式对此 raise。启动路径不容许因单个脏值失败，
-    跳过该 chat 保留全局兜底菜单（用户重新 /lang 可修正）。
+    历史值；已知别名由 translator 归一，真正未知的脏值在此跳过并保留全局兜底菜单。
     """
     try:
         return translator.for_locale(locale)

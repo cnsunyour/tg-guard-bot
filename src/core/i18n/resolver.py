@@ -8,6 +8,7 @@
 from loguru import logger
 
 from src.core.config import settings
+from src.core.i18n.locales import normalize_supported_locale
 from src.core.redis import RedisKeys, get_redis
 from src.repositories.group_repo import GroupRepository
 from src.repositories.user_settings_repo import UserSettingsRepository
@@ -95,8 +96,9 @@ class LocaleResolver:
         """解析群组消息语言：Redis → Group.locale → 默认语言"""
         cached = await self.cache.get_group(chat_id)
         if cached is not None:
-            if cached in self.supported_locales:
-                return cached
+            normalized = normalize_supported_locale(cached, self.supported_locales)
+            if normalized is not None:
+                return normalized
             logger.warning(f"群组语言缓存非法，重新查询 [群组:{chat_id}] [locale:{cached}]")
             await self.cache.invalidate_group(chat_id)
 
@@ -173,8 +175,9 @@ class LocaleResolver:
         if cached is not None:
             if cached == _NO_RECORD_SENTINEL:
                 return None, True
-            if cached in self.supported_locales:
-                return cached, True
+            normalized = normalize_supported_locale(cached, self.supported_locales)
+            if normalized is not None:
+                return normalized, True
             # 非法缓存值，清除后回源（与群缓存一致）
             logger.warning(f"用户语言缓存非法，重新查询 [用户:{user_id}] [locale:{cached}]")
             await self.cache.invalidate_user(user_id)
@@ -190,23 +193,24 @@ class LocaleResolver:
             await self.cache.set_user(user_id, _NO_RECORD_SENTINEL, nx=True)
             return None, True
 
-        # 非法值（空串或不支持的 locale）视为数据异常：按查询失败处理，不缓存，
-        # 避免把脏数据固化进缓存后反复降级。
-        if locale not in self.supported_locales:
+        normalized = normalize_supported_locale(locale, self.supported_locales)
+        if normalized is None:
+            # 无法归一的值视为数据异常：按查询失败处理且不缓存。
             logger.error(f"数据库包含不支持的用户 locale [用户:{user_id}] [locale:{locale}]")
             return None, False
 
-        # 合法显式偏好，用 NX 回填（不覆盖并发 /lang 的权威写入）
-        await self.cache.set_user(user_id, locale, nx=True)
-        return locale, True
+        # 使用规范 locale 回填，不覆盖并发 /lang 的权威写入。
+        await self.cache.set_user(user_id, normalized, nx=True)
+        return normalized, True
 
     def _normalize(self, locale: str | None, subject: str) -> str:
         if locale is None:
             return self.default_locale
-        if locale not in self.supported_locales:
+        normalized = normalize_supported_locale(locale, self.supported_locales)
+        if normalized is None:
             logger.error(
                 f"数据库包含不支持的 locale [{subject}] "
                 f"[locale:{locale}]，降级到 {self.default_locale}"
             )
             return self.default_locale
-        return locale
+        return normalized

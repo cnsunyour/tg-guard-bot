@@ -23,6 +23,7 @@ from loguru import logger
 from src.bot.commands import sync_chat_commands
 from src.core.cache import PermissionCache
 from src.core.config import settings
+from src.core.i18n.locales import normalize_supported_locale
 from src.core.i18n.resolver import LocaleResolver
 from src.core.i18n.translator import BoundLocalizer, Translator
 from src.repositories.group_repo import GroupRepository
@@ -103,10 +104,11 @@ async def _read_group_locale(chat_id: int, resolver: LocaleResolver) -> str:
     group = await GroupRepository.get(chat_id)
     if group is None:
         return resolver.default_locale
-    if group.locale not in resolver.supported_locales:
+    normalized = normalize_supported_locale(group.locale, resolver.supported_locales)
+    if normalized is None:
         logger.error(f"群组 DB locale 非法，降级默认 [群组:{chat_id}] [locale:{group.locale}]")
         return resolver.default_locale
-    return group.locale
+    return normalized
 
 
 async def _read_user_locale(user_id: int, resolver: LocaleResolver) -> str:
@@ -114,10 +116,11 @@ async def _read_user_locale(user_id: int, resolver: LocaleResolver) -> str:
     locale = await UserSettingsRepository.get_locale(user_id)
     if locale is None:
         return resolver.default_locale
-    if locale not in resolver.supported_locales:
+    normalized = normalize_supported_locale(locale, resolver.supported_locales)
+    if normalized is None:
         logger.error(f"用户 DB locale 非法，降级默认 [用户:{user_id}] [locale:{locale}]")
         return resolver.default_locale
-    return locale
+    return normalized
 
 
 async def _is_group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:

@@ -14,6 +14,7 @@ from loguru import logger
 
 from src.core.i18n.catalog import extract_placeholders
 from src.core.i18n.context import get_current_locale
+from src.core.i18n.locales import normalize_supported_locale
 
 # 复数分类：当前支持的语言仅需 one/other。未来加入俄语、阿拉伯语等
 # 复杂复数语言时，再切换为 CLDR 分类器。
@@ -112,8 +113,9 @@ class Translator:
         return self.t(f"{base_key}.{category}", locale=normalized, **variables)
 
     def _normalize_locale(self, locale: str) -> str:
-        if locale in self._catalogs:
-            return locale
+        normalized = normalize_supported_locale(locale, self._catalogs)
+        if normalized is not None:
+            return normalized
         message = f"不支持的 locale: {locale}"
         if self.strict:
             raise ValueError(message)

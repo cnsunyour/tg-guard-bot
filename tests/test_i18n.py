@@ -276,6 +276,60 @@ def test_translator_returns_requested_translation() -> None:
     assert _make_translator().t("common.hello", locale="en") == "Hello"
 
 
+@pytest.mark.parametrize(
+    ("locale", "expected"),
+    [
+        ("zh", "zh-Hans"),
+        ("zh-CN", "zh-Hans"),
+        ("zh-cn", "zh-Hans"),
+        ("zh-SG", "zh-Hans"),
+        ("zh-TW", "zh-Hant"),
+        ("zh-HK", "zh-Hant"),
+        ("zh-MO", "zh-Hant"),
+        ("zh-Hans-CN", "zh-Hans"),
+        ("zh-Hant-TW", "zh-Hant"),
+        ("ZH-hant-HK", "zh-Hant"),
+        ("en-US", "en"),
+        ("en-gb", "en"),
+        ("en-AU", "en"),  # en-* 通配
+        ("en-u-ca-gregory", "en"),  # BCP 47 Unicode 扩展
+        ("en-x-private", "en"),  # BCP 47 私有用段
+    ],
+)
+def test_translator_normalizes_supported_locale_aliases(locale: str, expected: str) -> None:
+    assert _make_translator(strict=True).for_locale(locale).locale == expected
+
+
+def test_translator_prefers_exact_catalog_before_alias() -> None:
+    translator = Translator(
+        {
+            "zh-Hans": {"common.hello": "默认简体"},
+            "zh-CN": {"common.hello": "大陆变体"},
+        },
+        strict=True,
+    )
+
+    assert translator.for_locale("zh-CN").locale == "zh-CN"
+
+
+def test_translator_strict_mode_rejects_unknown_chinese_variant() -> None:
+    with pytest.raises(ValueError, match="不支持的 locale"):
+        _make_translator(strict=True).for_locale("zh-Foo")
+
+
+@pytest.mark.parametrize("locale", ["en-中文", "zh-中文", "zh-Hant-中文", "zh-Foo"])
+def test_translator_strict_mode_rejects_malformed_locale(locale: str) -> None:
+    """Unicode 畸形与未知 zh-* 变体不被静默接受（isascii 拒 / 不兜底简体）。"""
+    with pytest.raises(ValueError, match="不支持的 locale"):
+        _make_translator(strict=True).for_locale(locale)
+
+
+def test_translator_rejects_zh_private_use_script_token() -> None:
+    """zh-CN-x-hant 不把私用段 hant 误判为 script（不映射 zh-Hant，按不支持处理）。"""
+    with pytest.raises(ValueError, match="不支持的 locale"):
+        _make_translator(strict=True).for_locale("zh-CN-x-hant")
+
+
 def test_translator_falls_back_to_default_when_requested_key_is_missing() -> None:
     translator = Translator({"zh-Hans": {"common.only": "默认文案"}, "en": {}}, strict=False)
 
@@ -365,6 +419,14 @@ async def test_resolver_group_returns_valid_cache_without_querying_db(
     group_get.assert_not_awaited()
 
 
+async def test_resolver_group_normalizes_locale_alias_from_cache(redis: AsyncMock, mocker) -> None:
+    redis.get.return_value = "zh-CN"
+    group_get = mocker.patch.object(GroupRepository, "get", new=AsyncMock())
+
+    assert await _make_resolver().for_group(-100) == "zh-Hans"
+    group_get.assert_not_awaited()
+
+
 async def test_resolver_group_invalid_cache_is_invalidated_and_reloaded(
     redis: AsyncMock, mocker
 ) -> None:
@@ -425,6 +487,35 @@ async def test_resolver_user_returns_explicit_supported_locale(
     )
 
     assert await _make_resolver().for_user(42) == locale
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("zh-TW", "zh-Hant"),
+        ("en-US", "en"),
+    ],
+)
+async def test_resolver_user_normalizes_db_alias_and_caches_canonical_locale(
+    stored: str,
+    expected: str,
+    redis: AsyncMock,
+    mocker,
+) -> None:
+    redis.get.return_value = None
+    mocker.patch.object(
+        UserSettingsRepository,
+        "get_locale",
+        new=AsyncMock(return_value=stored),
+    )
+
+    assert await _make_resolver().for_user(42) == expected
+    redis.set.assert_awaited_once_with(
+        RedisKeys.locale_user(42),
+        expected,
+        nx=True,
+        ex=_TEST_TTL_SECONDS,
+    )
 
 
 async def test_resolver_user_explicit_returns_none_for_missing_record(
