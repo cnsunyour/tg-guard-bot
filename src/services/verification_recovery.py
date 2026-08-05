@@ -307,19 +307,21 @@ redis.call("set", KEYS[1], undelivered_value, "PXAT", deadline_ms + grace_ms)
 return 1
 """.strip()
 
-# success claim：答案校验正确后原子消费 challenge，与 timeout claim 互斥。
+# verdict claim：答案裁决（成功或失败）后原子消费 challenge，与 timeout claim 互斥。
+# claim_success 与 claim_failure 共用此脚本——两者状态机操作完全一致（双 CAS + 删整个
+# session + 返回 flow），差异仅在调用语义（恢复权限 vs 处罚）与 handler 后续动作。
 #
 # 同时 CAS main 与 deadline：main CAS 防 timeout 已删/改主键；deadline CAS 防新 session
 # 恰好生成相同答案的 ABA（旧答案快照不能消费新会话）。expected_main/expected_deadline
 # 由调用方一次 MGET 同步读取，保证快照一致。
 #
-# flow 在 Lua 内校验后随成功结果原子返回；type 与其他 session 键一并删除，避免 handler
+# flow 在 Lua 内校验后随结果原子返回；type 与其他 session 键一并删除，避免 handler
 # 在 deadline+grace 边缘再次 GET type 时把 join_request 误判为 join（P2.5）。
 #
 # KEYS = [recovery, main, deadline, type, captcha_token]
 # ARGV = [expected_main, expected_deadline, grace_ms]
 # 返回 {1, flow}=已 claim；0=CAS 失败（timeout 接管 / session 切换 / 状态损坏 / grace 已过）。
-_CLAIM_SUCCESS_SCRIPT = """
+_CLAIM_VERDICT_SCRIPT = """
 local expected_main = ARGV[1]
 local expected_deadline = ARGV[2]
 local grace_ms = tonumber(ARGV[3])
@@ -678,24 +680,24 @@ async def release_recovery(
     return bool(released)
 
 
-async def claim_success(
+async def _claim_verdict(
     chat_id: int,
     user_id: int,
     expected_state_value: str,
     expected_deadline_value: str,
 ) -> VerificationFlow | None:
-    """答案正确后原子 claim 成功路径，与 timeout 互斥。
+    """答案裁决（成功/失败）原子 claim，与 timeout 互斥。
 
-    main 与 deadline 必须都与调用方 MGET 快照一致（双 CAS 防 ABA）。成功时原子删
-    recovery/main/deadline/type/captcha_token，并返回已校验的 flow。deadline/main 删除使后续
-    claim_timeout 在 GET 阶段即 stale，recovery 删除避免阻塞新 session reserve。
+    claim_success 与 claim_failure 共用此实现：双 CAS（main + deadline，防 ABA）+ flow 白名单
+    + grace 期，原子删 recovery/main/deadline/type/captcha_token，返回已校验的 flow。两条
+    verdict 路径与 timeout 三方互斥——任一先 claim 即删 main，其余在 GET 阶段 stale。
 
     None 表示 timeout 已接管、session 已切换、状态损坏或 grace 期已过。调用方必须
     视为 expired：不恢复权限，也不执行失败处罚（两条路径原子互斥，对方已处理）。
     """
     redis = get_redis()
     result = await redis.eval(
-        _CLAIM_SUCCESS_SCRIPT,
+        _CLAIM_VERDICT_SCRIPT,
         5,
         RedisKeys.verification_recovery(chat_id, user_id),
         RedisKeys.verification(chat_id, user_id),
@@ -709,7 +711,7 @@ async def claim_success(
     if result == 0:
         return None
     if not isinstance(result, list) or len(result) != 2 or int(result[0]) != 1:
-        raise RuntimeError("claim_success Lua 返回格式错误")
+        raise RuntimeError("claim verdict Lua 返回格式错误")
 
     flow = _as_text(result[1])
     if flow == "join":
@@ -718,7 +720,35 @@ async def claim_success(
         return "join_request"
 
     # Lua 已做白名单校验；协议漂移必须 fail closed。
-    raise RuntimeError("claim_success Lua 返回了非法 flow")
+    raise RuntimeError("claim verdict Lua 返回了非法 flow")
+
+
+async def claim_success(
+    chat_id: int,
+    user_id: int,
+    expected_state_value: str,
+    expected_deadline_value: str,
+) -> VerificationFlow | None:
+    """答案正确后原子 claim 成功路径（语义包装 ``_claim_verdict``）。
+
+    成功时 handler 据返回的 flow 恢复权限/批准加入；None 表示已过期，静默退出。
+    """
+    return await _claim_verdict(chat_id, user_id, expected_state_value, expected_deadline_value)
+
+
+async def claim_failure(
+    chat_id: int,
+    user_id: int,
+    expected_state_value: str,
+    expected_deadline_value: str,
+) -> VerificationFlow | None:
+    """答案错误后原子 claim 失败路径（语义包装 ``_claim_verdict``）。
+
+    先删 main 使后续 claim_timeout 在 GET 阶段即 stale，消除 ban/decline 经网络卡入 grace
+    期时 timeout 与 handler 重复处罚。handler 据返回的 flow 决定 decline（join_request）或
+    ban（join）；None 表示 timeout 已接管，调用方视为 expired 静默退出，不处罚。
+    """
+    return await _claim_verdict(chat_id, user_id, expected_state_value, expected_deadline_value)
 
 
 async def capture_verification_clear_token(

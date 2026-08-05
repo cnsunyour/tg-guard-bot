@@ -1212,10 +1212,8 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
         )
         localizer = get_translator().for_locale(private_locale)
 
-        # 一次 GET 校验 pending + 类型 + 答案（消除 TOCTOU，防跨类型旧消息重放）
+        # 一次 MGET 校验 pending + 类型 + 答案（消除 TOCTOU，防跨类型旧消息重放）
         verification_service = VerificationService()
-        # 副作用前捕获快照：wrong 路径 ban 经网络，clear 须用旧 session 快照防删新 session
-        clear_token = await verification_service.capture_clear_token(chat_id, user_id)
         answer_result = await verification_service.verify_choice_answer(
             chat_id, user_id, expected_type, answer
         )
@@ -1233,6 +1231,10 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                 bot, callback, chat_id, user_id, is_join_request=is_join_request
             )
         else:
+            # claim_failure 已原子消费整个 session（recovery/main/deadline/type/token 删除），
+            # flow 随 claim 返回，无需再 GET type 或事后 clear（防误删 grace 期后的新 session）
+            is_join_request = answer_result.flow == "join_request"
+
             # 类型差异化答错 toast（honeypot 陷阱单独处理）
             if prefix == "verify_honeypot" and answer == "trap":
                 await callback.answer(
@@ -1242,12 +1244,8 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
             else:
                 await callback.answer(localizer.t(_CHOICE_WRONG_KEYS[prefix]), show_alert=True)
 
-            # 根据验证类型决定踢出或拒绝
-            redis = get_redis()
-            type_key = RedisKeys.verification_type(chat_id, user_id)
-            verification_type = await redis.get(type_key)
-
-            if verification_type == "join_request":
+            # 根据 claim 返回的 flow 决定踢出或拒绝
+            if is_join_request:
                 # 拒绝加入请求并封禁1小时，防止立即重试
                 await decline_join_request(bot, chat_id, user_id)
                 await bot.ban_chat_member(
@@ -1262,9 +1260,6 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                     user_id=user_id,
                     until_date=datetime.now() + timedelta(hours=1),
                 )
-
-            # ✅ 清除验证状态（CAS 防旧协程删新 session；type 随 clear 原子删，不单独 DEL）
-            await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
             # 删除私聊中的验证消息
             with contextlib.suppress(Exception):
@@ -1498,7 +1493,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             message_id_str = waiting_session  # 旧格式：纯 message_id，无 session
             waiting_session = ""
 
-        # MGET(main, deadline, recovery) 快照：session 绑定校验 + wrong 路径 clear CAS
+        # MGET(main, deadline, recovery) 快照：绑定 waiting 与当前 captcha session
         clear_token = await verification_service.capture_clear_token(chat_id, user_id)
         deadline_value = clear_token.deadline_value or ""
         deadline_session = deadline_value.rpartition(":")[0] if ":" in deadline_value else ""
@@ -1527,7 +1522,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 return
 
         # 验证答案（expected_deadline_value 堵校验后到 verify_answer MGET 间的 session 切换；
-        # 正确时内部 claim_success 与 timeout 互斥）
+        # correct/wrong 均在内部原子 claim，与 timeout 互斥）
         answer_result = await verification_service.verify_answer(
             chat_id, user_id, text_input, expected_deadline_value=deadline_value
         )
@@ -1606,15 +1601,12 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 logger.info(f"用户 {user_id} 验证成功")
 
         else:
-            # 验证失败 - 清理所有相关键
+            # claim_failure 已原子消费主状态；waiting 是独立辅助键，仍需按值 CAS 清理
             await message.answer(localizer.t("verification.captcha.input_wrong.private.message"))
             await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
 
-            # 根据验证类型决定踢出或拒绝
-            type_key = RedisKeys.verification_type(chat_id, user_id)
-            verification_type = await redis.get(type_key)
-
-            if verification_type == "join_request":
+            # 根据 claim 原子返回的 flow 决定踢出或拒绝
+            if answer_result.flow == "join_request":
                 # 拒绝加入请求
                 await decline_join_request(bot, chat_id, user_id)
             else:
@@ -1628,9 +1620,6 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 # 删除验证消息
                 with contextlib.suppress(Exception):
                     await bot.delete_message(chat_id=user_id, message_id=int(message_id_str))
-
-            # ✅ 清除验证状态（CAS 防旧协程删新 session；type 随 clear 原子删）
-            await verification_service.clear_verification(chat_id, user_id, expected=clear_token)
 
             logger.info(f"用户 {user_id} 验证码验证失败")
 
@@ -1980,8 +1969,8 @@ async def handle_verification_success(
         chat = await bot.get_chat(chat_id)
         chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
 
-        # claim_success 已在 verify_choice_answer 内原子消费状态（main/deadline/token 删除，
-        # recovery=success）；此处不再 clear，避免误删后续新会话
+        # claim_success 已在 verify_choice_answer 内原子删除整个 session（含 recovery）；
+        # 此处不再 clear，避免误删 grace 期后建立的新会话
 
         # 删除私聊中的验证消息
         with contextlib.suppress(Exception):

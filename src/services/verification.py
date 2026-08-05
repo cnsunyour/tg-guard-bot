@@ -25,6 +25,7 @@ from src.services.verification_recovery import (
     VerificationClearToken,
     VerificationFlow,
     capture_verification_clear_token,
+    claim_failure,
     claim_success,
     clear_verification_state,
     commit_recovery,
@@ -57,9 +58,9 @@ type ChoiceAnswerResult = Literal["correct", "wrong", "expired"]
 
 @dataclass(frozen=True, slots=True)
 class VerifyResult:
-    """答案校验结果；仅 correct 携带 claim_success 原子返回的 flow。
+    """答案校验结果；correct/wrong 携带对应原子 claim 返回的 flow。
 
-    ``__post_init__`` 强制 correct 必须携带 flow、wrong/expired 不得携带 flow，
+    ``__post_init__`` 强制 correct/wrong 必须携带 flow、expired 不得携带 flow，
     捕获调用方的组合错误。
     """
 
@@ -69,8 +70,8 @@ class VerifyResult:
     def __post_init__(self) -> None:
         if self.flow is not None and self.flow not in ("join", "join_request"):
             raise ValueError("VerifyResult.flow 非法")
-        if (self.status == "correct") != (self.flow is not None):
-            raise ValueError("VerifyResult: correct 必须携带 flow，wrong/expired 不得携带 flow")
+        if (self.status in ("correct", "wrong")) != (self.flow is not None):
+            raise ValueError("VerifyResult: correct/wrong 必须携带 flow，expired 不得携带 flow")
 
 
 # captcha 刷新专用 CAS：generator 拆分后 refresh 不能用旧 SETEX（会在 clear/timeout 后复活
@@ -774,13 +775,13 @@ class VerificationService:
     async def verify_choice_answer(
         chat_id: int, user_id: int, expected_type: str, answer: str
     ) -> VerifyResult:
-        """读取答案快照，正确时用 Lua 原子 claim 成功路径（消除 TOCTOU）。
+        """读取答案快照，按答案对错用 Lua 原子 claim 成功/失败路径（消除 TOCTOU）。
 
         MGET 一次读 main + deadline 快照；类型不匹配视为过期消息（旧类型按钮点击当前
         挑战），避免跨类型旧消息碰巧通过当前挑战的 stored 答案。
 
-        correct 携带 claim_success 原子返回的 flow；expired 表示答案对但 claim 失败
-        （timeout 已接管或 session 切换），调用方静默退出。
+        correct/wrong 携带对应 claim 原子返回的 flow；expired 表示状态无效或 claim 失败
+        （timeout 已接管或 session 切换），调用方静默退出且不处罚。
         """
         redis = get_redis()
         stored_value, deadline_value = await redis.mget(
@@ -799,10 +800,13 @@ class VerificationService:
         if challenge_type != expected_type:
             return VerifyResult(status="expired")
 
-        if answer == "trap":
-            return VerifyResult(status="wrong")
-        if answer != correct_answer:
-            return VerifyResult(status="wrong")
+        if answer == "trap" or answer != correct_answer:
+            # 答案错误（含 honeypot trap）：原子 claim 失败路径，先删 main 使后续 timeout
+            # claim 在 GET 阶段即 stale，消除 ban/decline 经网络卡入 grace 期时重复处罚
+            flow = await claim_failure(chat_id, user_id, stored_value, deadline_value)
+            if flow is None:
+                return VerifyResult(status="expired")
+            return VerifyResult(status="wrong", flow=flow)
 
         # 答案正确：原子 claim（双 CAS 防 ABA，与 timeout 互斥）——成功返回 flow
         flow = await claim_success(chat_id, user_id, stored_value, deadline_value)
@@ -818,11 +822,11 @@ class VerificationService:
         *,
         expected_deadline_value: str,
     ) -> VerifyResult:
-        """验证 captcha 文本答案，正确时用 Lua 原子 claim 并返回 flow。
+        """验证 captcha 文本答案，按对错用 Lua 原子 claim 并返回 flow。
 
         仅服务 captcha 文本输入路径（大小写不敏感）。``expected_deadline_value`` 把 waiting
         快照绑定到本次 MGET，防 handler 校验 waiting 后 session 切换、再用新 main 判定旧输入。
-        结果语义同 verify_choice_answer。原 honeypot trap 分支随 button 验证移除。
+        结果语义同 verify_choice_answer。
         """
         redis = get_redis()
         stored_value, deadline_value = await redis.mget(
@@ -840,7 +844,11 @@ class VerificationService:
             return VerifyResult(status="expired")
 
         if answer.upper() != correct_answer.upper():
-            return VerifyResult(status="wrong")
+            # 答案错误：原子 claim 失败路径（同 verify_choice_answer，与 timeout 互斥）
+            flow = await claim_failure(chat_id, user_id, stored_value, deadline_value)
+            if flow is None:
+                return VerifyResult(status="expired")
+            return VerifyResult(status="wrong", flow=flow)
 
         # 答案正确：原子 claim（双 CAS 防 ABA，与 timeout 互斥）——成功返回 flow
         flow = await claim_success(chat_id, user_id, stored_value, deadline_value)

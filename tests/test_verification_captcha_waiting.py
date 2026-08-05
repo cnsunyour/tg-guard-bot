@@ -252,3 +252,65 @@ async def test_correct_captcha_uses_claimed_flow_without_getting_type(mocker) ->
     service.clear_verification.assert_not_awaited()
     redis.get.assert_has_awaits([call(waiting_user_key), call(waiting_key)])
     assert redis.get.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("flow", "should_decline"),
+    [
+        ("join", False),
+        ("join_request", True),
+    ],
+)
+async def test_wrong_captcha_uses_claimed_flow_without_getting_type_or_clearing(
+    mocker,
+    flow: str,
+    should_decline: bool,
+) -> None:
+    """wrong 保留 session 绑定快照，但不再用其清主状态或读取 type。"""
+    _patch_i18n(mocker)
+    waiting_key = RedisKeys.captcha_waiting(CHAT_ID, USER_ID)
+    waiting_user_key = RedisKeys.captcha_waiting_user(USER_ID)
+    waiting_value = "session-a:111"
+
+    redis = AsyncMock()
+
+    async def get_value(key: str) -> str | None:
+        return {
+            waiting_user_key: str(CHAT_ID),
+            waiting_key: waiting_value,
+        }.get(key)
+
+    redis.get.side_effect = get_value
+    redis.eval.return_value = 1
+    mocker.patch.object(handler, "get_redis", return_value=redis)
+
+    service = AsyncMock()
+    service.is_verification_pending.return_value = True
+    service.capture_clear_token.return_value = VerificationClearToken(
+        state_value="captcha:ABCD",
+        deadline_value=DEADLINE,
+        recovery_value=f"message:session-a:initial:{flow}:111",
+    )
+    service.verify_answer.return_value = VerifyResult(status="wrong", flow=flow)
+    mocker.patch.object(handler, "VerificationService", return_value=service)
+
+    decline = mocker.patch.object(handler, "decline_join_request", new=AsyncMock(return_value=True))
+    message = _message("wrong")
+    bot = AsyncMock()
+
+    await handler.on_captcha_text_input(message, bot)
+
+    service.capture_clear_token.assert_awaited_once_with(CHAT_ID, USER_ID)
+    service.verify_answer.assert_awaited_once_with(
+        CHAT_ID,
+        USER_ID,
+        "wrong",
+        expected_deadline_value=DEADLINE,
+    )
+    service.clear_verification.assert_not_awaited()
+    if should_decline:
+        decline.assert_awaited_once_with(bot, CHAT_ID, USER_ID)
+        bot.ban_chat_member.assert_not_awaited()
+    else:
+        decline.assert_not_awaited()
+        bot.ban_chat_member.assert_awaited_once()
