@@ -326,7 +326,7 @@ type SuccessMessageType = Literal[
 async def send_verification_success_message(
     bot: Bot,
     user_id: int,
-    chat_title: str,
+    chat_title: str | None,
     message_type: SuccessMessageType,
     *,
     group_chat_id: int,
@@ -340,7 +340,7 @@ async def send_verification_success_message(
     Args:
         bot: Bot 实例
         user_id: 用户 ID
-        chat_title: 群组标题（已 escape HTML）
+        chat_title: 群组标题原始文本（由本函数按 locale 转义并处理无标题回退）
         message_type: 结果类型（success / success_join_request / restore_failed /
             approve_failed）
         group_chat_id: 来源群 ID（必传，用于解析私聊 locale 并保证文案走 catalog）。
@@ -349,9 +349,12 @@ async def send_verification_success_message(
         user_id=user_id, group_chat_id=group_chat_id
     )
     localizer = get_translator().for_locale(locale)
+    safe_title = (
+        escape_html(chat_title) if chat_title else localizer.t("common.chat.untitled_group.label")
+    )
     text = localizer.t(
         f"verification.success.private.{message_type}.message",
-        chat_title=chat_title,
+        chat_title=safe_title,
     )
     await bot.send_message(
         chat_id=user_id,
@@ -516,7 +519,7 @@ async def send_verification_message(
     """
     # 获取群组信息（chat_title 传原始文本，render 层统一 escape_html）
     chat = await bot.get_chat(chat_id)
-    chat_title = chat.title or "群组"
+    chat_title = chat.title
 
     # 私聊验证消息按「用户偏好 → 来源群 locale」渲染
     locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
@@ -681,10 +684,10 @@ async def _handle_approved_join_request(bot: Bot, chat_id: int, user_id: int) ->
     """处理已通过验证后重新提交的加入请求：直接批准并私聊通知。"""
     logger.info(f"用户 {user_id} 已通过验证，直接批准加入请求")
 
-    chat_title = "群组"
+    chat_title: str | None = None
     with contextlib.suppress(Exception):
         chat = await bot.get_chat(chat_id)
-        chat_title = escape_html(chat.title) if chat.title else "群组"
+        chat_title = chat.title
 
     if await approve_join_request(bot, chat_id, user_id):
         logger.info(f"已批准用户 {user_id} 的加入请求（已验证用户）")
@@ -880,7 +883,7 @@ async def _handle_approved_user_join(
     user = event.new_chat_member.user
     logger.info(f"用户 {user_id} 已通过加入请求验证，跳过重复验证")
 
-    chat_title = escape_html(event.chat.title) if event.chat.title else "群组"
+    chat_title = event.chat.title
 
     # ✅ 恢复用户权限（内部含重试，失败时降级通知）
     if not await restore_user_permissions(bot, chat_id, user_id):
@@ -1567,10 +1570,10 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             await redis.setex(approved_key, 600, "1")
 
             # 获取群组标题（用于失败降级文案）
-            chat_title = "群组"
+            chat_title: str | None = None
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "群组"
+                chat_title = chat.title
 
             # 处理验证成功逻辑
             if is_join_request:
@@ -1906,7 +1909,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             )
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "群组"
+                chat_title = chat.title
                 await send_verification_success_message(
                     bot, user_id, chat_title, message_type, group_chat_id=chat_id
                 )
@@ -1925,7 +1928,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
                 # 恢复权限失败，通知用户稍后重试或联系管理员
                 with contextlib.suppress(Exception):
                     chat = await bot.get_chat(chat_id)
-                    chat_title = escape_html(chat.title) if chat.title else "群组"
+                    chat_title = chat.title
                     await send_verification_success_message(
                         bot,
                         user_id,
@@ -1941,7 +1944,7 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             # 在私聊中通知用户
             with contextlib.suppress(Exception):
                 chat = await bot.get_chat(chat_id)
-                chat_title = escape_html(chat.title) if chat.title else "群组"
+                chat_title = chat.title
                 await send_verification_success_message(
                     bot, user_id, chat_title, "success", group_chat_id=chat_id
                 )
@@ -1985,7 +1988,7 @@ async def handle_verification_success(
     try:
         # 获取群组信息
         chat = await bot.get_chat(chat_id)
-        chat_title = escape_html(chat.title) if chat.title else "群组"  # ✅ 安全修复：转义 HTML
+        chat_title = chat.title  # success helper 统一处理 HTML 转义与无标题回退
 
         # claim_success 已在 verify_choice_answer 内原子删除整个 session（含 recovery）；
         # 此处不再 clear，避免误删 grace 期后建立的新会话
@@ -2156,18 +2159,20 @@ async def handle_verification_timeout(
         # 3. 在私聊中通知用户（可选）
         with contextlib.suppress(Exception):
             chat = await bot.get_chat(chat_id)
-            chat_title = escape_html(chat.title) if chat.title else "群组"
+            chat_title = chat.title
             timeout_locale = await get_resolver().for_private_from_group(
                 user_id=user_id, group_chat_id=chat_id
             )
-            timeout_text = (
-                get_translator()
-                .for_locale(timeout_locale)
-                .t(
-                    "verification.timeout.private.join.message",
-                    chat_title=chat_title,
-                    timeout=timeout,
-                )
+            timeout_localizer = get_translator().for_locale(timeout_locale)
+            safe_chat_title = (
+                escape_html(chat_title)
+                if chat_title
+                else timeout_localizer.t("common.chat.untitled_group.label")
+            )
+            timeout_text = timeout_localizer.t(
+                "verification.timeout.private.join.message",
+                chat_title=safe_chat_title,
+                timeout=timeout,
             )
             await bot.send_message(
                 chat_id=user_id,
@@ -2358,18 +2363,20 @@ async def handle_join_request_timeout(
         # 4. 在私聊中通知用户
         with contextlib.suppress(Exception):
             chat = await bot.get_chat(chat_id)
-            chat_title = escape_html(chat.title) if chat.title else "群组"
+            chat_title = chat.title
             timeout_locale = await get_resolver().for_private_from_group(
                 user_id=user_id, group_chat_id=chat_id
             )
-            timeout_text = (
-                get_translator()
-                .for_locale(timeout_locale)
-                .t(
-                    "verification.timeout.private.join_request.message",
-                    chat_title=chat_title,
-                    timeout=timeout,
-                )
+            timeout_localizer = get_translator().for_locale(timeout_locale)
+            safe_chat_title = (
+                escape_html(chat_title)
+                if chat_title
+                else timeout_localizer.t("common.chat.untitled_group.label")
+            )
+            timeout_text = timeout_localizer.t(
+                "verification.timeout.private.join_request.message",
+                chat_title=safe_chat_title,
+                timeout=timeout,
             )
             await bot.send_message(
                 chat_id=user_id,

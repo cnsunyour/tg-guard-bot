@@ -149,7 +149,7 @@ def render_verification_challenge(
     timeout: int,
     *,
     username: str,
-    chat_title: str,
+    chat_title: str | None,
 ) -> RenderedChallenge:
     """按 locale 渲染验证挑战为可发送消息
 
@@ -157,7 +157,9 @@ def render_verification_challenge(
     / expression 在此统一 escape_html，调用方传原始文本。
     """
     safe_username = escape_html(username)
-    safe_chat_title = escape_html(chat_title)
+    safe_chat_title = (
+        escape_html(chat_title) if chat_title else localizer.t("common.chat.untitled_group.label")
+    )
 
     if isinstance(challenge, MathChallenge):
         if len(challenge.choices) != 4:

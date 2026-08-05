@@ -162,34 +162,34 @@ def parse_duration(text: str) -> int | None:
     return minutes
 
 
-def parse_spam_args(text: str) -> tuple[bool, str]:
+def parse_spam_args(text: str) -> tuple[bool, str | None]:
     """解析 /spam 命令参数
 
     支持格式:
-        /spam           -> (False, "垃圾消息")
+        /spam           -> (False, None)
         /spam 原因       -> (False, "原因")
-        /spam -d        -> (True, "垃圾消息")
+        /spam -d        -> (True, None)
         /spam -d 原因    -> (True, "原因")
 
     Args:
         text: 完整的命令文本
 
     Returns:
-        (delete_all: bool, reason: str)
+        (delete_all: bool, reason: str | None)
         - delete_all: 是否删除用户的所有消息
-        - reason: 原因文本
+        - reason: 用户提供的原因文本，无原因时为 None（展示层用默认 label）
     """
     parts = text.split(maxsplit=1)
 
     if len(parts) < 2:
-        return False, "垃圾消息"
+        return False, None
 
     args = parts[1].strip()
 
     # 检查 -d 参数（支持 "-d" 和 "-d原因" 格式）
     if args.startswith("-d"):
         remaining = args[2:].strip()
-        return True, remaining if remaining else "垃圾消息"
+        return True, remaining or None
 
     return False, args
 
@@ -1135,6 +1135,8 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
 
     # 解析参数：检测 -d 参数和原因
     delete_all, reason = parse_spam_args(message.text or "")
+    spam_reason_label = localizer.t("moderation.spam.reason.default.label")
+    reason_display = reason or spam_reason_label
 
     # 获取消息文本内容
     spam_text = ""
@@ -1173,7 +1175,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             chat_id=message.chat.id,
             user_id=target_user_id,
             operator_id=message.from_user.id,
-            reason=f"垃圾消息: {reason}",
+            reason=f"{spam_reason_label}: {reason}" if reason else spam_reason_label,
             revoke_messages=delete_all,
         )
 
@@ -1218,7 +1220,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             # 发送响应消息
             reason_line = localizer.t(
                 "moderation.common.reason.line",
-                reason=escape_html(reason),
+                reason=escape_html(reason_display),
             )
             deleted_all = localizer.t("moderation.common.deleted_all.suffix") if delete_all else ""
             reply = await message.answer(
@@ -1256,7 +1258,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 reported_user_id=target_user_id,
                 message_id=message.reply_to_message.message_id,
                 message_text=spam_text,
-                reason=reason,
+                reason=reason_display,
             )
 
             # 统计待处理举报数量
@@ -1297,7 +1299,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 + localizer.t(
                     "moderation.spam.report.submitted.message",
                     report_id=report.id,
-                    reason=escape_html(reason),
+                    reason=escape_html(reason_display),
                     pending_count=pending_count,
                 ),
                 reply_markup=keyboard,
