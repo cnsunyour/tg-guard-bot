@@ -145,6 +145,20 @@ async def setup_fallback_commands(bot: Bot, localizer: BoundLocalizer) -> None:
         await _set_scope_commands(bot, localizer, specs, scope, scope_name)
 
 
+def _safe_localizer(translator: "Translator", locale: str, context: str) -> BoundLocalizer | None:
+    """启动恢复容错：不支持的 locale（DB 脏数据/历史值）跳过，不崩溃启动。
+
+    rehydrate 处理 DB 中已有的 locale，可能含 i18n 之前写入的 Telegram language_code
+    历史值（如 zh-CN）；translator 严格模式对此 raise。启动路径不容许因单个脏值失败，
+    跳过该 chat 保留全局兜底菜单（用户重新 /lang 可修正）。
+    """
+    try:
+        return translator.for_locale(locale)
+    except ValueError:
+        logger.warning(f"跳过不支持的 locale [{context}] [locale:{locale}]，命令菜单保留全局兜底")
+        return None
+
+
 async def rehydrate_custom_locale_commands(
     bot: Bot,
     translator: "Translator",
@@ -166,7 +180,9 @@ async def rehydrate_custom_locale_commands(
         logger.error(f"读取非默认 locale 群组失败，跳过命令菜单恢复: {exc}")
         groups = []
     for chat_id, locale in groups:
-        await sync_chat_commands(bot, translator.for_locale(locale), chat_id=chat_id, is_group=True)
+        localizer = _safe_localizer(translator, locale, f"群组:{chat_id}")
+        if localizer is not None:
+            await sync_chat_commands(bot, localizer, chat_id=chat_id, is_group=True)
 
     try:
         users = await UserSettingsRepository.get_users_with_custom_locale(default_locale)
@@ -174,9 +190,9 @@ async def rehydrate_custom_locale_commands(
         logger.error(f"读取非默认 locale 用户失败，跳过命令菜单恢复: {exc}")
         users = []
     for user_id, locale in users:
-        await sync_chat_commands(
-            bot, translator.for_locale(locale), chat_id=user_id, is_group=False
-        )
+        localizer = _safe_localizer(translator, locale, f"用户:{user_id}")
+        if localizer is not None:
+            await sync_chat_commands(bot, localizer, chat_id=user_id, is_group=False)
 
     if groups or users:
         logger.info(f"已恢复非默认 locale 命令菜单 [群组:{len(groups)}] [用户:{len(users)}]")

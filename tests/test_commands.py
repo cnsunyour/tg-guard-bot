@@ -255,3 +255,36 @@ async def test_rehydrate_db_failure_does_not_block(mocker) -> None:
     await rehydrate_custom_locale_commands(bot, translator, "zh-Hans")
     # 用户查询成功 → 仍 sync 用户（1 scope）
     assert bot.set_my_commands.await_count == 1
+
+
+async def test_rehydrate_skips_unsupported_locale(mocker) -> None:
+    """DB 历史脏 locale（如 i18n 前写入的 zh-CN）跳过，不崩溃启动。
+
+    rehydrate 处理 DB 已有值，translator 严格模式对不支持 locale raise；启动路径不容失败，
+    跳过该 chat 保留全局兜底（用户重新 /lang 可修正）。
+    """
+    bot = MagicMock()
+    bot.set_my_commands = AsyncMock()
+    translator = MagicMock()
+
+    def for_locale_side_effect(loc: str):
+        if loc not in ("zh-Hans", "zh-Hant", "en"):
+            raise ValueError(f"不支持的 locale: {loc}")
+        return _real_localizer(loc)
+
+    translator.for_locale = MagicMock(side_effect=for_locale_side_effect)
+
+    mocker.patch(
+        "src.repositories.group_repo.GroupRepository.get_groups_with_custom_locale",
+        new=AsyncMock(return_value=[(-100, "zh-CN"), (-200, "en")]),
+    )
+    mocker.patch(
+        "src.repositories.user_settings_repo.UserSettingsRepository.get_users_with_custom_locale",
+        new=AsyncMock(return_value=[(12345, "zh-CN"), (67890, "zh-Hant")]),
+    )
+
+    # 不抛异常（zh-CN 跳过）
+    await rehydrate_custom_locale_commands(bot, translator, "zh-Hans")
+
+    # zh-CN 群/用户跳过；en 群（2 scope：成员+管理员）+ zh-Hant 用户（1 scope）= 3 次
+    assert bot.set_my_commands.await_count == 3
