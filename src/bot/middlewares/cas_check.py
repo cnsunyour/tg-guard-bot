@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.core.cache import PermissionCache
 from src.core.config import settings
+from src.core.i18n import BoundLocalizer
 from src.core.utils import auto_delete_message, masked_mention_html, should_skip_sender
 from src.repositories.audit_repo import AuditRepository
 from src.services.cas_service import get_cas_service
@@ -56,6 +57,7 @@ class CASCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         bot: Bot = data["bot"]
+        localizer: BoundLocalizer = data["localizer"]
 
         # 跳过 Telegram 系统服务账号（777000 等）和 Bot 自身
         # 避免对关联频道同步转发等服务消息发起无谓的 CAS / 状态查询
@@ -78,6 +80,7 @@ class CASCheckMiddleware(BaseMiddleware):
             if cas_result.is_banned:
                 await self._handle_problematic_user(
                     bot=bot,
+                    localizer=localizer,
                     chat_id=chat_id,
                     user_id=user_id,
                     user=event.from_user,
@@ -96,6 +99,7 @@ class CASCheckMiddleware(BaseMiddleware):
             if status_result.is_problematic:
                 await self._handle_problematic_user(
                     bot=bot,
+                    localizer=localizer,
                     chat_id=chat_id,
                     user_id=user_id,
                     user=event.from_user,
@@ -111,6 +115,7 @@ class CASCheckMiddleware(BaseMiddleware):
     async def _handle_problematic_user(
         self,
         bot: Bot,
+        localizer: BoundLocalizer,
         chat_id: int,
         user_id: int,
         user: User,
@@ -123,6 +128,7 @@ class CASCheckMiddleware(BaseMiddleware):
 
         Args:
             bot: Bot 实例
+            localizer: 当前 Update 绑定的本地化器
             chat_id: 群组 ID
             user_id: 用户 ID
             user: 用户对象（用于生成脱敏的群内通知）
@@ -159,7 +165,7 @@ class CASCheckMiddleware(BaseMiddleware):
 
         # 发送群内通知
         try:
-            notify_text = self._get_notification_text(user, reason, details)
+            notify_text = self._get_notification_text(localizer, user, reason, details)
             notify_msg = await bot.send_message(
                 chat_id=chat_id,
                 text=notify_text,
@@ -174,13 +180,23 @@ class CASCheckMiddleware(BaseMiddleware):
             f"[原因:{reason}] [详情:{details}] [缓存:{cached}]"
         )
 
-    def _get_notification_text(self, user: User, reason: str, details: dict[str, Any]) -> str:
+    def _get_notification_text(
+        self,
+        localizer: BoundLocalizer,
+        user: User,
+        reason: str,
+        details: dict[str, Any],
+    ) -> str:
         """生成通知文本
 
+        复用 verification.join.* 的 CAS/状态封禁文案（与入群验证通知一致）。
+        user 经 masked_mention_html 脱敏为安全 HTML 片段，作 {user} 插入不二次转义。
+
         Args:
+            localizer: 当前 Update 绑定的本地化器
             user: 用户对象（显示名将脱敏，防止 spammer 借用户名投广告）
-            reason: 原因
-            details: 详细信息
+            reason: 原因（cas_blacklist / user_status_*）
+            details: 详细信息（user_status 携带 status）
 
         Returns:
             通知文本
@@ -188,17 +204,17 @@ class CASCheckMiddleware(BaseMiddleware):
         user_link = masked_mention_html(user)
 
         if reason == "cas_blacklist":
-            return f"🚫 {user_link} 在 CAS 黑名单中，已被自动封禁。"
+            return localizer.t("verification.join.cas_ban.notify", user=user_link)
 
-        if reason.startswith("user_status_"):
-            status = details.get("status", "unknown")
-            status_map = {
-                "restricted": "被 Telegram 限制",
-                "scam": "被标记为诈骗账号",
-                "fake": "被标记为虚假账号",
-                "deleted": "已删除账号",
-            }
-            status_text = status_map.get(status, status)
-            return f"🚫 {user_link} {status_text}，已被自动封禁。"
-
-        return f"🚫 {user_link} 已被自动封禁（{reason}）。"
+        # user_status_* 与未知 reason 统一走 status_ban.notify（不展示裸 reason）
+        status = (
+            details.get("status", "unknown") if reason.startswith("user_status_") else "unknown"
+        )
+        if status not in ("restricted", "scam", "fake", "deleted"):
+            status = "unknown"
+        status_text = localizer.t(f"verification.join.status_ban.{status}.label")
+        return localizer.t(
+            "verification.join.status_ban.notify",
+            user=user_link,
+            status=status_text,
+        )

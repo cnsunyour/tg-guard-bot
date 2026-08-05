@@ -1,13 +1,16 @@
 """速率限制中间件 - 防止 DoS 攻击"""
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 from loguru import logger
 
 from src.core.redis import get_redis
+
+if TYPE_CHECKING:
+    from src.core.i18n import BoundLocalizer
 
 
 class ThrottleMiddleware(BaseMiddleware):
@@ -38,6 +41,8 @@ class ThrottleMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         """处理速率限制"""
+        localizer: BoundLocalizer = data["localizer"]
+
         # 获取用户 ID
         if isinstance(event, Message):
             user_id = event.from_user.id if event.from_user else None
@@ -74,17 +79,16 @@ class ThrottleMiddleware(BaseMiddleware):
             if count >= self.rate_limit:
                 # 超过速率限制
                 logger.warning(
-                    f"速率限制触发 [用户:{user_id}] [群组:{chat_id}] "
-                    f"计数:{count}/{self.rate_limit}"
+                    f"速率限制触发 [用户:{user_id}] [群组:{chat_id}] 计数:{count}/{self.rate_limit}"
                 )
 
                 # ✅ P0-3: 发送警告消息
-                # Message 类型不支持 show_alert 参数
+                # Message 类型不支持 show_alert 参数；callback toast 另用 key（长度限制惯例）
                 if isinstance(event, Message):
-                    await event.answer("⚠️ 操作过于频繁，请稍后再试")
+                    await event.answer(localizer.t("middleware.throttle.rate_limited.message"))
                 elif isinstance(event, CallbackQuery):
                     await event.answer(
-                        "⚠️ 操作过于频繁，请稍后再试",
+                        localizer.t("middleware.throttle.rate_limited.toast"),
                         show_alert=True,
                     )
 

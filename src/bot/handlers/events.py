@@ -6,6 +6,7 @@ from aiogram.filters import ADMINISTRATOR, KICKED, MEMBER, ChatMemberUpdatedFilt
 from aiogram.types import ChatMemberUpdated
 from loguru import logger
 
+from src.core.i18n import BoundLocalizer
 from src.repositories.group_repo import GroupRepository
 
 router = Router(name="events")
@@ -16,7 +17,9 @@ router.my_chat_member.filter(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROU
 
 @router.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=KICKED >> MEMBER))
 @router.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=KICKED >> ADMINISTRATOR))
-async def on_bot_added_to_group(event: ChatMemberUpdated, bot: Bot) -> None:
+async def on_bot_added_to_group(
+    event: ChatMemberUpdated, bot: Bot, localizer: BoundLocalizer
+) -> None:
     """处理 Bot 被添加到群组的事件"""
     chat = event.chat
     chat_id = chat.id
@@ -33,10 +36,7 @@ async def on_bot_added_to_group(event: ChatMemberUpdated, bot: Bot) -> None:
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text="✅ <b>欢迎使用 Telegram Guard Bot</b>\n\n"
-                "此群组已在授权列表中，Bot 已准备就绪！\n\n"
-                "📋 使用 /help 查看可用命令\n"
-                "⚙️ 使用 /verifyconfig 查看当前配置",
+                text=localizer.t("events.bot_added.welcome.message"),
             )
         except Exception as e:
             logger.error(f"发送欢迎消息失败: {e}")
@@ -48,9 +48,7 @@ async def on_bot_added_to_group(event: ChatMemberUpdated, bot: Bot) -> None:
             # 发送提示消息
             await bot.send_message(
                 chat_id=chat_id,
-                text="⚠️ <b>此群组未在授权列表中</b>\n\n"
-                "Bot 将自动退出。如需使用，请联系 Bot 管理员添加群组白名单。\n\n"
-                f"群组 ID: <code>{chat_id}</code>",
+                text=localizer.t("common.group.unauthorized.message", chat_id=chat_id),
             )
         except Exception as e:
             logger.debug(f"发送退出提示消息失败: {e}")
