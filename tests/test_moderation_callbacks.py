@@ -15,19 +15,19 @@ from src.bot.handlers import moderation
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("handler", "callback_data", "process_name", "denial_text"),
+    ("handler", "callback_data", "process_name", "denial_key"),
     [
         (
             moderation.on_report_approve,
             "report_approve:123",
             "_process_report_approval",
-            "❌ 只有管理员可以接受举报",
+            "moderation.report.callback.admin_only.approve.toast",
         ),
         (
             moderation.on_report_reject,
             "report_reject:123",
             "_process_report_rejection",
-            "❌ 只有管理员可以拒绝举报",
+            "moderation.report.callback.admin_only.reject.toast",
         ),
     ],
 )
@@ -35,7 +35,7 @@ async def test_report_callback_rejects_non_admin_clicker(
     handler,
     callback_data,
     process_name,
-    denial_text,
+    denial_key,
 ) -> None:
     """权限检查必须使用点击者 ID，拒绝后不得执行举报处理"""
     chat_id = -1001234567890
@@ -58,18 +58,17 @@ async def test_report_callback_rejects_non_admin_clicker(
     bot = AsyncMock()
     permission_check = AsyncMock(return_value=False)
     process = AsyncMock()
+    localizer = MagicMock()
+    localizer.t = MagicMock(side_effect=lambda key, **kw: f"<{key}>")
 
     with (
         patch.object(moderation, "check_admin_permission_strict", new=permission_check),
         patch.object(moderation, process_name, new=process),
     ):
-        if handler is moderation.on_report_approve:
-            # on_report_approve 在 3c12 新增 localizer 形参（消费 ban 失败 code）
-            await handler(callback, bot, MagicMock())
-        else:
-            await handler(callback, bot)
+        # 3D 后两个 callback handler 都注入 localizer（denial toast 走 catalog）
+        await handler(callback, bot, localizer)
 
     # 核心断言：权限检查用的是点击者 ID，而非 Bot 的 ID
     permission_check.assert_awaited_once_with(bot, chat_id, clicker_id)
-    callback.answer.assert_awaited_once_with(denial_text, show_alert=True)
+    callback.answer.assert_awaited_once_with(f"<{denial_key}>", show_alert=True)
     process.assert_not_awaited()
