@@ -42,6 +42,10 @@ def _prepared() -> PreparedChallenge:
 
 def _patch_common(mocker, reservation, send_side_effect=None, send_return=None):
     """mock _start_initial_verification 的全部外部依赖。"""
+    resolver = AsyncMock()
+    resolver.for_private_from_group.return_value = "zh-Hant"
+    mocker.patch.object(handler, "get_resolver", return_value=resolver)
+
     service = AsyncMock()
     service.commit_challenge.return_value = True
     mocker.patch.object(handler, "VerificationService", return_value=service)
@@ -75,6 +79,9 @@ async def test_initial_send_promotes_real_message_id(mocker) -> None:
     result = await handler._start_initial_verification(bot, group, -100, 42, "Alice", "join")
 
     assert result == "sent"
+    handler.prepare_verification_challenge.assert_awaited_once_with(
+        group, -100, 42, locale="zh-Hant"
+    )
     promote.assert_awaited_once_with(reservation, "join", 9876)
 
 

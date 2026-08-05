@@ -122,11 +122,12 @@ https://your-site.pages.dev/api/config?provider=friendly&key_index=0
 | `user_id` | ✅ | Telegram 用户 ID | `987654321` |
 | `token` | ✅ | 一次性验证 token | `abc123...` |
 | `key_index` | ⬜ | Friendly Captcha key 索引（默认 0） | `0`/`1`/`2` |
+| `locale` | ⬜ | 页面语言（默认 `zh-Hans`） | `zh-Hans`/`zh-Hant`/`en` |
 
 ### 示例 URL
 
 ```
-https://your-site.pages.dev/?provider=friendly&chat_id=123&user_id=456&token=abc123&key_index=0
+https://your-site.pages.dev/friendly.html?chat_id=123&user_id=456&token=abc123&key_index=0&locale=zh-Hant
 ```
 
 ## API 端点

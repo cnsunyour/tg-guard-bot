@@ -473,9 +473,20 @@ async def check_user_spam_info(
     return False  # 通过检测
 
 
-async def prepare_verification_challenge(group, chat_id: int, user_id: int) -> PreparedChallenge:
+async def prepare_verification_challenge(
+    group,
+    chat_id: int,
+    user_id: int,
+    *,
+    locale: str,
+) -> PreparedChallenge:
     """按群配置执行纯 prepare；random 在 service 内解析为具体类型，不写正式 Redis 键。"""
-    return await VerificationService.prepare_challenge(group.verification_type, chat_id, user_id)
+    return await VerificationService.prepare_challenge(
+        group.verification_type,
+        chat_id,
+        user_id,
+        locale=locale,
+    )
 
 
 async def send_verification_message(
@@ -557,6 +568,9 @@ async def _start_initial_verification(
     verification_service = VerificationService()
     session_id = new_session_id()
     timeout = group.verification_timeout
+    private_locale = await get_resolver().for_private_from_group(
+        user_id=user_id, group_chat_id=chat_id
+    )
 
     reservation = await reserve_initial_recovery(chat_id, user_id, session_id, timeout * 1000)
     if reservation is None:
@@ -565,7 +579,9 @@ async def _start_initial_verification(
         return "busy"
 
     try:
-        prepared = await prepare_verification_challenge(group, chat_id, user_id)
+        prepared = await prepare_verification_challenge(
+            group, chat_id, user_id, locale=private_locale
+        )
         committed = await verification_service.commit_challenge(
             chat_id,
             user_id,
@@ -1389,7 +1405,9 @@ async def on_captcha_refresh(callback: CallbackQuery, bot: Bot) -> None:
             )
             return
 
-        prepared = await verification_service.prepare_challenge("captcha", chat_id, user_id)
+        prepared = await verification_service.prepare_challenge(
+            "captcha", chat_id, user_id, locale=private_locale
+        )
         if not isinstance(prepared.challenge, CaptchaChallenge):
             raise TypeError("captcha prepare 返回了错误的 challenge 类型")
         challenge = prepared.challenge
@@ -2413,8 +2431,10 @@ async def handle_verification_start(
         return
     user_id = message.from_user.id
 
-    locale = await get_resolver().for_private_from_group(user_id=user_id, group_chat_id=chat_id)
-    localizer = get_translator().for_locale(locale)
+    private_locale = await get_resolver().for_private_from_group(
+        user_id=user_id, group_chat_id=chat_id
+    )
+    localizer = get_translator().for_locale(private_locale)
     chat_title = str(chat_id)
     with contextlib.suppress(Exception):
         chat = await bot.get_chat(chat_id)
@@ -2463,7 +2483,9 @@ async def handle_verification_start(
             await _answer("rejoin")
             return
         if recoverable:
-            await _recover_verification_challenge(message, bot, chat_id, user_id, flow, _answer)
+            await _recover_verification_challenge(
+                message, bot, chat_id, user_id, flow, private_locale, _answer
+            )
             return
         if branch == "pending":
             await _answer("recovering")
@@ -2487,7 +2509,9 @@ async def handle_verification_start(
         return
     # join_request + left/restricted(非 member)：合法申请中
     if recoverable:
-        await _recover_verification_challenge(message, bot, chat_id, user_id, flow, _answer)
+        await _recover_verification_challenge(
+            message, bot, chat_id, user_id, flow, private_locale, _answer
+        )
         return
     if branch == "pending":
         await _answer("recovering")
@@ -2505,6 +2529,7 @@ async def _recover_verification_challenge(
     chat_id: int,
     user_id: int,
     flow: VerificationFlow,
+    private_locale: str,
     _answer: Callable[..., Awaitable[object]],
 ) -> None:
     """恢复链路：reserve_recovery → prepare → commit → send → promote。
@@ -2542,7 +2567,9 @@ async def _recover_verification_challenge(
         return
 
     try:
-        prepared = await verification_service.prepare_challenge(challenge_type, chat_id, user_id)
+        prepared = await verification_service.prepare_challenge(
+            challenge_type, chat_id, user_id, locale=private_locale
+        )
         committed = await commit_recovery(
             reservation,
             state_value=prepared.state_value,

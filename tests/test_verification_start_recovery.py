@@ -64,7 +64,7 @@ def _patch_recovery(
     mocker,
     *,
     reserve_return,
-) -> None:
+) -> AsyncMock:
     """mock verification_recovery 函数 + VerificationService + send_verification_message。"""
     mocker.patch.object(handler, "new_revision_id", return_value="rev-1")
     mocker.patch.object(handler, "reserve_recovery", new=AsyncMock(return_value=reserve_return))
@@ -81,6 +81,7 @@ def _patch_recovery(
         "send_verification_message",
         new=AsyncMock(return_value=MagicMock(message_id=9999)),
     )
+    return service
 
 
 def _mock_bot(member: MagicMock) -> AsyncMock:
@@ -127,11 +128,12 @@ async def test_join_member_undelivered_recovers(mocker) -> None:
         deadline_ms=int(time.time() * 1000) + 120_000,
         expected_state_value="math:4",
     )
-    _patch_recovery(mocker, reserve_return=reservation)
+    service = _patch_recovery(mocker, reserve_return=reservation)
 
     await handler.handle_verification_start(message, bot, CHAT_ID, "join")
 
     handler.reserve_recovery.assert_awaited_once_with(CHAT_ID, USER_ID, "rev-1")
+    service.prepare_challenge.assert_awaited_once_with("math", CHAT_ID, USER_ID, locale="zh-Hans")
     handler.promote_recovery.assert_awaited_once()
     handler.send_verification_message.assert_awaited_once()
 

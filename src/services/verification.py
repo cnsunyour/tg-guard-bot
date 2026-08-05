@@ -12,6 +12,7 @@ import io
 import secrets
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import quote
 
 from aiogram.types import BufferedInputFile
 from captcha.image import ImageCaptcha
@@ -510,7 +511,9 @@ class VerificationService:
         )
 
     @staticmethod
-    def _prepare_turnstile_challenge(chat_id: int, user_id: int) -> PreparedChallenge:
+    def _prepare_turnstile_challenge(
+        chat_id: int, user_id: int, *, locale: str
+    ) -> PreparedChallenge:
         """纯生成 Turnstile WebApp 挑战（token 由 commit 同事务写入 captcha_token）。"""
         from src.core.config import settings
 
@@ -526,6 +529,7 @@ class VerificationService:
             f"{settings.captcha_webapp_url}/turnstile.html"
             f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
+            f"&locale={quote(locale, safe='')}"
         )
 
         return PreparedChallenge(
@@ -535,7 +539,9 @@ class VerificationService:
         )
 
     @staticmethod
-    def _prepare_friendly_challenge(chat_id: int, user_id: int) -> PreparedChallenge:
+    def _prepare_friendly_challenge(
+        chat_id: int, user_id: int, *, locale: str
+    ) -> PreparedChallenge:
         """纯生成 Friendly Captcha 挑战。
 
         原实现用 Redis INCR 做 key 轮换，但 INCR 是 Redis 写，与「prepare 无副作用」冲突。
@@ -554,6 +560,7 @@ class VerificationService:
             f"{settings.captcha_webapp_url}/friendly.html"
             f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}&key_index={key_index}"
+            f"&locale={quote(locale, safe='')}"
         )
 
         return PreparedChallenge(
@@ -563,7 +570,9 @@ class VerificationService:
         )
 
     @staticmethod
-    def _prepare_hcaptcha_challenge(chat_id: int, user_id: int) -> PreparedChallenge:
+    def _prepare_hcaptcha_challenge(
+        chat_id: int, user_id: int, *, locale: str
+    ) -> PreparedChallenge:
         """纯生成 hCaptcha 挑战。"""
         from src.core.config import settings
 
@@ -575,6 +584,7 @@ class VerificationService:
             f"{settings.captcha_webapp_url}/hcaptcha.html"
             f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
+            f"&locale={quote(locale, safe='')}"
         )
 
         return PreparedChallenge(
@@ -584,7 +594,9 @@ class VerificationService:
         )
 
     @staticmethod
-    def _prepare_mtcaptcha_challenge(chat_id: int, user_id: int) -> PreparedChallenge:
+    def _prepare_mtcaptcha_challenge(
+        chat_id: int, user_id: int, *, locale: str
+    ) -> PreparedChallenge:
         """纯生成 MTCaptcha 挑战。"""
         from src.core.config import settings
 
@@ -596,6 +608,7 @@ class VerificationService:
             f"{settings.captcha_webapp_url}/mtcaptcha.html"
             f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
+            f"&locale={quote(locale, safe='')}"
         )
 
         return PreparedChallenge(
@@ -605,7 +618,7 @@ class VerificationService:
         )
 
     @staticmethod
-    def _prepare_altcha_challenge(chat_id: int, user_id: int) -> PreparedChallenge:
+    def _prepare_altcha_challenge(chat_id: int, user_id: int, *, locale: str) -> PreparedChallenge:
         """纯生成 ALTCHA 挑战。"""
         from src.core.config import settings
 
@@ -617,6 +630,7 @@ class VerificationService:
             f"{settings.captcha_webapp_url}/altcha.html"
             f"?chat_id={chat_id}&user_id={user_id}"
             f"&token={verify_token}"
+            f"&locale={quote(locale, safe='')}"
         )
 
         return PreparedChallenge(
@@ -677,10 +691,13 @@ class VerificationService:
         challenge_type: str,
         chat_id: int,
         user_id: int,
+        *,
+        locale: str,
     ) -> PreparedChallenge:
         """纯 prepare：按 challenge_type 生成展示数据 + 待提交状态，不写正式 Redis 键。
 
         random 在此解析为具体类型，主键永远存具体前缀（math:* 等），不存 random:*。
+        ``locale`` 仅 WebApp 类型用于拼接页面语言参数（非 WebApp 类型忽略）。
         """
         concrete = VerificationService.resolve_challenge_type(challenge_type)
 
@@ -700,16 +717,16 @@ class VerificationService:
         if concrete == "puzzle":
             return VerificationService._prepare_puzzle_challenge()
 
-        # WebApp 类型（构建 URL 需要 chat_id/user_id）
+        # WebApp 类型（构建 URL 需要 chat_id/user_id；locale 注入页面语言）
         if concrete == "turnstile":
-            return VerificationService._prepare_turnstile_challenge(chat_id, user_id)
+            return VerificationService._prepare_turnstile_challenge(chat_id, user_id, locale=locale)
         if concrete == "friendly":
-            return VerificationService._prepare_friendly_challenge(chat_id, user_id)
+            return VerificationService._prepare_friendly_challenge(chat_id, user_id, locale=locale)
         if concrete == "hcaptcha":
-            return VerificationService._prepare_hcaptcha_challenge(chat_id, user_id)
+            return VerificationService._prepare_hcaptcha_challenge(chat_id, user_id, locale=locale)
         if concrete == "mtcaptcha":
-            return VerificationService._prepare_mtcaptcha_challenge(chat_id, user_id)
-        return VerificationService._prepare_altcha_challenge(chat_id, user_id)
+            return VerificationService._prepare_mtcaptcha_challenge(chat_id, user_id, locale=locale)
+        return VerificationService._prepare_altcha_challenge(chat_id, user_id, locale=locale)
 
     @staticmethod
     async def commit_challenge(
