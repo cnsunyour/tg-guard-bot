@@ -1219,7 +1219,7 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
         answer_result = await verification_service.verify_choice_answer(
             chat_id, user_id, expected_type, answer
         )
-        if answer_result == "expired":
+        if answer_result.status == "expired":
             await callback.answer(
                 localizer.t("verification.callback.expired.toast"), show_alert=False
             )
@@ -1227,12 +1227,11 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
             return
 
-        if answer_result == "correct":
-            redis = get_redis()
-            type_key = RedisKeys.verification_type(chat_id, user_id)
-            is_join_request = (await redis.get(type_key)) == "join_request"
-            await redis.delete(type_key)
-            await handle_verification_success(bot, callback, chat_id, user_id, is_join_request)
+        if answer_result.status == "correct":
+            is_join_request = answer_result.flow == "join_request"
+            await handle_verification_success(
+                bot, callback, chat_id, user_id, is_join_request=is_join_request
+            )
         else:
             # 类型差异化答错 toast（honeypot 陷阱单独处理）
             if prefix == "verify_honeypot" and answer == "trap":
@@ -1533,22 +1532,16 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
             chat_id, user_id, text_input, expected_deadline_value=deadline_value
         )
 
-        if answer_result == "expired":
+        if answer_result.status == "expired":
             # timeout 已 claim 或 session 已切换：不恢复权限，也不执行失败处罚
             await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
             return
 
-        if answer_result == "correct":
-            # claim_success 已清 main/deadline/token；这里清 captcha 输入辅助键
+        if answer_result.status == "correct":
+            # claim_success 已清 recovery/main/deadline/type/token；这里清 captcha 输入辅助键
             await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
 
-            # 检查验证类型（claim 保留 type 供此处读取 flow）
-            type_key = RedisKeys.verification_type(chat_id, user_id)
-            verification_type = await redis.get(type_key)
-            is_join_request = verification_type == "join_request"
-
-            # 清除类型标记
-            await redis.delete(type_key)
+            is_join_request = answer_result.flow == "join_request"
 
             # 删除验证消息
             with contextlib.suppress(Exception):
@@ -1855,13 +1848,22 @@ async def on_webapp_data(message: Message, bot: Bot) -> None:
             await send_error("verification.webapp.error.invalid_token.private.message")
             return
 
-        # 4. 检查验证类型；token/type 由下面的 CAS clear 原子消费（不单独 DEL，防删新 session）
+        # WebApp 不走 claim_success。type/main/deadline 使用相同绝对过期时间，且 Telegram
+        # 副作用受下面的 CAS clear 成功门控，因此没有成功 claim 后再 GET 的 TTL 窗口。
+        # 但 type 独立损坏时必须 fail closed，不能默认走 direct-join 权限恢复。
         type_key = RedisKeys.verification_type(chat_id, user_id)
         verification_type = await redis.get(type_key)
+        if verification_type not in ("join", "join_request"):
+            logger.info(
+                f"忽略 flow 缺失或损坏的 WebApp 回调 "
+                f"[provider:{provider}] [user:{user_id}] [chat:{chat_id}]"
+            )
+            await send_error("verification.webapp.error.expired.private.message")
+            return
         is_join_request = verification_type == "join_request"
 
-        # ✅ 5. CAS 消费当前 session；timeout 已 claim / 新 session 建立 / 并发重复回调胜出时
-        # clear 失败，必须停止（不恢复权限，否则与 timeout 重复或对错 session 操作）
+        # token/type 由 CAS clear 原子消费（不单独 DEL，防删新 session）。timeout 已 claim /
+        # 新 session 建立 / 并发重复回调胜出时 clear 失败，必须停止（不恢复权限）。
         cleared = await verification_service.clear_verification(
             chat_id, user_id, expected=clear_token
         )

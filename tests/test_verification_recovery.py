@@ -201,15 +201,17 @@ class _FakeRedis:
         # main CAS + flow 白名单
         if self.values.get(main_key) != expected_main:
             return 0
-        if self.values.get(type_key) not in ("join", "join_request"):
+        flow = self.values.get(type_key)
+        if flow not in ("join", "join_request"):
             return 0
 
+        # 原子消费整个 session（含 type），返回 flow 供 handler 直接用
         self.values.pop(recovery_key, None)
         self.values.pop(main_key, None)
         self.values.pop(deadline_key, None)
+        self.values.pop(type_key, None)
         self.values.pop(token_key, None)
-        # type 留给成功 handler 读取 flow 后删除
-        return 1
+        return [1, flow]
 
     def _eval_clear(self, keys, args):
         recovery_key, main_key, deadline_key, _type_key, _token_key = keys
@@ -505,33 +507,33 @@ async def test_webapp_auxiliary_is_committed_with_main(mocker) -> None:
 
 
 async def test_success_claim_consumes_state_and_makes_timeout_stale(mocker) -> None:
-    """成功先 claim：消费 main/deadline/token，timeout 随后只能返回 stale。"""
+    """成功先 claim：消费 main/deadline/type/token 并返回 flow，timeout 随后只能 stale。"""
     redis = _FakeRedis()
     _patch_redis(mocker, redis)
 
-    reservation = await _create_committed(redis, "session-a")
+    reservation = await _create_committed(redis, "session-a", flow="join_request")
     main_key = RedisKeys.verification(CHAT_ID, USER_ID)
     deadline_key = RedisKeys.verification_deadline(CHAT_ID, USER_ID)
     type_key = RedisKeys.verification_type(CHAT_ID, USER_ID)
     token_key = RedisKeys.captcha_token(CHAT_ID, USER_ID)
     redis.values[token_key] = "captcha:token"
 
-    claimed = await claim_success(
+    flow = await claim_success(
         CHAT_ID,
         USER_ID,
         redis.values[main_key],
         redis.values[deadline_key],
     )
 
-    assert claimed
+    assert flow == "join_request"
     assert RedisKeys.verification_recovery(CHAT_ID, USER_ID) not in redis.values
     assert main_key not in redis.values
     assert deadline_key not in redis.values
+    assert type_key not in redis.values
     assert token_key not in redis.values
-    assert redis.values[type_key] == "join"  # type 留给 handler 读 flow
 
     redis.now_ms = reservation.deadline_ms
-    assert (await claim_timeout(CHAT_ID, USER_ID, "session-a", "join")).status == "stale"
+    assert (await claim_timeout(CHAT_ID, USER_ID, "session-a", "join_request")).status == "stale"
 
 
 async def test_success_claim_allows_subsequent_reserve(mocker) -> None:
@@ -543,9 +545,12 @@ async def test_success_claim_allows_subsequent_reserve(mocker) -> None:
     main_key = RedisKeys.verification(CHAT_ID, USER_ID)
     deadline_key = RedisKeys.verification_deadline(CHAT_ID, USER_ID)
 
-    assert await claim_success(CHAT_ID, USER_ID, redis.values[main_key], redis.values[deadline_key])
+    assert (
+        await claim_success(CHAT_ID, USER_ID, redis.values[main_key], redis.values[deadline_key])
+        == "join"
+    )
 
-    # recovery/main/deadline 已删（type 残留但 reserve 不查）→ 新 session 可 reserve
+    # 整个旧 session 已删 → 新 session 可 reserve
     redis.now_ms += 1_000
     new_reservation = await reserve_initial_recovery(CHAT_ID, USER_ID, "session-b", 120_000)
     assert new_reservation is not None
@@ -562,7 +567,7 @@ async def test_timeout_claim_wins_before_success_claim(mocker) -> None:
     redis.now_ms = reservation.deadline_ms
 
     assert (await claim_timeout(CHAT_ID, USER_ID, "session-a", "join")).status == "claimed"
-    assert not await claim_success(CHAT_ID, USER_ID, expected_main, expected_deadline)
+    assert await claim_success(CHAT_ID, USER_ID, expected_main, expected_deadline) is None
 
 
 async def test_success_claim_rejects_session_switch_even_when_main_is_same(mocker) -> None:
@@ -578,7 +583,7 @@ async def test_success_claim_rejects_session_switch_even_when_main_is_same(mocke
     redis.now_ms += 1_000
     new_reservation = await _create_committed(redis, "new-session")
 
-    assert not await claim_success(CHAT_ID, USER_ID, expected_main, expected_deadline)
+    assert await claim_success(CHAT_ID, USER_ID, expected_main, expected_deadline) is None
     # 新会话状态未被旧快照消费
     assert redis.values[RedisKeys.verification(CHAT_ID, USER_ID)] == expected_main
     assert (
@@ -597,8 +602,9 @@ async def test_success_claim_rejects_malformed_deadline(mocker) -> None:
     deadline_key = RedisKeys.verification_deadline(CHAT_ID, USER_ID)
     redis.values[deadline_key] = "session-a:not-a-number"
 
-    assert not await claim_success(
-        CHAT_ID, USER_ID, redis.values[main_key], redis.values[deadline_key]
+    assert (
+        await claim_success(CHAT_ID, USER_ID, redis.values[main_key], redis.values[deadline_key])
+        is None
     )
     assert main_key in redis.values  # 未被消费
 

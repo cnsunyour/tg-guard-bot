@@ -1,7 +1,7 @@
-"""验证状态层测试（verify_choice_answer/verify_answer 三态 + claim_success 集成）。
+"""验证状态层测试（verify_choice_answer/verify_answer 状态 + flow + claim_success 集成）。
 
 verify_* 内部 MGET(main, deadline) 快照，答案正确时调 claim_success 原子消费状态；
-claim 失败（timeout 已接管 / session 切换）返回 expired，调用方静默退出。
+claim 成功返回 flow，失败（timeout 已接管 / session 切换）返回 expired。
 """
 
 from unittest.mock import AsyncMock
@@ -10,7 +10,8 @@ import pytest
 
 from src.core.redis import RedisKeys
 from src.services import verification
-from src.services.verification import VerificationService
+from src.services.verification import ChoiceAnswerResult, VerificationService, VerifyResult
+from src.services.verification_recovery import VerificationFlow
 
 pytestmark = pytest.mark.unit
 
@@ -35,7 +36,7 @@ DEADLINE = "session-a:1120000"
     ],
 )
 async def test_verify_choice_answer(
-    mocker, stored: str | None, expected_type: str, answer: str, expected: str
+    mocker, stored: str | None, expected_type: str, answer: str, expected: ChoiceAnswerResult
 ) -> None:
     redis = AsyncMock()
     redis.mget.return_value = [stored, DEADLINE]
@@ -43,12 +44,15 @@ async def test_verify_choice_answer(
     success_claim = mocker.patch.object(
         verification,
         "claim_success",
-        new=AsyncMock(return_value=True),
+        new=AsyncMock(return_value="join_request"),
     )
 
     result = await VerificationService.verify_choice_answer(-100, 42, expected_type, answer)
 
-    assert result == expected
+    assert result == VerifyResult(
+        status=expected,
+        flow="join_request" if expected == "correct" else None,
+    )
     redis.mget.assert_awaited_once_with(
         RedisKeys.verification(-100, 42),
         RedisKeys.verification_deadline(-100, 42),
@@ -67,34 +71,34 @@ async def test_verify_choice_answer_returns_expired_when_success_claim_loses(moc
     success_claim = mocker.patch.object(
         verification,
         "claim_success",
-        new=AsyncMock(return_value=False),
+        new=AsyncMock(return_value=None),
     )
 
     result = await VerificationService.verify_choice_answer(-100, 42, "qa", "2")
 
-    assert result == "expired"
+    assert result == VerifyResult(status="expired")
     success_claim.assert_awaited_once_with(-100, 42, "qa:2", DEADLINE)
 
 
 @pytest.mark.parametrize(
-    ("stored", "answer", "claim_granted", "expected", "should_claim"),
+    ("stored", "answer", "claim_flow", "expected", "should_claim"),
     [
-        ("captcha:ABCD", "abcd", True, "correct", True),  # 大小写不敏感 + claim 成功
-        ("captcha:ABCD", "ABCD", False, "expired", True),  # claim 失败（timeout 接管）
-        ("captcha:ABCD", "wrong", True, "wrong", False),  # 答案错
-        (None, "ABCD", True, "expired", False),  # 无 pending
-        ("qa:ABCD", "ABCD", True, "expired", False),  # 非 captcha 类型
-        ("invalid", "ABCD", True, "expired", False),  # 无冒号
-        ("captcha:", "", True, "expired", False),  # 空答案
-        ("captcha:AB:CD", "AB:CD", True, "expired", False),  # 答案含冒号
+        ("captcha:ABCD", "abcd", "join", "correct", True),  # 大小写不敏感 + claim 成功
+        ("captcha:ABCD", "ABCD", None, "expired", True),  # claim 失败（timeout 接管）
+        ("captcha:ABCD", "wrong", "join", "wrong", False),  # 答案错
+        (None, "ABCD", "join", "expired", False),  # 无 pending
+        ("qa:ABCD", "ABCD", "join", "expired", False),  # 非 captcha 类型
+        ("invalid", "ABCD", "join", "expired", False),  # 无冒号
+        ("captcha:", "", "join", "expired", False),  # 空答案
+        ("captcha:AB:CD", "AB:CD", "join", "expired", False),  # 答案含冒号
     ],
 )
 async def test_verify_answer_three_state(
     mocker,
     stored: str | None,
     answer: str,
-    claim_granted: bool,
-    expected: str,
+    claim_flow: VerificationFlow | None,
+    expected: ChoiceAnswerResult,
     should_claim: bool,
 ) -> None:
     redis = AsyncMock()
@@ -103,14 +107,17 @@ async def test_verify_answer_three_state(
     success_claim = mocker.patch.object(
         verification,
         "claim_success",
-        new=AsyncMock(return_value=claim_granted),
+        new=AsyncMock(return_value=claim_flow),
     )
 
     result = await VerificationService.verify_answer(
         -100, 42, answer, expected_deadline_value=DEADLINE
     )
 
-    assert result == expected
+    assert result == VerifyResult(
+        status=expected,
+        flow=claim_flow if expected == "correct" else None,
+    )
     redis.mget.assert_awaited_once_with(
         RedisKeys.verification(-100, 42),
         RedisKeys.verification_deadline(-100, 42),
@@ -129,12 +136,28 @@ async def test_verify_answer_rejects_session_switch_before_comparing_answer(mock
     success_claim = mocker.patch.object(
         verification,
         "claim_success",
-        new=AsyncMock(return_value=True),
+        new=AsyncMock(return_value="join"),
     )
 
     result = await VerificationService.verify_answer(
         -100, 42, "OLDCODE", expected_deadline_value=DEADLINE
     )
 
-    assert result == "expired"
+    assert result == VerifyResult(status="expired")
     success_claim.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("status", "flow"),
+    [
+        ("correct", None),  # correct 必须携带 flow
+        ("wrong", "join"),  # wrong 不得携带 flow
+        ("expired", "join_request"),  # expired 不得携带 flow
+    ],
+)
+def test_verify_result_rejects_inconsistent_flow(
+    status: ChoiceAnswerResult, flow: VerificationFlow | None
+) -> None:
+    """VerifyResult 强制 correct 携带 flow、wrong/expired 不得携带 flow。"""
+    with pytest.raises(ValueError, match="correct 必须携带 flow"):
+        VerifyResult(status=status, flow=flow)

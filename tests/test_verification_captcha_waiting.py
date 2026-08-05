@@ -7,12 +7,13 @@
 - handler 将捕获的 deadline 传给 verify_answer，关闭校验后的 session 切换窗口。
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
 from src.bot.handlers import verification as handler
 from src.core.redis import RedisKeys
+from src.services.verification import VerifyResult
 from src.services.verification_recovery import VerificationClearToken
 
 pytestmark = pytest.mark.unit
@@ -179,7 +180,7 @@ async def test_legacy_message_id_is_accepted_only_for_current_recovery_ui(mocker
         recovery_value="message:session-a:initial:join:111",
     )
     # 用 expired 收束测试，不进入成功恢复或失败处罚等无关分支
-    service.verify_answer.return_value = "expired"
+    service.verify_answer.return_value = VerifyResult(status="expired")
     mocker.patch.object(handler, "VerificationService", return_value=service)
 
     message = _message("abcd")
@@ -202,3 +203,52 @@ async def test_legacy_message_id_is_accepted_only_for_current_recovery_ui(mocker
         legacy_waiting_value,
         str(CHAT_ID),
     )
+
+
+async def test_correct_captcha_uses_claimed_flow_without_getting_type(mocker) -> None:
+    """correct 的 join_request flow 直接来自 claim，不在成功后再次 GET type。"""
+    _patch_i18n(mocker)
+    waiting_key = RedisKeys.captcha_waiting(CHAT_ID, USER_ID)
+    waiting_user_key = RedisKeys.captcha_waiting_user(USER_ID)
+    waiting_value = "session-a:111"
+
+    redis = AsyncMock()
+
+    async def get_value(key: str) -> str | None:
+        return {
+            waiting_user_key: str(CHAT_ID),
+            waiting_key: waiting_value,
+        }.get(key)
+
+    redis.get.side_effect = get_value
+    redis.eval.return_value = 1
+    mocker.patch.object(handler, "get_redis", return_value=redis)
+
+    service = AsyncMock()
+    service.is_verification_pending.return_value = True
+    service.capture_clear_token.return_value = VerificationClearToken(
+        state_value="captcha:ABCD",
+        deadline_value=DEADLINE,
+        recovery_value="message:session-a:initial:join_request:111",
+    )
+    service.verify_answer.return_value = VerifyResult(status="correct", flow="join_request")
+    mocker.patch.object(handler, "VerificationService", return_value=service)
+
+    approve = mocker.patch.object(handler, "approve_join_request", new=AsyncMock(return_value=True))
+    restore = mocker.patch.object(
+        handler, "restore_user_permissions", new=AsyncMock(return_value=True)
+    )
+    message = _message("abcd")
+    bot = AsyncMock()
+    bot.get_chat.return_value = MagicMock(title="Test Group")
+
+    await handler.on_captcha_text_input(message, bot)
+
+    service.verify_answer.assert_awaited_once_with(
+        CHAT_ID, USER_ID, "abcd", expected_deadline_value=DEADLINE
+    )
+    approve.assert_awaited_once_with(bot, CHAT_ID, USER_ID)
+    restore.assert_not_awaited()
+    service.clear_verification.assert_not_awaited()
+    redis.get.assert_has_awaits([call(waiting_user_key), call(waiting_key)])
+    assert redis.get.await_count == 2

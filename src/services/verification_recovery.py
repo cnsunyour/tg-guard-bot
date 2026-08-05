@@ -313,12 +313,12 @@ return 1
 # 恰好生成相同答案的 ABA（旧答案快照不能消费新会话）。expected_main/expected_deadline
 # 由调用方一次 MGET 同步读取，保证快照一致。
 #
-# type 暂不删除：成功 handler 需在 claim 后读取 flow 区分 join/join_request。该键已有
-# deadline+grace TTL，handler 读取后立即删除；下次 reserve 不查 type，残留不影响新会话。
+# flow 在 Lua 内校验后随成功结果原子返回；type 与其他 session 键一并删除，避免 handler
+# 在 deadline+grace 边缘再次 GET type 时把 join_request 误判为 join（P2.5）。
 #
 # KEYS = [recovery, main, deadline, type, captcha_token]
 # ARGV = [expected_main, expected_deadline, grace_ms]
-# 返回 1=已 claim；0=CAS 失败（timeout 已接管 / session 切换 / 状态损坏 / grace 已过）。
+# 返回 {1, flow}=已 claim；0=CAS 失败（timeout 接管 / session 切换 / 状态损坏 / grace 已过）。
 _CLAIM_SUCCESS_SCRIPT = """
 local expected_main = ARGV[1]
 local expected_deadline = ARGV[2]
@@ -362,11 +362,12 @@ if now_ms >= deadline_ms + grace_ms then
     return 0
 end
 
--- 原子消费：删 recovery/main/deadline/token（type 留给 handler 读 flow 后删）。
+-- 原子消费：flow 已保存在局部变量，删整个 session（含 type）并返回 flow 供 handler 直接用，
+-- 避免 handler 在 deadline+grace 边缘再次 GET type 时把 join_request 误判为 join。
 -- deadline/main 删除使后续 claim_timeout 在 GET 阶段即 stale；recovery 删除避免
--- 阻塞新 session 的 reserve（修复成功后短时重入被旧终态卡死）。
-redis.call("del", KEYS[1], KEYS[2], KEYS[3], KEYS[5])
-return 1
+-- 阻塞新 session 的 reserve。
+redis.call("del", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+return {1, flow}
 """.strip()
 
 # claim：timeout 到期后判断是否可执行处罚。session 匹配且 deadline 已到时：
@@ -682,18 +683,18 @@ async def claim_success(
     user_id: int,
     expected_state_value: str,
     expected_deadline_value: str,
-) -> bool:
+) -> VerificationFlow | None:
     """答案正确后原子 claim 成功路径，与 timeout 互斥。
 
     main 与 deadline 必须都与调用方 MGET 快照一致（双 CAS 防 ABA）。成功时原子删
-    recovery/main/deadline/captcha_token（type 留给成功 handler 读 flow 后删）——deadline/main
-    删除使后续 claim_timeout 在 GET 阶段即 stale，recovery 删除避免阻塞新 session reserve。
+    recovery/main/deadline/type/captcha_token，并返回已校验的 flow。deadline/main 删除使后续
+    claim_timeout 在 GET 阶段即 stale，recovery 删除避免阻塞新 session reserve。
 
-    False 表示 timeout 已接管、session 已切换、状态损坏或 grace 期已过。调用方必须
+    None 表示 timeout 已接管、session 已切换、状态损坏或 grace 期已过。调用方必须
     视为 expired：不恢复权限，也不执行失败处罚（两条路径原子互斥，对方已处理）。
     """
     redis = get_redis()
-    claimed = await redis.eval(
+    result = await redis.eval(
         _CLAIM_SUCCESS_SCRIPT,
         5,
         RedisKeys.verification_recovery(chat_id, user_id),
@@ -705,7 +706,19 @@ async def claim_success(
         expected_deadline_value,
         VERIFICATION_GRACE_MS,
     )
-    return bool(claimed)
+    if result == 0:
+        return None
+    if not isinstance(result, list) or len(result) != 2 or int(result[0]) != 1:
+        raise RuntimeError("claim_success Lua 返回格式错误")
+
+    flow = _as_text(result[1])
+    if flow == "join":
+        return "join"
+    if flow == "join_request":
+        return "join_request"
+
+    # Lua 已做白名单校验；协议漂移必须 fail closed。
+    raise RuntimeError("claim_success Lua 返回了非法 flow")
 
 
 async def capture_verification_clear_token(
