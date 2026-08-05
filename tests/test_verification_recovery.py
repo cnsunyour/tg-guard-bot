@@ -20,6 +20,7 @@ from src.services import verification
 from src.services import verification_recovery as recovery
 from src.services.verification import MathChallenge, PreparedChallenge, VerificationService
 from src.services.verification_recovery import (
+    VerificationFlow,
     claim_success,
     claim_timeout,
     commit_recovery,
@@ -250,6 +251,8 @@ class _FakeRedis:
     def _eval_claim(self, keys, args):
         recovery_key, main_key, deadline_key, type_key, token_key = keys
         session, flow = args[:2]
+        if flow not in ("join", "join_request"):
+            return [0, 0, 0]
         deadline_raw = self.values.get(deadline_key)
         if (
             not deadline_raw
@@ -266,16 +269,30 @@ class _FakeRedis:
         raw = self.values.get(recovery_key)
         if raw == f"timeout:{session}":
             return [0, 0, 0]
-        if raw and (
-            not raw.startswith(f"pending:{session}:")
-            and not raw.startswith(f"message:{session}:")
-            and raw != f"undelivered:{session}"
-        ):
-            return [0, 0, 0]
 
+        # 严格字段校验（与 _CLAIM_TIMEOUT_SCRIPT 对称：pending 4 段 / message 5 段 + flow 一致）
         message_id = 0
-        if raw and raw.startswith(f"message:{session}:"):
-            message_id = int(raw.rsplit(":", 1)[1])
+        if raw is not None:
+            fields = raw.split(":")
+            if raw == f"undelivered:{session}" or (
+                len(fields) == 4
+                and fields[0] == "pending"
+                and fields[1] == session
+                and fields[2]
+                and fields[3]
+            ):
+                pass  # message_id 保持 0
+            elif (
+                len(fields) == 5
+                and fields[0] == "message"
+                and fields[1] == session
+                and fields[2]
+                and fields[3] == flow
+                and fields[4].isdigit()
+            ):
+                message_id = int(fields[4])
+            else:
+                return [0, 0, 0]
 
         timeout_value = f"timeout:{session}"
         self.values.pop(main_key, None)
@@ -297,7 +314,7 @@ def _prepared(state_value: str = "math:4", auxiliary: str | None = None) -> Prep
     )
 
 
-async def _create_committed(redis: _FakeRedis, session_id: str, *, flow: str = "join"):
+async def _create_committed(redis: _FakeRedis, session_id: str, *, flow: VerificationFlow = "join"):
     """reserve_initial + commit，返回 reservation（供后续 promote/release/claim 测试）。"""
     reservation = await reserve_initial_recovery(CHAT_ID, USER_ID, session_id, timeout_ms=120_000)
     assert reservation is not None
@@ -417,6 +434,35 @@ async def test_promote_associates_real_message_id_for_timeout(mocker) -> None:
 
     assert claim.status == "claimed"
     assert claim.message_id == 9876
+
+
+@pytest.mark.parametrize(
+    "recovery_value",
+    [
+        "pending:session-a:",  # 缺 revision/owner
+        "pending:session-a:a:b:c:d",  # 多字段
+        "message:session-a:revision:not_flow:123",  # flow 非法
+        "message:session-a:revision:join:not-a-number",  # message_id 非数字
+        "message:session-a:revision:join:123:extra",  # 多字段
+        "message:session-a:revision:join_request:123",  # flow 与本次 claim (join) 不一致
+    ],
+)
+async def test_claim_timeout_rejects_invalid_recovery(mocker, recovery_value: str) -> None:
+    """损坏或 flow 不一致的 recovery 必须 fail closed（stale），不能消费当前状态。"""
+    redis = _FakeRedis()
+    _patch_redis(mocker, redis)
+
+    reservation = await _create_committed(redis, "session-a")
+    recovery_key = RedisKeys.verification_recovery(CHAT_ID, USER_ID)
+    main_key = RedisKeys.verification(CHAT_ID, USER_ID)
+    redis.values[recovery_key] = recovery_value
+    redis.now_ms = reservation.deadline_ms
+
+    claim = await claim_timeout(CHAT_ID, USER_ID, "session-a", "join")
+
+    assert claim.status == "stale"
+    assert redis.values[main_key] == "math:4"  # 未被消费
+    assert redis.values[recovery_key] == recovery_value
 
 
 async def test_forbidden_release_preserves_undelivered_state(mocker) -> None:

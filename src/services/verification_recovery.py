@@ -380,6 +380,10 @@ local session = ARGV[1]
 local flow = ARGV[2]
 local grace_ms = tonumber(ARGV[3])
 
+if flow ~= "join" and flow ~= "join_request" then
+    return {0, 0, 0}
+end
+
 local deadline_raw = redis.call("get", KEYS[3])
 if not deadline_raw then
     return {0, 0, 0}
@@ -410,20 +414,29 @@ local recovery_raw = redis.call("get", KEYS[1])
 local message_id = 0
 if recovery_raw then
     local undelivered = "undelivered:" .. session
-    local pending_prefix = "pending:" .. session .. ":"
-    local message_prefix = "message:" .. session .. ":"
     local timeout_value = "timeout:" .. session
 
     if recovery_raw == timeout_value then
         return {0, 0, 0}
     elseif recovery_raw == undelivered then
         message_id = 0
-    elseif string.sub(recovery_raw, 1, string.len(pending_prefix)) == pending_prefix then
+    elseif string.match(recovery_raw, "^pending:([^:]+):[^:]+:[^:]+$") == session then
         message_id = 0
-    elseif string.sub(recovery_raw, 1, string.len(message_prefix)) == message_prefix then
-        message_id = tonumber(string.match(recovery_raw, ":(%d+)$")) or 0
     else
-        return {0, 0, 0}
+        -- 捕获后比较，避免 session 拼入 Lua pattern（防未来 session 含元字符）；
+        -- message_flow ~= flow 校验 recovery 与本次 claim 的 flow 一致
+        local message_session, message_flow, message_id_text = string.match(
+            recovery_raw, "^message:([^:]+):[^:]+:([^:]+):(%d+)$"
+        )
+        if not message_session
+            or message_session ~= session
+            or message_flow ~= flow then
+            return {0, 0, 0}
+        end
+        message_id = tonumber(message_id_text)
+        if not message_id then
+            return {0, 0, 0}
+        end
     end
 end
 
