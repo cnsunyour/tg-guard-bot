@@ -8,6 +8,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from src.core.database import get_db_session
+from src.core.i18n import LocaleResolver, Translator
 from src.models.group import Group
 from src.services.curfew import CurfewService
 
@@ -18,8 +19,16 @@ class CurfewScheduler:
     定期检查所有启用宵禁的群组，发送进入/退出通知
     """
 
-    def __init__(self, bot: Bot):
+    def __init__(
+        self,
+        bot: Bot,
+        locale_resolver: LocaleResolver,
+        translator: Translator,
+    ) -> None:
         self.bot = bot
+        # 定时任务无 Update 上下文，ContextVar 不可用，须按群显式解析 locale。
+        self.locale_resolver = locale_resolver
+        self.translator = translator
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -70,24 +79,26 @@ class CurfewScheduler:
 
     async def _check_group(self, group: Group) -> None:
         """检查单个群组的宵禁状态"""
+        # 每次按群解析 locale（同一轮可能遍历不同语言的群，禁止缓存 localizer 到实例）
+        locale = await self.locale_resolver.for_group(group.id)
+        localizer = self.translator.for_locale(locale)
+
         is_in_curfew = CurfewService.is_in_curfew(group)
         entered, exited = await CurfewService.track_curfew_state(group.id, is_in_curfew)
 
         if entered:
+            start_time = f"{group.curfew_start_hour:02d}:{group.curfew_start_minute:02d}"
+            end_time = f"{group.curfew_end_hour:02d}:{group.curfew_end_minute:02d}"
+            timezone = f"{group.curfew_timezone_offset:+d}"
             # 发送进入宵禁通知
             try:
                 await self.bot.send_message(
                     chat_id=group.id,
-                    text=(
-                        f"🌙 <b>宵禁模式已启动</b>\n\n"
-                        f"宵禁时间: {group.curfew_start_hour:02d}:{group.curfew_start_minute:02d} - "
-                        f"{group.curfew_end_hour:02d}:{group.curfew_end_minute:02d} "
-                        f"(UTC{group.curfew_timezone_offset:+d})\n\n"
-                        f"📋 <b>限制规则:</b>\n"
-                        f"• 活跃度 = 0: 无法发送任何消息\n"
-                        f"• 活跃度 &lt; 10: 无法发送非文本消息（图片、视频、贴纸等）\n"
-                        f"• 活跃度 &gt;= 10: 可正常发送消息\n\n"
-                        f"💡 发送文本消息可增加活跃度（每条+1）"
+                    text=localizer.t(
+                        "curfew.scheduler.entered.group.message",
+                        start_time=start_time,
+                        end_time=end_time,
+                        timezone=timezone,
                     ),
                     parse_mode="HTML",
                 )
@@ -100,7 +111,7 @@ class CurfewScheduler:
             try:
                 await self.bot.send_message(
                     chat_id=group.id,
-                    text="☀️ <b>宵禁模式已结束</b>\n\n所有消息限制已解除，可正常发言。",
+                    text=localizer.t("curfew.scheduler.exited.group.message"),
                     parse_mode="HTML",
                 )
                 logger.info(f"已发送宵禁退出通知 [群组:{group.id}]")
@@ -112,9 +123,20 @@ class CurfewScheduler:
 _scheduler: CurfewScheduler | None = None
 
 
-def get_curfew_scheduler(bot: Bot) -> CurfewScheduler:
-    """获取全局宵禁调度器实例"""
+def get_curfew_scheduler(
+    bot: Bot | None = None,
+    locale_resolver: LocaleResolver | None = None,
+    translator: Translator | None = None,
+) -> CurfewScheduler:
+    """获取全局宵禁调度器实例。
+
+    首次构造须传入 bot/locale_resolver/translator；后续取已构造单例（如 shutdown
+    仅 stop）可不传参。
+    """
     global _scheduler
     if _scheduler is None:
-        _scheduler = CurfewScheduler(bot)
+        assert bot is not None, "首次构造宵禁调度器须传入 bot"
+        assert locale_resolver is not None, "首次构造宵禁调度器须传入 locale_resolver"
+        assert translator is not None, "首次构造宵禁调度器须传入 translator"
+        _scheduler = CurfewScheduler(bot, locale_resolver, translator)
     return _scheduler

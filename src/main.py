@@ -257,9 +257,10 @@ async def on_startup(bot: Bot) -> None:
     await setup_bot_commands(bot)
 
     # 启动宵禁调度器
+    from src.core.i18n import get_resolver, get_translator
     from src.services.curfew_scheduler import get_curfew_scheduler
 
-    scheduler = get_curfew_scheduler(bot)
+    scheduler = get_curfew_scheduler(bot, get_resolver(), get_translator())
     await scheduler.start()
     logger.info("宵禁调度器已启动")
 
@@ -292,7 +293,7 @@ async def on_shutdown() -> None:
     try:
         from src.services.curfew_scheduler import get_curfew_scheduler
 
-        scheduler = get_curfew_scheduler(None)  # type: ignore[arg-type]
+        scheduler = get_curfew_scheduler()
         await scheduler.stop()
         logger.info("✅ 宵禁调度器已关闭")
     except Exception as e:
