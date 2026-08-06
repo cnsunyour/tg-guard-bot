@@ -1,11 +1,18 @@
 """群管理命令处理器"""
 
+import contextlib
 import re
 from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InaccessibleMessage,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from loguru import logger
 
 from src.core.config import settings
@@ -16,6 +23,7 @@ from src.core.utils import (
     check_admin_permission_strict,
     check_admin_permission_strict_message,
     escape_html,
+    format_trusted_user_mention,
     get_chat_administrators_mention,
     parse_message_link,
     parse_message_link_with_chat,
@@ -1250,7 +1258,6 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
 
             # 检查是否需要自动训练
             try:
-                from src.core.config import settings
                 from src.services.spam_detector import get_detector
 
                 detector = get_detector()
@@ -1318,7 +1325,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 chat_id=message.chat.id,
             )
 
-            # 创建管理员操作按钮
+            # 创建管理员操作按钮（approve/reject 同行，ignore 独立一行——移动端三按钮同行过窄）
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -1330,7 +1337,13 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                             text=localizer.t("moderation.spam.button.reject.label"),
                             callback_data=f"report_reject:{report.id}",
                         ),
-                    ]
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=localizer.t("moderation.spam.button.ignore.label"),
+                            callback_data=f"report_ignore:{report.id}",
+                        ),
+                    ],
                 ]
             )
 
@@ -1347,7 +1360,10 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 ),
                 reply_markup=keyboard,
             )
-            await auto_delete_message(reply)
+            await auto_delete_message(
+                reply,
+                delay=settings.spam_review_prompt_auto_delete_seconds,
+            )
 
         except Exception as e:
             logger.error(f"创建举报记录失败: {e}")
@@ -1514,7 +1530,7 @@ async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
 
 def _report_status_label(localizer: BoundLocalizer, status: str | None) -> str:
     """把持久化的举报状态映射为受控的本地化标签。"""
-    status_key = status if status in {"pending", "approved", "rejected"} else "unknown"
+    status_key = status if status in {"pending", "approved", "rejected", "ignored"} else "unknown"
     return localizer.t(f"moderation.report.status.{status_key}.label")
 
 
@@ -1557,6 +1573,8 @@ async def _process_report_approval(
             user_id=report.reported_user_id,
             operator_id=operator_id,
             reason=f"举报#{report_id}: {report.reason}",
+            revoke_messages=False,
+            allow_left=True,
         )
 
         if not result.success:
@@ -1589,11 +1607,15 @@ async def _process_report_approval(
                 logger.error(f"添加训练样本失败: {e}")
 
         # 更新举报状态
-        await ReportRepository.update_report_status(
+        updated = await ReportRepository.update_report_status(
             report_id=report_id,
             status="approved",
             handled_by=operator_id,
         )
+        if not updated:
+            logger.warning(
+                f"更新举报状态失败 [举报:{report_id}] " f"[状态:approved] [操作者:{operator_id}]"
+            )
 
         return True, ""
 
@@ -1634,16 +1656,62 @@ async def _process_report_rejection(
             )
 
         # 更新举报状态
-        await ReportRepository.update_report_status(
+        updated = await ReportRepository.update_report_status(
             report_id=report_id,
             status="rejected",
             handled_by=operator_id,
         )
+        if not updated:
+            logger.warning(
+                f"更新举报状态失败 [举报:{report_id}] " f"[状态:rejected] [操作者:{operator_id}]"
+            )
 
         return True, ""
 
     except Exception as e:
         logger.error(f"处理举报拒绝失败: {e}")
+        return False, localizer.t("moderation.report.process.operation_failed.message")
+
+
+async def _process_report_ignore(
+    report_id: int,
+    chat_id: int,
+    operator_id: int,
+    localizer: BoundLocalizer,
+) -> tuple[bool, str]:
+    """忽略举报：不处罚、不训练，仅将举报标记为已忽略（区别于 rejected 的误报判定）。"""
+    try:
+        report = await ReportRepository.get_report_by_id(report_id)
+
+        if not report:
+            return False, localizer.t(
+                "moderation.report.process.not_found.message",
+                report_id=report_id,
+            )
+
+        if report.group_id != chat_id:
+            return False, localizer.t("moderation.report.process.wrong_group.message")
+
+        if report.status != "pending":
+            return False, localizer.t(
+                "moderation.report.process.already_processed.message",
+                status=_report_status_label(localizer, report.status),
+            )
+
+        updated = await ReportRepository.update_report_status(
+            report_id=report_id,
+            status="ignored",
+            handled_by=operator_id,
+        )
+        if not updated:
+            logger.warning(
+                f"更新举报状态失败 [举报:{report_id}] " f"[状态:ignored] [操作者:{operator_id}]"
+            )
+
+        return True, ""
+
+    except Exception as e:
+        logger.error(f"处理举报忽略失败: {e}")
         return False, localizer.t("moderation.report.process.operation_failed.message")
 
 
@@ -1843,80 +1911,150 @@ async def cmd_reject(message: Message, bot: Bot, localizer: BoundLocalizer) -> N
         await auto_delete_message(reply)
 
 
-@router.callback_query(F.data.startswith("report_approve:"))
-async def on_report_approve(callback: CallbackQuery, bot: Bot, localizer: BoundLocalizer) -> None:
-    """处理举报接受回调（通过按钮）"""
-    try:
-        # 类型检查
-        if not callback.data or not callback.message:
-            await callback.answer(
-                localizer.t("moderation.report.callback.invalid_data.toast"),
-                show_alert=True,
-            )
-            return
+# 举报按钮 action → 完成态文案后缀（approved/rejected/ignored.message）
+_REPORT_CALLBACK_COMPLETION: dict[str, str] = {
+    "approve": "approved",
+    "reject": "rejected",
+    "ignore": "ignored",
+}
 
-        from aiogram.types import InaccessibleMessage, Message
 
-        if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer(
-                localizer.t("moderation.report.callback.inaccessible.toast"),
-                show_alert=True,
-            )
-            return
+async def _handle_report_callback(
+    callback: CallbackQuery,
+    bot: Bot,
+    localizer: BoundLocalizer,
+    action: str,
+) -> None:
+    """举报按钮的公共处理流程：前置校验 → processing 应答 → 执行 → finally 清理提示。
 
-        message: Message = callback.message
-
-        # 解析举报ID
-        _, report_id_str = callback.data.split(":")
-        report_id = int(report_id_str)
-
-        # 权限验证：只有管理员可以接受
-        # ⚠️ 校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
-        # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
-        if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
-            await callback.answer(
-                localizer.t("moderation.report.callback.admin_only.approve.toast"),
-                show_alert=True,
-            )
-            return
-
-        # 调用辅助函数处理
-        success, error_msg = await _process_report_approval(
-            bot=bot,
-            report_id=report_id,
-            chat_id=message.chat.id,
-            operator_id=callback.from_user.id,
-            localizer=localizer,
-        )
-
-        if success:
-            # 获取举报详情用于显示
-            report = await ReportRepository.get_report_by_id(report_id)
-            reason_display = _render_report_reason(localizer, report.reason if report else None)
-
-            # 更新消息（移除按钮）
-            await message.edit_text(
-                localizer.t(
-                    "moderation.report.callback.approved.message",
-                    report_id=report_id,
-                    reason=reason_display,
-                    reported_user_id=report.reported_user_id if report else 0,
-                    operator=escape_html(callback.from_user.full_name),
-                )
-            )
-            await callback.answer(
-                localizer.t("moderation.report.callback.approved.toast"),
-                show_alert=True,
-            )
-        else:
-            await callback.answer(error_msg, show_alert=True)
-
-    except Exception as e:
-        logger.error(f"处理举报接受回调失败: {e}")
+    action ∈ {approve, reject, ignore}。无论成功、业务失败还是异常，finally 始终
+    移除按钮并安排延迟删除，杜绝残留（对齐 on_spam_review_callback 的清理契约）。
+    callback 全程只 answer 一次：前置失败各自应答，通过前置则应答 processing，
+    其后不再 answer（Telegram 回调仅可应答一次）。
+    """
+    if not callback.data or not callback.message:
         await callback.answer(
-            localizer.t("moderation.report.callback.failed.toast"),
+            localizer.t("moderation.report.callback.invalid_data.toast"),
             show_alert=True,
         )
+        return
+
+    if isinstance(callback.message, InaccessibleMessage):
+        await callback.answer(
+            localizer.t("moderation.report.callback.inaccessible.toast"),
+            show_alert=True,
+        )
+        return
+
+    message: Message = callback.message
+
+    try:
+        prefix, report_id_str = callback.data.split(":", 1)
+        report_id = int(report_id_str)
+    except (TypeError, ValueError):
+        await callback.answer(
+            localizer.t("moderation.report.callback.invalid_data.toast"),
+            show_alert=True,
+        )
+        return
+
+    if prefix != f"report_{action}" or report_id <= 0:
+        await callback.answer(
+            localizer.t("moderation.report.callback.invalid_data.toast"),
+            show_alert=True,
+        )
+        return
+
+    # 权限校验：必须校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
+    # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
+    if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
+        await callback.answer(
+            localizer.t(f"moderation.report.callback.admin_only.{action}.toast"),
+            show_alert=True,
+        )
+        return
+
+    # 先应答防 callback 超时（approve 的 ban 可能慢）；answer 失败（如 callback 过期）不阻断后续
+    with contextlib.suppress(Exception):
+        await callback.answer(
+            localizer.t("moderation.report.callback.processing.toast"),
+            show_alert=False,
+        )
+
+    operator_mention = format_trusted_user_mention(callback.from_user)
+    completed_text: str | None = None
+
+    try:
+        try:
+            if action == "approve":
+                success, error_msg = await _process_report_approval(
+                    bot=bot,
+                    report_id=report_id,
+                    chat_id=message.chat.id,
+                    operator_id=callback.from_user.id,
+                    localizer=localizer,
+                )
+            elif action == "reject":
+                success, error_msg = await _process_report_rejection(
+                    report_id=report_id,
+                    chat_id=message.chat.id,
+                    operator_id=callback.from_user.id,
+                    localizer=localizer,
+                )
+            else:  # ignore
+                success, error_msg = await _process_report_ignore(
+                    report_id=report_id,
+                    chat_id=message.chat.id,
+                    operator_id=callback.from_user.id,
+                    localizer=localizer,
+                )
+
+            if success:
+                report = None
+                with contextlib.suppress(Exception):
+                    report = await ReportRepository.get_report_by_id(report_id)
+
+                completion = _REPORT_CALLBACK_COMPLETION[action]
+                completed_text = localizer.t(
+                    f"moderation.report.callback.{completion}.message",
+                    report_id=report_id,
+                    reason=_render_report_reason(localizer, report.reason if report else None),
+                    reported_user_id=report.reported_user_id if report else 0,
+                    operator=operator_mention,
+                )
+            else:
+                completed_text = localizer.t(
+                    "moderation.report.callback.action_failed.message",
+                    report_id=report_id,
+                    operator=operator_mention,
+                    error=error_msg,
+                )
+        except Exception as e:
+            # _process_* 内部已捕获返回 operation_failed，此处防御直接抛异常的边界
+            # （如 DB 抖动）；不再二次 answer，统一走 finally 的 edit_text 展示失败原因
+            logger.error(f"处理举报回调异常 [操作:{action}] [举报:{report_id}]: {e}")
+            completed_text = localizer.t(
+                "moderation.report.callback.action_failed.message",
+                report_id=report_id,
+                operator=operator_mention,
+                error=localizer.t("moderation.report.process.operation_failed.message"),
+            )
+    finally:
+        if completed_text is not None:
+            with contextlib.suppress(Exception):
+                await message.edit_text(completed_text, reply_markup=None)
+        with contextlib.suppress(Exception):
+            await auto_delete_message(message, delay=30)
+
+
+@router.callback_query(F.data.startswith("report_approve:"))
+async def on_report_approve(
+    callback: CallbackQuery,
+    bot: Bot,
+    localizer: BoundLocalizer,
+) -> None:
+    """处理举报接受回调（按钮）。"""
+    await _handle_report_callback(callback, bot, localizer, "approve")
 
 
 @router.callback_query(F.data.startswith("report_reject:"))
@@ -1925,74 +2063,15 @@ async def on_report_reject(
     bot: Bot,
     localizer: BoundLocalizer,
 ) -> None:
-    """处理举报拒绝回调（通过按钮）"""
-    try:
-        # 类型检查
-        if not callback.data or not callback.message:
-            await callback.answer(
-                localizer.t("moderation.report.callback.invalid_data.toast"),
-                show_alert=True,
-            )
-            return
+    """处理举报拒绝回调（按钮）。"""
+    await _handle_report_callback(callback, bot, localizer, "reject")
 
-        from aiogram.types import InaccessibleMessage, Message
 
-        if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer(
-                localizer.t("moderation.report.callback.inaccessible.toast"),
-                show_alert=True,
-            )
-            return
-
-        message: Message = callback.message
-
-        # 解析举报ID
-        _, report_id_str = callback.data.split(":")
-        report_id = int(report_id_str)
-
-        # 权限验证：只有管理员可以拒绝
-        # ⚠️ 校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
-        # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
-        if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
-            await callback.answer(
-                localizer.t("moderation.report.callback.admin_only.reject.toast"),
-                show_alert=True,
-            )
-            return
-
-        # 调用辅助函数处理
-        success, error_msg = await _process_report_rejection(
-            report_id=report_id,
-            chat_id=message.chat.id,
-            operator_id=callback.from_user.id,
-            localizer=localizer,
-        )
-
-        if success:
-            # 获取举报详情用于显示
-            report = await ReportRepository.get_report_by_id(report_id)
-            reason_display = _render_report_reason(localizer, report.reason if report else None)
-
-            # 更新消息（移除按钮）
-            await message.edit_text(
-                localizer.t(
-                    "moderation.report.callback.rejected.message",
-                    report_id=report_id,
-                    reason=reason_display,
-                    reported_user_id=report.reported_user_id if report else 0,
-                    operator=escape_html(callback.from_user.full_name),
-                )
-            )
-            await callback.answer(
-                localizer.t("moderation.report.callback.rejected.toast"),
-                show_alert=True,
-            )
-        else:
-            await callback.answer(error_msg, show_alert=True)
-
-    except Exception as e:
-        logger.error(f"处理举报拒绝回调失败: {e}")
-        await callback.answer(
-            localizer.t("moderation.report.callback.failed.toast"),
-            show_alert=True,
-        )
+@router.callback_query(F.data.startswith("report_ignore:"))
+async def on_report_ignore(
+    callback: CallbackQuery,
+    bot: Bot,
+    localizer: BoundLocalizer,
+) -> None:
+    """处理举报忽略回调（按钮）。"""
+    await _handle_report_callback(callback, bot, localizer, "ignore")
