@@ -45,6 +45,9 @@
         const userId = params.get('user_id');
         const verifyToken = params.get('token');
 
+        // 第三方组件按 BCP47 地区码跟随 bot locale（与 friendly.html 一致）
+        const providerLocales = { 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', 'en': 'en' };
+
         function showStatus(type, message) {
             const el = document.getElementById('status');
             el.className = `status ${type}`;
@@ -67,6 +70,7 @@
                 const widget = document.createElement('altcha-widget');
                 widget.setAttribute('challengeurl', config.challenge_url);
                 widget.setAttribute('hidefooter', '');
+                widget.setAttribute('locale', providerLocales[getCurrentLocale()]);
                 container.appendChild(widget);
 
                 widget.addEventListener('statechange', async (event) => {

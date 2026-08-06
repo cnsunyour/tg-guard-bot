@@ -45,6 +45,9 @@
         const userId = params.get('user_id');
         const verifyToken = params.get('token');
 
+        // 第三方组件按 BCP47 地区码跟随 bot locale（与 friendly.html 一致）
+        const providerLocales = { 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', 'en': 'en' };
+
         function showStatus(type, message) {
             const el = document.getElementById('status');
             el.className = `status ${type}`;
@@ -69,6 +72,7 @@
 
                 window.turnstile.render('#captcha-widget', {
                     sitekey: config.site_key,
+                    language: providerLocales[getCurrentLocale()],
                     callback: async (token) => {
                         showStatus('loading', t('status.verifying'));
                         try {
