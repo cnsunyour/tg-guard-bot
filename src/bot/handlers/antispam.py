@@ -29,6 +29,7 @@ from src.bot.handlers.antispam_render import (
     build_immediate_processed,
     build_review_ban_result,
     build_review_false_positive_result,
+    build_review_ignore_result,
     build_review_keyboard,
     build_review_prompt,
 )
@@ -458,7 +459,13 @@ async def _handle_spam_with_review(
         reason_codes=tuple(str(reason) for reason in result["reasons"]),
         confidence=float(result["confidence"]),
     )
-    created = await create_review_state(state, message.chat.id, message.message_id)
+    review_ttl = settings.spam_review_prompt_auto_delete_seconds
+    created = await create_review_state(
+        state,
+        message.chat.id,
+        message.message_id,
+        ttl=review_ttl,
+    )
     if created is None:
         return  # 已有 review 快照，不覆盖、不重复发提示
 
@@ -469,10 +476,17 @@ async def _handle_spam_with_review(
         localizer = get_translator().for_locale(group_locale)
         prompt = build_review_prompt(localizer, state, offender_mention)
         header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
-        await message.answer(
+        prompt_message = await message.answer(
             header + prompt,
             reply_markup=build_review_keyboard(localizer, message.message_id, state.review_id),
         )
+        # prompt 与 state 共用 review_ttl：到期自动删 prompt，state 同步过期；
+        # 管理员未处理则两者一起清理（不处罚、不入库）。
+        # 已知限制（deliberate）：auto_delete_message 为进程内 asyncio task，bot 重启
+        # 会丢失；若重启窗口内未处理且之后无人点按钮，prompt 会残留。自愈路径：state
+        # 过期后管理员点击残留按钮 → get_review_state 返回 None → 删 prompt。与
+        # verification 超时等现有模式一致，未做 Redis 持久化 prompt id + 启动扫描（ROI 不足）。
+        await auto_delete_message(prompt_message, delay=review_ttl)
     except Exception:
         # 准备或发送失败：清理刚写入的 state，避免遗留无法触达的 review
         await delete_review_state_if_match(message.chat.id, message.message_id, state.review_id)
@@ -2546,7 +2560,7 @@ async def _answer_toast(
 async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
     """消费按原消息 ID + review_id 绑定的人工复核状态。
 
-    callback_data 格式: ``spam_review:{ban|false_positive}:{orig_msg_id}:{review_id}``。
+    callback_data 格式: ``spam_review:{ban|false_positive|ignore}:{orig_msg_id}:{review_id}``。
     先校验格式与权限并立即 answer processing（防 API/封禁/DB 致 callback 超时），
     再在 review_lock 内按 review_id 比较快照身份（防旧 prompt 消费被重建的新 state，
     codex 3b-2 review P2）。
@@ -2569,7 +2583,7 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     if (
         prefix != "spam_review"
-        or action not in {"ban", "false_positive"}
+        or action not in {"ban", "false_positive", "ignore"}
         or orig_msg_id <= 0
         or re.fullmatch(r"[0-9a-fA-F]{16}", review_id) is None
     ):
@@ -2600,93 +2614,128 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
         localizer = get_translator().for_locale(group_locale)
         operator_mention = format_trusted_user_mention(callback.from_user)
 
-        if action == "ban":
-            result = await ModerationService.ban_user(
-                bot=bot,
-                chat_id=message.chat.id,
-                user_id=state.offender_user_id,
-                operator_id=callback.from_user.id,
-                reason="垃圾信息（管理员确认）",
-                allow_left=True,
-            )
-            if not result.success:
-                # 处罚失败：追加报错到原提示（保留证据 + 按钮），不 callback.answer
-                # （已 answer processing）。codex review P2：勿替换整个 prompt 丢证据
-                assert result.code is not None
+        # 统一 try/finally：无论 ban / false_positive / ignore，也无论业务步骤异常，
+        # finally 始终消费 state 并清理 prompt，杜绝残留（原失败分支 return 不清理之弊）。
+        # 各业务步骤（add_feedback / 审计 / 删原消息）独立 suppress，互不阻断。
+        completed_text: str | None = None
+        try:
+            if action == "ban":
+                result = await ModerationService.ban_user(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    user_id=state.offender_user_id,
+                    operator_id=callback.from_user.id,
+                    reason="垃圾信息（管理员确认）",
+                    revoke_messages=False,
+                    allow_left=True,
+                )
+                if result.success:
+                    completed_text = build_review_ban_result(
+                        localizer, operator_mention, "permanent_ban"
+                    )
+                    with contextlib.suppress(Exception):
+                        await get_detector().add_feedback(
+                            text=state.sample_text,
+                            is_spam=True,
+                            labeled_by=callback.from_user.id,
+                        )
+                    with contextlib.suppress(Exception):
+                        await AuditRepository.log_action(
+                            group_id=message.chat.id,
+                            operator_id=callback.from_user.id,
+                            action="spam_review_ban",
+                            target_user_id=state.offender_user_id,
+                            details={
+                                "orig_msg_id": orig_msg_id,
+                                "text_preview": state.sample_text[:100],
+                            },
+                        )
+                    with contextlib.suppress(Exception):
+                        await bot.delete_message(message.chat.id, orig_msg_id)
+                    logger.info(
+                        f"管理员确认垃圾消息 [群组:{message.chat.id}] "
+                        f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
+                    )
+                else:
+                    # 处罚失败（二次 ban 遇 FloodWait / 用户已不在等）：显示失败原因并清理，
+                    # 不保留按钮重试（重试需重新触发检测）。codex review P2：勿替换整个 prompt 丢证据。
+                    assert result.code is not None
+                    completed_text = localizer.t(
+                        "antispam.review.action_failed.message",
+                        error=escape_html(
+                            localizer.t(f"moderation.error.{result.code.value}.message")
+                        ),
+                    )
+                    with contextlib.suppress(Exception):
+                        await AuditRepository.log_action(
+                            group_id=message.chat.id,
+                            operator_id=callback.from_user.id,
+                            action="spam_review_ban_failed",
+                            target_user_id=state.offender_user_id,
+                            details={
+                                "orig_msg_id": orig_msg_id,
+                                "text_preview": state.sample_text[:100],
+                                "error_code": result.code.value,
+                            },
+                        )
+                    logger.warning(
+                        f"管理员确认垃圾失败 [群组:{message.chat.id}] "
+                        f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}] "
+                        f"[错误:{result.code.value}]"
+                    )
+            elif action == "false_positive":
+                # false_positive：保留原消息 + 入库负样本
+                completed_text = build_review_false_positive_result(localizer, operator_mention)
+                with contextlib.suppress(Exception):
+                    await get_detector().add_feedback(
+                        text=state.sample_text,
+                        is_spam=False,
+                        labeled_by=callback.from_user.id,
+                    )
+                with contextlib.suppress(Exception):
+                    await AuditRepository.log_action(
+                        group_id=message.chat.id,
+                        operator_id=callback.from_user.id,
+                        action="spam_review_false_positive",
+                        target_user_id=state.offender_user_id,
+                        details={
+                            "orig_msg_id": orig_msg_id,
+                            "text_preview": state.sample_text[:100],
+                        },
+                    )
+                logger.info(
+                    f"管理员确认误判 [群组:{message.chat.id}] "
+                    f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
+                )
+            else:  # ignore：不处罚、不入库、不删原消息，仅关闭本次 review
+                completed_text = build_review_ignore_result(localizer, operator_mention)
+                with contextlib.suppress(Exception):
+                    await AuditRepository.log_action(
+                        group_id=message.chat.id,
+                        operator_id=callback.from_user.id,
+                        action="spam_review_ignore",
+                        target_user_id=state.offender_user_id,
+                        details={
+                            "orig_msg_id": orig_msg_id,
+                            "text_preview": state.sample_text[:100],
+                        },
+                    )
+                logger.info(
+                    f"管理员忽略审核 [群组:{message.chat.id}] "
+                    f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
+                )
+        finally:
+            # 始终消费 state + 清理 prompt（成功追加结果、失败追加原因），杜绝残留
+            with contextlib.suppress(Exception):
+                await consume_review_state(message.chat.id, orig_msg_id, review_id)
+            if completed_text is not None:
                 with contextlib.suppress(Exception):
                     await message.edit_text(
-                        f"{message.text or ''}\n\n"
-                        + localizer.t(
-                            "antispam.review.action_failed.message",
-                            error=escape_html(
-                                localizer.t(f"moderation.error.{result.code.value}.message")
-                            ),
-                        ),
-                        reply_markup=message.reply_markup,
+                        f"{message.text or ''}\n\n{completed_text}",
+                        reply_markup=None,
                     )
-                return
-
-            detector = get_detector()
-            await detector.add_feedback(
-                text=state.sample_text,
-                is_spam=True,
-                labeled_by=callback.from_user.id,
-            )
-            await AuditRepository.log_action(
-                group_id=message.chat.id,
-                operator_id=callback.from_user.id,
-                action="spam_review_ban",
-                target_user_id=state.offender_user_id,
-                details={
-                    "orig_msg_id": orig_msg_id,
-                    "text_preview": state.sample_text[:100],
-                },
-            )
             with contextlib.suppress(Exception):
-                await bot.delete_message(message.chat.id, orig_msg_id)
-            await consume_review_state(message.chat.id, orig_msg_id, review_id)
-            with contextlib.suppress(Exception):
-                await message.edit_text(
-                    f"{message.text or ''}\n\n"
-                    + build_review_ban_result(localizer, operator_mention, "permanent_ban"),
-                    reply_markup=None,
-                )
-            await auto_delete_message(message, delay=30)
-            logger.info(
-                f"管理员确认垃圾消息 [群组:{message.chat.id}] "
-                f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
-            )
-            return
-
-        # false_positive：保留原消息 + 入库负样本
-        detector = get_detector()
-        await detector.add_feedback(
-            text=state.sample_text,
-            is_spam=False,
-            labeled_by=callback.from_user.id,
-        )
-        await AuditRepository.log_action(
-            group_id=message.chat.id,
-            operator_id=callback.from_user.id,
-            action="spam_review_false_positive",
-            target_user_id=state.offender_user_id,
-            details={
-                "orig_msg_id": orig_msg_id,
-                "text_preview": state.sample_text[:100],
-            },
-        )
-        await consume_review_state(message.chat.id, orig_msg_id, review_id)
-        with contextlib.suppress(Exception):
-            await message.edit_text(
-                f"{message.text or ''}\n\n"
-                + build_review_false_positive_result(localizer, operator_mention),
-                reply_markup=None,
-            )
-        await auto_delete_message(message, delay=30)
-        logger.info(
-            f"管理员确认误判 [群组:{message.chat.id}] "
-            f"[用户:{state.offender_user_id}] [操作者:{callback.from_user.id}]"
-        )
+                await auto_delete_message(message, delay=30)
 
 
 @router.callback_query(F.data.startswith("spam_confirm:"))

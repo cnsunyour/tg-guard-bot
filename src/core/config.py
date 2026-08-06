@@ -67,6 +67,13 @@ class Settings(BaseSettings):
         "标准化长度计算：1个汉字/全角字符=1标准长度，2个英文字符=1标准长度。"
         "推荐值：10（中文10个汉字，英文20个字符）",
     )
+    spam_review_prompt_auto_delete_seconds: int = Field(
+        default=3600,
+        ge=1,
+        description="确认模式 review prompt 与 Redis state 的有效期（秒）：prompt 到期自动删除，"
+        "state 同步过期；管理员未处理则两者一起清理，不处罚、不入库。"
+        "prompt 与 state TTL 必须一致，否则旧 state 会因 SET NX 阻止同一消息重建 review。",
+    )
 
     # ========== 高级正则规则引擎配置 ==========
     regex_rules_enabled: bool = Field(default=True, description="是否启用高级正则规则引擎")

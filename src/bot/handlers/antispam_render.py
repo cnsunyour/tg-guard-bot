@@ -205,10 +205,11 @@ def build_review_keyboard(
     orig_msg_id: int,
     review_id: str,
 ) -> InlineKeyboardMarkup:
-    """渲染确认模式的两个操作按钮（ban / false_positive 同行）。
+    """渲染确认模式的操作按钮（ban / false_positive 同行，ignore 单独一行）。
 
-    callback_data 携带 ``review_id``，consumer 据此按快照身份消费，防止旧提示按钮
-    在 state 被重建后误消费新快照（codex 3b-2 review P2）。
+    忽略按钮单独成行，避免移动端三按钮同行过窄。callback_data 携带 ``review_id``，
+    consumer 据此按快照身份消费，防止旧提示按钮在 state 被重建后误消费新快照
+    （codex 3b-2 review P2）。
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -221,7 +222,13 @@ def build_review_keyboard(
                     text=localizer.t("antispam.review.false_positive.button"),
                     callback_data=f"spam_review:false_positive:{orig_msg_id}:{review_id}",
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("antispam.review.ignore.button"),
+                    callback_data=f"spam_review:ignore:{orig_msg_id}:{review_id}",
+                ),
+            ],
         ]
     )
 
@@ -246,6 +253,21 @@ def build_review_false_positive_result(
     """渲染确认误判后的结果段（追加到原提示并移除按钮，保留原消息）。"""
     return localizer.t(
         "antispam.review.false_positive.completed.message",
+        operator=operator_mention,
+    )
+
+
+def build_review_ignore_result(
+    localizer: BoundLocalizer,
+    operator_mention: str,
+) -> str:
+    """渲染忽略后的结果段（追加到原提示并移除按钮）。
+
+    忽略语义：不处罚、不写入训练反馈、不删除原消息，仅关闭本次 review。
+    与 false_positive（确认检测错误并入库负样本）语义有别。
+    """
+    return localizer.t(
+        "antispam.review.ignore.completed.message",
         operator=operator_mention,
     )
 
