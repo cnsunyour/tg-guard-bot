@@ -8,10 +8,14 @@ from aiogram.enums import ChatType
 from aiogram.types import Message, TelegramObject, User
 from loguru import logger
 
-from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.i18n import BoundLocalizer
-from src.core.utils import auto_delete_message, masked_mention_html, should_skip_sender
+from src.core.utils import (
+    auto_delete_message,
+    check_admin_permission,
+    masked_mention_html,
+    should_skip_sender,
+)
 from src.repositories.audit_repo import AuditRepository
 from src.services.cas_service import get_cas_service
 from src.services.user_status_service import get_user_status_service
@@ -65,7 +69,7 @@ class CASCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # 跳过群组管理员
-        if await PermissionCache.is_admin(bot, event.chat.id, event.from_user.id):
+        if await check_admin_permission(event, bot):
             return await handler(event, data)
 
         chat_id = event.chat.id

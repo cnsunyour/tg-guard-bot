@@ -1,5 +1,8 @@
 """工具函数测试"""
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 
@@ -276,3 +279,72 @@ def test_read_version_rejects_mismatched_project_name(tmp_path):
     other = tmp_path / "pyproject.toml"
     other.write_text('[project]\nname = "other-bot"\nversion = "3.3.3"\n', encoding="utf-8")
     assert _read_version_from_pyproject(other) is None
+
+
+@pytest.mark.unit
+async def test_check_admin_permission_by_id_super_admin_skips_cache(mocker) -> None:
+    """超管 id 直通，不查缓存"""
+    from src.core.utils import check_admin_permission_by_id
+
+    mocker.patch("src.core.config.settings.admin_ids", [9001])
+    cache_check = mocker.patch(
+        "src.core.cache.PermissionCache.is_admin", new=AsyncMock(return_value=False)
+    )
+
+    assert await check_admin_permission_by_id(MagicMock(), -100, 9001) is True
+    cache_check.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_check_admin_permission_by_id_delegates_regular_user(mocker) -> None:
+    """普通用户委托 PermissionCache"""
+    from src.core.utils import check_admin_permission_by_id
+
+    mocker.patch("src.core.config.settings.admin_ids", [])
+    cache_check = mocker.patch(
+        "src.core.cache.PermissionCache.is_admin", new=AsyncMock(return_value=True)
+    )
+    bot = MagicMock()
+
+    assert await check_admin_permission_by_id(bot, -100, 42) is True
+    cache_check.assert_awaited_once_with(bot, -100, 42)
+
+
+@pytest.mark.unit
+async def test_check_admin_permission_anonymous_short_circuits_by_id(mocker) -> None:
+    """匿名管理员（sender_chat==chat）直通，不调 by_id"""
+    import src.core.utils as utils
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-100),
+        sender_chat=SimpleNamespace(id=-100),
+        from_user=SimpleNamespace(id=1087968824),
+        text="anonymous message",
+    )
+    by_id = mocker.patch.object(
+        utils, "check_admin_permission_by_id", new=AsyncMock(return_value=False)
+    )
+
+    assert await utils.check_admin_permission(message, MagicMock()) is True
+    by_id.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_check_admin_permission_without_from_user_fails_closed(mocker) -> None:
+    """无 from_user 时 fail-closed（即使 sender_chat==chat.id 也不判管理员）"""
+    import src.core.utils as utils
+
+    by_id = mocker.patch.object(
+        utils, "check_admin_permission_by_id", new=AsyncMock(return_value=True)
+    )
+
+    for sender_chat in (None, SimpleNamespace(id=-100)):
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=-100),
+            sender_chat=sender_chat,
+            from_user=None,
+            text=None,
+        )
+        assert await utils.check_admin_permission(message, MagicMock()) is False
+
+    by_id.assert_not_awaited()

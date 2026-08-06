@@ -154,6 +154,35 @@ async def test_read_user_locale_normalizes_historical_alias(mocker) -> None:
     assert await lang_module._read_user_locale(42, _make_resolver()) == "en"
 
 
+async def test_cmd_lang_group_uses_message_permission_helper(mocker) -> None:
+    """群 /lang 走 message 版权限检查（含匿名管理员），通过则发菜单"""
+    permission = mocker.patch.object(
+        lang_module, "check_admin_permission", new=AsyncMock(return_value=True)
+    )
+    mocker.patch.object(lang_module.GroupRepository, "get_or_create", new=AsyncMock())
+    mocker.patch.object(lang_module, "_read_group_locale", new=AsyncMock(return_value="en"))
+    send_menu = mocker.patch.object(lang_module, "_send_menu", new=AsyncMock())
+
+    message = MagicMock()
+    message.chat.type = ChatType.SUPERGROUP
+    message.chat.id = -100
+    message.chat.title = "Test"
+    message.from_user = SimpleNamespace(id=42)
+    bot = MagicMock()
+    translator = _make_translator()
+
+    await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    permission.assert_awaited_once_with(message, bot)
+    send_menu.assert_awaited_once()
+
+
 # ==================== on_lang_callback 主链与拒绝路径 ====================
 
 
@@ -174,7 +203,9 @@ def _make_group_callback(
 
 async def test_on_lang_callback_group_writes_through_and_rerenders_new_locale(mocker) -> None:
     """群 callback：写穿 + 用新 locale edit_text + answer（不依赖旧 middleware localizer）"""
-    mocker.patch.object(lang_module.PermissionCache, "is_admin", new=AsyncMock(return_value=True))
+    mocker.patch.object(
+        lang_module, "check_admin_permission_by_id", new=AsyncMock(return_value=True)
+    )
     update_locale = mocker.patch.object(
         lang_module.GroupRepository, "update_locale", new=AsyncMock(return_value=True)
     )
@@ -208,7 +239,7 @@ async def test_on_lang_callback_group_writes_through_and_rerenders_new_locale(mo
 async def test_on_lang_callback_group_chat_mismatch_rejected(mocker) -> None:
     """callback_data 的 chat_id 与消息 chat 不一致 → invalid_data，不写穿"""
     is_admin = mocker.patch.object(
-        lang_module.PermissionCache, "is_admin", new=AsyncMock(return_value=True)
+        lang_module, "check_admin_permission_by_id", new=AsyncMock(return_value=True)
     )
     update_locale = mocker.patch.object(
         lang_module.GroupRepository, "update_locale", new=AsyncMock(return_value=True)
@@ -231,7 +262,9 @@ async def test_on_lang_callback_group_chat_mismatch_rejected(mocker) -> None:
 
 async def test_on_lang_callback_group_non_admin_rejected(mocker) -> None:
     """群 callback 非管理员 → permission_denied"""
-    mocker.patch.object(lang_module.PermissionCache, "is_admin", new=AsyncMock(return_value=False))
+    mocker.patch.object(
+        lang_module, "check_admin_permission_by_id", new=AsyncMock(return_value=False)
+    )
     update_locale = mocker.patch.object(
         lang_module.GroupRepository, "update_locale", new=AsyncMock(return_value=True)
     )

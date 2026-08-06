@@ -110,13 +110,29 @@ def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
     return f"{text_str[:keep_chars]}...{text_str[-keep_chars:]}"
 
 
+async def check_admin_permission_by_id(bot, chat_id: int, user_id: int) -> bool:
+    """按用户 ID 检查管理员权限（超管直通 + 缓存 API 查询）。
+
+    注意：此函数无 Message.sender_chat，**无法识别匿名管理员**——仅在确定有
+    真实/代表 user_id 时使用（如 callback_query）。message 路径请用
+    check_admin_permission(message, bot)。
+    """
+    from src.core.cache import PermissionCache
+    from src.core.config import settings
+
+    if user_id in settings.admin_ids:
+        return True
+
+    return await PermissionCache.is_admin(bot, chat_id, user_id)
+
+
 async def check_admin_permission(message, bot) -> bool:
-    """检查是否是管理员（统一的权限检查函数）
+    """检查是否是管理员（统一的权限检查函数，message 版本）。
 
     支持：
+    - 匿名管理员（sender_chat.id == chat.id）
     - 超级管理员（配置在 .env）
     - 群组管理员（通过 Telegram API 查询）
-    - 匿名管理员（sender_chat.id == chat.id）
 
     Args:
         message: aiogram Message 对象
@@ -127,8 +143,9 @@ async def check_admin_permission(message, bot) -> bool:
 
     ✅ P1-10: 使用 Redis 缓存减少 API 调用
     """
-    from src.core.cache import PermissionCache
-    from src.core.config import settings
+    # fail-closed：无真实发送者时拒绝（channel post / 服务消息即使 sender_chat==chat.id 也不算管理员）
+    if message.from_user is None:
+        return False
 
     # 1. 检查是否是匿名管理员
     # 当管理员以"匿名管理员"身份执行命令时，sender_chat 会被设置为群组本身
@@ -138,12 +155,8 @@ async def check_admin_permission(message, bot) -> bool:
         logger.debug(f"匿名管理员执行命令 [群组:{message.chat.id}] [命令:{masked_text}]")
         return True
 
-    # 2. 检查是否在配置的超级管理员列表中
-    if message.from_user.id in settings.admin_ids:
-        return True
-
-    # 3. 使用缓存检查是否是群组管理员
-    return await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id)
+    # 2. 超管直通 + 缓存查询群组管理员（委托 by_id 避免重复逻辑）
+    return await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id)
 
 
 @retry_on_network_error(max_retries=3, initial_delay=1.0)
