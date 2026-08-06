@@ -210,9 +210,16 @@ async def execute_migrations():
                         break
 
                 # 执行 SQL（可能包含多个语句）
-                for statement in sql_content.split(";"):
+                # 先剔除独立注释行：旧逻辑按分号切分后，会把“注释行 + 紧随的首条 SQL”
+                # 粘在同一段并因 startswith("--") 整体丢弃，导致带注释头的迁移首条语句被静默跳过。
+                executable_sql = "\n".join(
+                    line
+                    for line in sql_content.splitlines()
+                    if not line.lstrip().startswith("--")
+                )
+                for statement in executable_sql.split(";"):
                     statement = statement.strip()
-                    if statement and not statement.startswith("--"):
+                    if statement:
                         await conn.execute(text(statement))
 
                 # 记录已执行的迁移

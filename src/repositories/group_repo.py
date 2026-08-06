@@ -155,6 +155,20 @@ class GroupRepository:
             return list(result.scalars().all())
 
     @staticmethod
+    async def get_groups_with_custom_locale(default_locale: str) -> list[tuple[int, str]]:
+        """获取所有 locale 与默认值不同的群组（chat_id, locale）。
+
+        用于启动时恢复命令菜单（3c3）：非默认 locale 的群组需 sync 对应语言命令。
+        """
+        async with get_db_session() as session:
+            result = await session.execute(
+                select(Group.id, Group.locale)
+                .where(Group.locale != default_locale)
+                .order_by(Group.id)
+            )
+            return [(row[0], row[1]) for row in result.all()]
+
+    @staticmethod
     async def update_curfew_settings(
         chat_id: int,
         enabled: bool,
@@ -197,3 +211,23 @@ class GroupRepository:
                 await session.commit()
                 return True
             return False
+
+    @staticmethod
+    async def update_locale(chat_id: int, locale: str) -> bool:
+        """更新群组消息语言
+
+        Args:
+            chat_id: Telegram 群组 ID
+            locale: 已通过应用层校验的语言代码（BCP 47）
+
+        Returns:
+            是否找到并更新了群组
+        """
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+            if group is None:
+                return False
+            group.locale = locale
+            await session.commit()
+            return True

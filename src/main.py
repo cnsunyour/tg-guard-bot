@@ -89,7 +89,20 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
     bot.session.middleware(RetryAfterMiddleware(max_retries=3))
 
+    # ✅ 加载 i18n catalog 并注册语言上下文中间件
+    # catalog 在 Dispatcher 接收 update 前一次性加载到内存；
+    # 源语言损坏时 init_i18n 会直接抛异常并阻止启动。
+    from src.bot.middlewares import LocaleMiddleware
+    from src.core.i18n import get_resolver, init_i18n
+
+    translator = init_i18n()
+    locale_resolver = get_resolver()
+
     dp = Dispatcher()
+
+    # update outer middleware 包围所有具体事件 middleware，
+    # 因此 whitelist、throttle、CAS 等提前返回路径也能取得 locale。
+    dp.update.outer_middleware(LocaleMiddleware(locale_resolver, translator))
 
     # 注册路由器
     from src.bot.handlers import (
@@ -98,6 +111,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         cleanup,
         curfew,
         events,
+        lang,
         moderation,
         start,
         verification,
@@ -109,6 +123,9 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(curfew.router)  # 宵禁模式
+    dp.include_router(
+        lang.router
+    )  # 语言设置（须在 verification 之前：verification 有私聊文本兜底会拦截 /lang）
     dp.include_router(verification.router)  # 入群验证
     dp.include_router(antispam.router)  # 反垃圾检测（放在最后）
 
@@ -196,94 +213,18 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
 
 
 async def setup_bot_commands(bot: Bot) -> None:
-    """设置 Bot 命令自动完成提示"""
-    from aiogram.types import (
-        BotCommand,
-        BotCommandScopeAllChatAdministrators,
-        BotCommandScopeAllGroupChats,
-        BotCommandScopeAllPrivateChats,
-    )
+    """设置默认 locale 的全局命令菜单兜底（4 scope）+ 恢复已保存的非默认 locale 命令。
 
-    # 私聊命令列表（普通用户 + 超级管理员命令）
-    private_commands = [
-        # 普通命令
-        BotCommand(command="start", description="启动 Bot / 查看帮助"),
-        BotCommand(command="help", description="查看帮助信息"),
-        # 超级管理员命令
-        BotCommand(command="health", description="健康检查（仅超管）"),
-        BotCommand(command="stats", description="统计信息（仅超管）"),
-        BotCommand(command="whitelist", description="白名单管理（仅超管）"),
-    ]
+    具体私聊/群聊的命令在 /lang 写穿后由 sync_chat_commands 按 locale 覆盖。
+    """
+    from src.bot.commands import rehydrate_custom_locale_commands, setup_fallback_commands
+    from src.core.i18n import get_translator
 
-    # 群组普通成员命令列表（仅基础功能）
-    group_member_commands = [
-        BotCommand(command="help", description="查看帮助信息"),
-        BotCommand(command="spam", description="举报垃圾消息"),
-        BotCommand(command="report", description="举报垃圾消息"),
-    ]
-
-    # 群组管理员命令列表（完整管理功能）
-    group_admin_commands = [
-        # 群组配置
-        BotCommand(command="groupset", description="⚙️ 群组设置（统一入口）"),
-        BotCommand(command="setverify", description="设置验证方式"),
-        BotCommand(command="settimeout", description="设置验证超时时间"),
-        BotCommand(command="verifyconfig", description="查看验证配置"),
-        BotCommand(command="antispam", description="反垃圾配置"),
-        BotCommand(command="antichannel", description="反频道马甲配置"),
-        BotCommand(command="activity", description="活跃度系统开关"),
-        BotCommand(command="activityskip", description="活跃度跳过阈值"),
-        BotCommand(command="curfew", description="宵禁模式配置"),
-        # 群成员管理
-        BotCommand(command="kick", description="踢出成员"),
-        BotCommand(command="mute", description="禁言成员"),
-        BotCommand(command="unmute", description="解除禁言"),
-        BotCommand(command="ban", description="封禁成员"),
-        BotCommand(command="unban", description="解除封禁"),
-        BotCommand(command="warn", description="警告成员"),
-        BotCommand(command="warnings", description="查看警告记录"),
-        BotCommand(command="clearwarnings", description="清除警告"),
-        BotCommand(command="cleanup", description="清理异常用户"),
-        # 消息管理
-        BotCommand(command="delbefore", description="删除往前的消息"),
-        BotCommand(command="delafter", description="删除往后的消息"),
-        BotCommand(command="delrange", description="删除消息范围"),
-        # 举报系统
-        BotCommand(command="spam", description="举报垃圾消息"),
-        BotCommand(command="report", description="举报垃圾消息"),
-        BotCommand(command="notspam", description="标记非垃圾消息"),
-        BotCommand(command="nospam", description="标记非垃圾消息"),
-        BotCommand(command="unspam", description="标记非垃圾消息"),
-        BotCommand(command="reports", description="查看举报列表"),
-        BotCommand(command="approve", description="处理举报"),
-        # 帮助
-        BotCommand(command="help", description="查看帮助信息"),
-    ]
-
-    try:
-        # 设置私聊命令
-        await bot.set_my_commands(
-            commands=private_commands,
-            scope=BotCommandScopeAllPrivateChats(),
-        )
-        logger.info(f"✅ 已设置私聊命令列表 ({len(private_commands)} 个命令)")
-
-        # 设置群组普通成员命令（优先级较低）
-        await bot.set_my_commands(
-            commands=group_member_commands,
-            scope=BotCommandScopeAllGroupChats(),
-        )
-        logger.info(f"✅ 已设置群组普通成员命令列表 ({len(group_member_commands)} 个命令)")
-
-        # 设置群组管理员命令（优先级较高，会覆盖普通成员的命令）
-        await bot.set_my_commands(
-            commands=group_admin_commands,
-            scope=BotCommandScopeAllChatAdministrators(),
-        )
-        logger.info(f"✅ 已设置群组管理员命令列表 ({len(group_admin_commands)} 个命令)")
-
-    except Exception as e:
-        logger.error(f"设置命令列表失败: {e}")
+    translator = get_translator()
+    localizer = translator.for_locale(settings.default_locale)
+    await setup_fallback_commands(bot, localizer)
+    # 恢复 DB 中已保存的非默认 locale 命令菜单（首次部署 3c3 时生效）
+    await rehydrate_custom_locale_commands(bot, translator, settings.default_locale)
 
 
 async def on_startup(bot: Bot) -> None:
@@ -316,9 +257,10 @@ async def on_startup(bot: Bot) -> None:
     await setup_bot_commands(bot)
 
     # 启动宵禁调度器
+    from src.core.i18n import get_resolver, get_translator
     from src.services.curfew_scheduler import get_curfew_scheduler
 
-    scheduler = get_curfew_scheduler(bot)
+    scheduler = get_curfew_scheduler(bot, get_resolver(), get_translator())
     await scheduler.start()
     logger.info("宵禁调度器已启动")
 
@@ -351,7 +293,7 @@ async def on_shutdown() -> None:
     try:
         from src.services.curfew_scheduler import get_curfew_scheduler
 
-        scheduler = get_curfew_scheduler(None)  # type: ignore[arg-type]
+        scheduler = get_curfew_scheduler()
         await scheduler.stop()
         logger.info("✅ 宵禁调度器已关闭")
     except Exception as e:

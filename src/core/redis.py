@@ -71,6 +71,25 @@ class RedisKeys:
         return f"group_config:{chat_id}"
 
     @staticmethod
+    def locale_group(chat_id: int) -> str:
+        """群组语言缓存键名
+
+        存储 BCP 47 语言代码（如 zh-Hans/zh-Hant/en）。
+        TTL: settings.locale_cache_ttl_seconds。
+        """
+        return f"locale:group:{chat_id}"
+
+    @staticmethod
+    def locale_user(user_id: int) -> str:
+        """用户语言缓存键名
+
+        存储用户私聊语言解析结果。即使数据库无显式设置，也会缓存默认
+        语言（或无记录哨兵）以避免持续穿透数据库。
+        TTL: settings.locale_cache_ttl_seconds。
+        """
+        return f"locale:user:{user_id}"
+
+    @staticmethod
     def user_warnings(chat_id: int, user_id: int) -> str:
         """用户警告计数键名"""
         return f"warnings:{chat_id}:{user_id}"
@@ -84,12 +103,31 @@ class RedisKeys:
         return f"spam_text:{chat_id}:{message_id}"
 
     @staticmethod
-    def verification_hint(chat_id: int) -> str:
-        """验证引导消息记录键名
+    def spam_review(chat_id: int, orig_msg_id: int) -> str:
+        """垃圾消息人工复核状态键名
 
-        用于防止多用户同时未启动 Bot 时重复发送引导消息
+        存储 SpamReviewState v1 JSON（create_review_state 用 SET NX EX 写入）。
         """
-        return f"verification_hint:{chat_id}"
+        return f"spam_review:{chat_id}:{orig_msg_id}"
+
+    @staticmethod
+    def spam_review_lock(chat_id: int, orig_msg_id: int) -> str:
+        """垃圾消息复核处理锁键名
+
+        防止同一原始消息的复核 callback 并发执行（review_lock 取锁）。
+        """
+        return f"spam_review_lock:{chat_id}:{orig_msg_id}"
+
+    @staticmethod
+    def verification_hint(chat_id: int, flow: str) -> str:
+        """验证引导消息记录键名（join / join_request 各自独立状态）。
+
+        两种验证流程的后续动作不同（join 可恢复 challenge；join_request 立即 decline
+        + clear），文案也不同，共用 key 会让先到 flow 的错误文案压住另一个。
+        """
+        if flow not in ("join", "join_request"):
+            raise ValueError(f"不支持的验证引导 flow: {flow}")
+        return f"verification_hint:{flow}:{chat_id}"
 
     @staticmethod
     def verification_approved(chat_id: int, user_id: int) -> str:
@@ -108,20 +146,41 @@ class RedisKeys:
         return f"verification_type:{chat_id}:{user_id}"
 
     @staticmethod
-    def captcha_waiting(chat_id: int, user_id: int) -> str:
-        """验证码输入等待状态键名
+    def verification_deadline(chat_id: int, user_id: int) -> str:
+        """验证截止时间键名
 
-        用于标记用户正在等待输入验证码，存储验证消息 ID
+        存储 ``{session_id}:{deadline_epoch_ms}``，TTL = timeout + 10s grace。
+        /start 恢复与 timeout claim 据此判断剩余时间与 session 身份一致性。
+        """
+        return f"verification_deadline:{chat_id}:{user_id}"
+
+    @staticmethod
+    def verification_recovery(chat_id: int, user_id: int) -> str:
+        """验证 UI delivery/recovery 状态机键名（不按 flow 分键）。
+
+        同一用户同一群组同一时刻只能有一个验证会话；若按 flow 分键，新旧 deep-link
+        可分别取锁并覆盖同一答案。状态值四态：
+
+        - ``undelivered:{session_id}``：私聊发送失败（用户未启动 Bot），可经 /start 恢复
+        - ``pending:{session_id}:{revision}:{owner_token}``：某协程取得发送权，UI 未提交
+        - ``message:{session_id}:{revision}:{flow}:{message_id}``：UI 已发送，可读 message_id
+        - ``timeout:{session_id}``：timeout 已 claim，二次 claim 返回 stale（防重复处罚）
+        """
+        return f"verification_recovery:{chat_id}:{user_id}"
+
+    @staticmethod
+    def captcha_waiting(chat_id: int, user_id: int) -> str:
+        """验证码输入等待辅助键名（输入模式 UI 状态，非状态机 5 键）。
+
+        值存 ``{session_id}:{message_id}``（按 session deadline 到期）；滚动发布期间可能读到
+        旧格式 ``{message_id}``，消费者仅在 message_id 仍匹配当前 recovery UI 时兼容。残留由
+        读时校验清理（on_captcha_text_input 校验 session 匹配）。
         """
         return f"captcha_waiting:{chat_id}:{user_id}"
 
     @staticmethod
     def captcha_waiting_user(user_id: int) -> str:
-        """验证码等待反向索引键名
-
-        用于从用户 ID 快速查找等待的验证码所属群组，避免 Redis SCAN 操作
-        存储格式: "{chat_id}"
-        """
+        """验证码等待反向索引辅助键名（存 ``{chat_id}``，与 captcha_waiting 同 Lua 写入同到期）。"""
         return f"captcha_waiting_user:{user_id}"
 
     @staticmethod

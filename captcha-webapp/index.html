@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-Hans">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Guard Bot - 验证服务</title>
+    <title data-i18n="index.title">Telegram Guard Bot - 验证服务</title>
+    <script src="/i18n.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -92,33 +93,36 @@
 </head>
 <body>
     <div class="container">
-        <h1>🔐 Telegram Guard Bot</h1>
-        <p class="subtitle">多验证码集成服务</p>
+        <h1 data-i18n="index.heading">🔐 Telegram Guard Bot</h1>
+        <p class="subtitle" data-i18n="index.subtitle">多验证码集成服务</p>
 
         <div class="info">
-            <h2>支持的验证方式</h2>
+            <h2 data-i18n="index.supported_methods">支持的验证方式</h2>
             <ul>
-                <li>✅ Cloudflare Turnstile</li>
-                <li>✅ Friendly Captcha v2</li>
-                <li>✅ hCaptcha</li>
-                <li>✅ MTCaptcha</li>
-                <li>✅ ALTCHA (Proof-of-Work)</li>
+                <li data-i18n="index.methods.turnstile">✅ Cloudflare Turnstile</li>
+                <li data-i18n="index.methods.friendly">✅ Friendly Captcha v2</li>
+                <li data-i18n="index.methods.hcaptcha">✅ hCaptcha</li>
+                <li data-i18n="index.methods.mtcaptcha">✅ MTCaptcha</li>
+                <li data-i18n="index.methods.altcha">✅ ALTCHA（工作量证明）</li>
             </ul>
         </div>
 
         <div class="info">
-            <h2>技术架构</h2>
+            <h2 data-i18n="index.architecture">技术架构</h2>
             <ul>
-                <li>🚀 Cloudflare Pages (前端托管)</li>
-                <li>⚡ Cloudflare Functions (验证 API)</li>
-                <li>🔒 HMAC-SHA256 签名验证</li>
-                <li>🌐 独立页面设计（避免 SDK 冲突）</li>
+                <li data-i18n="index.arch.pages">🚀 Cloudflare Pages（前端托管）</li>
+                <li data-i18n="index.arch.functions">⚡ Cloudflare Functions（验证 API）</li>
+                <li data-i18n="index.arch.hmac">🔒 HMAC-SHA256 签名验证</li>
+                <li data-i18n="index.arch.isolated">🌐 独立页面设计（避免 SDK 冲突）</li>
             </ul>
         </div>
 
-        <p class="footer">
+        <p class="footer" data-i18n="index.footer">
             此页面仅供系统使用，请通过 Telegram Bot 访问验证服务
         </p>
     </div>
+    <script>
+        applyTranslations();
+    </script>
 </body>
 </html>

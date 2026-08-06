@@ -1,6 +1,8 @@
 """群管理服务模块"""
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 
 from aiogram import Bot
 from aiogram.types import ChatPermissions
@@ -11,11 +13,41 @@ from src.repositories.audit_repo import AuditRepository
 from src.repositories.user_repo import UserRepository
 
 
+class ModerationErrorCode(StrEnum):
+    """群管理操作失败原因的稳定 code。
+
+    服务层只返回 code，不含任何用户可见文案；由 handler 层按当前群组
+    locale 渲染对应 catalog 文案（``moderation.error.<code>.message``）。
+    """
+
+    user_not_in_chat = "user_not_in_chat"
+    verify_user_failed = "verify_user_failed"
+    target_is_admin = "target_is_admin"
+    verify_admin_failed = "verify_admin_failed"
+    operation_failed = "operation_failed"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ModerationResult:
+    """群管理操作结果。
+
+    ``code is None`` 表示成功；失败时始终携带一个稳定的错误 code。
+    success 由 code 推导，避免 ``tuple[bool, str]`` 中 bool 与文案互相
+    矛盾的隐患（例如 ``True, "失败原因"`` 这种非法组合）。
+    """
+
+    code: ModerationErrorCode | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.code is None
+
+
 class ModerationService:
     """群管理服务"""
 
     @staticmethod
-    async def verify_user_in_chat(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
+    async def verify_user_in_chat(bot: Bot, chat_id: int, user_id: int) -> ModerationResult:
         """✅ M7: 验证用户是否存在于群组中
 
         Args:
@@ -24,20 +56,20 @@ class ModerationService:
             user_id: 用户 ID
 
         Returns:
-            (是否存在, 错误消息)
+            ``ModerationResult``，成功表示用户在群组中。
         """
         try:
             member = await bot.get_chat_member(chat_id, user_id)
             # 如果用户已经离开或被踢出
             if member.status in ["left", "kicked"]:
-                return False, "用户不在群组中"
-            return True, ""
+                return ModerationResult(code=ModerationErrorCode.user_not_in_chat)
+            return ModerationResult()
         except Exception as e:
             logger.debug(f"验证用户存在性失败: {e}")
-            return False, "无法验证用户信息，请检查用户 ID 是否正确"
+            return ModerationResult(code=ModerationErrorCode.verify_user_failed)
 
     @staticmethod
-    async def verify_not_admin(bot: Bot, chat_id: int, user_id: int) -> tuple[bool, str]:
+    async def verify_not_admin(bot: Bot, chat_id: int, user_id: int) -> ModerationResult:
         """验证目标用户不是管理员
 
         Args:
@@ -46,17 +78,17 @@ class ModerationService:
             user_id: 用户 ID
 
         Returns:
-            (是否通过检查, 错误消息) - True 表示不是管理员可以操作，False 表示是管理员不能操作
+            ``ModerationResult``，成功表示目标用户不是管理员（可以操作）。
         """
         try:
             member = await bot.get_chat_member(chat_id, user_id)
             # 检查是否是群主或管理员
             if member.status in ["creator", "administrator"]:
-                return False, "无法对群组管理员执行此操作"
-            return True, ""
+                return ModerationResult(code=ModerationErrorCode.target_is_admin)
+            return ModerationResult()
         except Exception as e:
             logger.debug(f"验证管理员身份失败: {e}")
-            return False, "无法验证用户权限信息"
+            return ModerationResult(code=ModerationErrorCode.verify_admin_failed)
 
     @staticmethod
     async def kick_user(
@@ -66,25 +98,25 @@ class ModerationService:
         operator_id: int,
         reason: str | None = None,
         revoke_messages: bool = False,
-    ) -> tuple[bool, str | None]:
+    ) -> ModerationResult:
         """踢出用户
 
         Args:
             revoke_messages: 是否删除该用户的所有消息（默认 False）
 
         Returns:
-            (是否成功, 错误消息)
+            ``ModerationResult``，成功表示已踢出。
         """
         try:
             # ✅ M7: 先验证用户是否在群组中
-            exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
-            if not exists:
-                return False, error_msg
+            verification = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
+            if not verification.success:
+                return verification
 
             # 验证目标用户不是管理员
-            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
-            if not not_admin:
-                return False, error_msg
+            admin_check = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not admin_check.success:
+                return admin_check
 
             # 踢出用户（临时封禁后立即解封）
             await bot.ban_chat_member(
@@ -102,11 +134,11 @@ class ModerationService:
             )
 
             logger.info(f"用户 {user_id} 被管理员 {operator_id} 踢出群组 {chat_id}")
-            return True, None
+            return ModerationResult()
 
         except Exception as e:
             logger.error(f"踢出用户失败: {e}")
-            return False, "操作失败，请检查 Bot 权限"
+            return ModerationResult(code=ModerationErrorCode.operation_failed)
 
     @staticmethod
     async def mute_user(
@@ -116,25 +148,25 @@ class ModerationService:
         operator_id: int,
         duration: int | None = None,
         reason: str | None = None,
-    ) -> tuple[bool, str | None]:
+    ) -> ModerationResult:
         """禁言用户
 
         Args:
             duration: 禁言时长（分钟），None 表示永久禁言
 
         Returns:
-            (是否成功, 错误消息)
+            ``ModerationResult``，成功表示已禁言。
         """
         try:
             # ✅ M7: 先验证用户是否在群组中
-            exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
-            if not exists:
-                return False, error_msg
+            verification = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
+            if not verification.success:
+                return verification
 
             # 验证目标用户不是管理员
-            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
-            if not not_admin:
-                return False, error_msg
+            admin_check = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not admin_check.success:
+                return admin_check
 
             # 计算禁言到期时间
             until_date = None
@@ -183,11 +215,11 @@ class ModerationService:
                 f"用户 {user_id} 被管理员 {operator_id} 禁言 "
                 f"{'永久' if duration is None else f'{duration}分钟'}"
             )
-            return True, None
+            return ModerationResult()
 
         except Exception as e:
             logger.error(f"禁言用户失败: {e}")
-            return False, "操作失败，请检查 Bot 权限"
+            return ModerationResult(code=ModerationErrorCode.operation_failed)
 
     @staticmethod
     async def _unban_or_unmute_user(
@@ -257,7 +289,7 @@ class ModerationService:
 
             action_text = "解除禁言" if action == "unmute" else "解除封禁"
             logger.info(
-                f"用户 {user_id} 被管理员 {operator_id} {action_text} " f"(原状态: {member.status})"
+                f"用户 {user_id} 被管理员 {operator_id} {action_text} (原状态: {member.status})"
             )
             return True
 
@@ -294,25 +326,32 @@ class ModerationService:
         operator_id: int,
         reason: str | None = None,
         revoke_messages: bool = False,
-    ) -> tuple[bool, str | None]:
+        *,
+        allow_left: bool = False,
+    ) -> ModerationResult:
         """永久封禁用户
 
         Args:
             revoke_messages: 是否删除该用户的所有消息
+            allow_left: 是否允许封禁已离群/已被踢出的用户。人工复核 ban 需开启，
+                防止 spammer 在管理员确认前退群规避处罚；Telegram ``ban_chat_member``
+                对 left/kicked 用户也能执行（永久封禁 = 加入黑名单）。默认 False
+                保持旧行为：普通封禁仍要求目标用户当前在群内。
 
         Returns:
-            (是否成功, 错误消息)
+            ``ModerationResult``，成功表示已封禁。
         """
         try:
-            # ✅ M7: 先验证用户是否在群组中
-            exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
-            if not exists:
-                return False, error_msg
+            if not allow_left:
+                # 默认行为不变：普通封禁仍要求目标用户当前在群内
+                verification = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
+                if not verification.success:
+                    return verification
 
-            # 验证目标用户不是管理员
-            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
-            if not not_admin:
-                return False, error_msg
+            # 即使 allow_left 也不可封禁管理员
+            admin_check = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not admin_check.success:
+                return admin_check
 
             # 封禁用户
             await bot.ban_chat_member(
@@ -336,11 +375,11 @@ class ModerationService:
                 f"用户 {user_id} 被管理员 {operator_id} 永久封禁"
                 + (" (已删除所有消息)" if revoke_messages else "")
             )
-            return True, None
+            return ModerationResult()
 
         except Exception as e:
             logger.error(f"封禁用户失败: {e}")
-            return False, "操作失败，请检查 Bot 权限"
+            return ModerationResult(code=ModerationErrorCode.operation_failed)
 
     @staticmethod
     async def ban_user_temporarily(
@@ -350,25 +389,25 @@ class ModerationService:
         operator_id: int,
         duration: int,
         reason: str | None = None,
-    ) -> tuple[bool, str | None]:
+    ) -> ModerationResult:
         """踢出用户并临时封禁
 
         Args:
             duration: 封禁时长（分钟）
 
         Returns:
-            (是否成功, 错误消息)
+            ``ModerationResult``，成功表示已临时封禁。
         """
         try:
             # ✅ M7: 先验证用户是否在群组中
-            exists, error_msg = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
-            if not exists:
-                return False, error_msg
+            verification = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
+            if not verification.success:
+                return verification
 
             # 验证目标用户不是管理员
-            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
-            if not not_admin:
-                return False, error_msg
+            admin_check = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not admin_check.success:
+                return admin_check
 
             # 计算封禁到期时间
             until_date = datetime.utcnow() + timedelta(minutes=duration)
@@ -390,11 +429,11 @@ class ModerationService:
             )
 
             logger.info(f"用户 {user_id} 被管理员 {operator_id} 踢出并封禁 {duration} 分钟")
-            return True, None
+            return ModerationResult()
 
         except Exception as e:
             logger.error(f"临时封禁用户失败: {e}")
-            return False, "操作失败，请检查 Bot 权限"
+            return ModerationResult(code=ModerationErrorCode.operation_failed)
 
     @staticmethod
     async def warn_user(
@@ -411,11 +450,12 @@ class ModerationService:
         """
         try:
             # 验证目标用户不是管理员
-            not_admin: bool
-            error_msg: str | None
-            not_admin, error_msg = await ModerationService.verify_not_admin(bot, chat_id, user_id)
-            if not not_admin:
-                logger.warning(f"尝试警告管理员 {user_id}，操作已阻止")
+            admin_check = await ModerationService.verify_not_admin(bot, chat_id, user_id)
+            if not admin_check.success:
+                assert admin_check.code is not None
+                logger.warning(
+                    f"尝试警告管理员 {user_id}，操作已阻止 [code:{admin_check.code.value}]"
+                )
                 return False, 0, False
 
             # 添加警告
@@ -438,7 +478,7 @@ class ModerationService:
             )
 
             logger.info(
-                f"用户 {user_id} 被管理员 {operator_id} 警告，" f"累计警告次数: {warning_count}"
+                f"用户 {user_id} 被管理员 {operator_id} 警告，累计警告次数: {warning_count}"
             )
 
             # 检查是否触发自动处罚（处罚升级机制）
@@ -446,39 +486,41 @@ class ModerationService:
 
             # 阶段3: 封禁（踢出+拉黑）
             if warning_count >= settings.warning_ban_threshold:
-                success, error_msg = await ModerationService.ban_user(
+                punishment = await ModerationService.ban_user(
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
                     operator_id=operator_id,
                     reason=f"累计警告达到 {warning_count} 次",
                 )
-                auto_punished = success
+                auto_punished = punishment.success
 
-                if success:
+                if punishment.success:
                     logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动封禁")
                 else:
-                    logger.error(f"自动封禁失败: {error_msg}")
+                    assert punishment.code is not None
+                    logger.error(f"自动封禁失败: {punishment.code.value}")
 
             # 阶段2: 踢出群组
             elif warning_count >= settings.warning_kick_threshold:
-                success, error_msg = await ModerationService.kick_user(
+                punishment = await ModerationService.kick_user(
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
                     operator_id=operator_id,
                     reason=f"累计警告达到 {warning_count} 次",
                 )
-                auto_punished = success
+                auto_punished = punishment.success
 
-                if success:
+                if punishment.success:
                     logger.info(f"用户 {user_id} 因累计 {warning_count} 次警告被自动踢出")
                 else:
-                    logger.error(f"自动踢出失败: {error_msg}")
+                    assert punishment.code is not None
+                    logger.error(f"自动踢出失败: {punishment.code.value}")
 
             # 阶段1: 禁言
             elif warning_count >= settings.max_warnings:
-                success, error_msg = await ModerationService.mute_user(
+                punishment = await ModerationService.mute_user(
                     bot=bot,
                     chat_id=chat_id,
                     user_id=user_id,
@@ -486,15 +528,16 @@ class ModerationService:
                     duration=settings.warning_mute_duration_hours * 60,  # 转换为分钟
                     reason=f"累计警告达到 {warning_count} 次",
                 )
-                auto_punished = success
+                auto_punished = punishment.success
 
-                if success:
+                if punishment.success:
                     logger.info(
                         f"用户 {user_id} 因累计 {warning_count} 次警告被自动禁言 "
                         f"{settings.warning_mute_duration_hours} 小时"
                     )
                 else:
-                    logger.error(f"自动禁言失败: {error_msg}")
+                    assert punishment.code is not None
+                    logger.error(f"自动禁言失败: {punishment.code.value}")
 
             return True, warning_count, auto_punished
 

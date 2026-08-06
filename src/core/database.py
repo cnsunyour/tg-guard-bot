@@ -72,7 +72,14 @@ async def init_db() -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         # 导入所有模型以确保它们被注册
-        from src.models import audit_log, group, report, spam_sample, user  # noqa: F401
+        from src.models import (  # noqa: F401
+            audit_log,
+            group,
+            report,
+            spam_sample,
+            user,
+            user_settings,
+        )
 
         await conn.run_sync(Base.metadata.create_all)
 

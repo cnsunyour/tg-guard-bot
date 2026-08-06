@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-Hans">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>hCaptcha 验证</title>
+    <title data-i18n="title.hcaptcha">hCaptcha 验证</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/i18n.js"></script>
     <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -27,13 +28,14 @@
 </head>
 <body>
     <div class="container">
-        <h1>🔐 入群验证</h1>
-        <p class="subtitle">请完成以下验证</p>
+        <h1 data-i18n="heading">🔐 入群验证</h1>
+        <p class="subtitle" data-i18n="subtitle">请完成以下验证</p>
         <div id="captcha-widget"></div>
         <div id="status" class="status"></div>
     </div>
 
     <script>
+        applyTranslations();
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
@@ -42,6 +44,9 @@
         const chatId = params.get('chat_id');
         const userId = params.get('user_id');
         const verifyToken = params.get('token');
+
+        // 第三方组件按 BCP47 地区码跟随 bot locale（与 friendly.html 一致）
+        const providerLocales = { 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', 'en': 'en' };
 
         function showStatus(type, message) {
             const el = document.getElementById('status');
@@ -52,7 +57,7 @@
 
         (async function init() {
             try {
-                showStatus('loading', '加载验证组件...');
+                showStatus('loading', t('status.loading_widget'));
 
                 const response = await fetch(`/api/config?provider=hcaptcha`);
                 const config = await response.json();
@@ -67,8 +72,9 @@
 
                 window.hcaptcha.render('captcha-widget', {
                     sitekey: config.site_key,
+                    hl: providerLocales[getCurrentLocale()],
                     callback: async (token) => {
-                        showStatus('loading', '验证中...');
+                        showStatus('loading', t('status.verifying'));
                         try {
                             const res = await fetch('/api/verify', {
                                 method: 'POST',
@@ -83,7 +89,7 @@
                             });
                             const result = await res.json();
                             if (result.success) {
-                                showStatus('success', '✅ 验证成功！');
+                                showStatus('success', t('status.success'));
                                 setTimeout(() => {
                                     tg.sendData(JSON.stringify({
                                         action: 'captcha_success',
@@ -97,14 +103,15 @@
                                     tg.close();
                                 }, 800);
                             } else {
-                                showStatus('error', `❌ ${result.error || '验证失败'}`);
+                                console.warn('Backend verification failed:', result.error);
+                                showStatus('error', t('status.failed'));
                             }
                         } catch (error) {
                             console.error('Verification error:', error);
-                            showStatus('error', '❌ 网络错误，请重试');
+                            showStatus('error', t('status.network_error'));
                         }
                     },
-                    'error-callback': () => showStatus('error', '❌ 验证加载失败'),
+                    'error-callback': () => showStatus('error', t('status.widget_load_failed')),
                     theme: 'light',
                 });
 
@@ -116,7 +123,7 @@
                 }, 1000);
             } catch (error) {
                 console.error('Failed to initialize:', error);
-                showStatus('error', '❌ 加载失败，请刷新重试');
+                showStatus('error', t('status.init_failed'));
             }
         })();
     </script>

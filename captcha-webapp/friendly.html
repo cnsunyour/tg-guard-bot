@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-Hans">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Friendly Captcha 验证</title>
+    <title data-i18n="title.friendly">Friendly Captcha 验证</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="/i18n.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -26,13 +27,14 @@
 </head>
 <body>
     <div class="container">
-        <h1>🔐 入群验证</h1>
-        <p class="subtitle">请完成以下验证</p>
+        <h1 data-i18n="heading">🔐 入群验证</h1>
+        <p class="subtitle" data-i18n="subtitle">请完成以下验证</p>
         <div id="captcha-widget"></div>
         <div id="status" class="status"></div>
     </div>
 
     <script>
+        applyTranslations();
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
@@ -43,6 +45,13 @@
         const verifyToken = params.get('token');
         const keyIndex = params.get('key_index') || 0;
 
+        // Friendly Captcha SDK 使用 BCP47 语言标签（按地区），与 bot locale（按文字）映射
+        const friendlyLocales = {
+            'zh-Hans': 'zh',
+            'zh-Hant': 'zh-TW',
+            'en': 'en',
+        };
+
         function showStatus(type, message) {
             const el = document.getElementById('status');
             el.className = `status ${type}`;
@@ -51,7 +60,7 @@
         }
 
         async function verifyWithBackend(solution) {
-            showStatus('loading', '验证中...');
+            showStatus('loading', t('status.verifying'));
             try {
                 const res = await fetch('/api/verify', {
                     method: 'POST',
@@ -68,7 +77,7 @@
                 const result = await res.json();
 
                 if (result.success) {
-                    showStatus('success', '✅ 验证成功！');
+                    showStatus('success', t('status.success'));
                     setTimeout(() => {
                         tg.sendData(JSON.stringify({
                             action: 'captcha_success',
@@ -82,17 +91,18 @@
                         tg.close();
                     }, 800);
                 } else {
-                    showStatus('error', `❌ ${result.error || '验证失败'}`);
+                    console.warn('Backend verification failed:', result.error);
+                    showStatus('error', t('status.failed'));
                 }
             } catch (error) {
                 console.error('Verification error:', error);
-                showStatus('error', '❌ 网络错误，请重试');
+                showStatus('error', t('status.network_error'));
             }
         }
 
         (async function init() {
             try {
-                showStatus('loading', '加载验证组件...');
+                showStatus('loading', t('status.loading_widget'));
 
                 // 获取配置
                 const response = await fetch(`/api/config?provider=friendly&key_index=${keyIndex}`);
@@ -109,7 +119,7 @@
                 widgetDiv.className = 'frc-captcha';
                 widgetDiv.setAttribute('data-sitekey', config.site_key);
                 widgetDiv.setAttribute('data-start', 'auto');
-                widgetDiv.setAttribute('lang', 'zh');
+                widgetDiv.setAttribute('lang', friendlyLocales[getCurrentLocale()]);
                 container.appendChild(widgetDiv);
 
                 // 动态加载 SDK（在 widget 元素创建之后）
@@ -133,8 +143,8 @@
                 });
 
                 widgetDiv.addEventListener('frc:widget.error', (event) => {
-                    console.error('Friendly Captcha 错误:', event.detail);
-                    showStatus('error', '❌ 验证失败，请刷新重试');
+                    console.error('Friendly Captcha error:', event.detail);
+                    showStatus('error', t('status.failed_refresh'));
                 });
 
                 widgetDiv.addEventListener('frc:widget.ready', (event) => {
@@ -150,7 +160,7 @@
                 }, 1500);
             } catch (error) {
                 console.error('Init error:', error);
-                showStatus('error', '❌ 加载失败：' + error.message);
+                showStatus('error', t('status.init_failed'));
             }
         })();
     </script>

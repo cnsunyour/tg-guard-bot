@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from loguru import logger
 
 from src.core.config import settings
+from src.core.i18n import BoundLocalizer
 from src.core.redis import RedisKeys, get_redis
 from src.core.utils import (
     auto_delete_message,
@@ -22,9 +23,68 @@ from src.core.utils import (
 from src.repositories.report_repo import ReportRepository
 from src.repositories.spam_repo import SpamRepository
 from src.repositories.user_repo import UserRepository
-from src.services.moderation import ModerationService
+from src.services.moderation import ModerationErrorCode, ModerationService
 
 router = Router(name="moderation")
+
+
+def _render_moderation_error(
+    localizer: BoundLocalizer,
+    code: ModerationErrorCode,
+) -> str:
+    """把服务层 error code 映射为当前群组语言的用户可见错误文案。
+
+    catalog 文案为受控纯文本（无需 escape）；调用方将其插入到全局
+    HTML parse_mode 的消息中时，由 ``moderation.error.<code>.message``
+    提供稳定的本地化失败原因。
+    """
+    return localizer.t(f"moderation.error.{code.value}.message")
+
+
+# 系统警告 reason（bot 自动警告）的稳定 code → catalog key 映射。
+# 历史兼容：修复前直接写入 warnings.reason 的中文也映射，避免旧记录跨 locale 泄漏。
+_WARNING_REASON_CATALOG_KEYS: dict[str, str] = {
+    "system:channel_impersonation": "moderation.warnings.system_reason.channel_impersonation.label",
+    "使用频道马甲发言": "moderation.warnings.system_reason.channel_impersonation.label",
+}
+
+
+def _render_warning_reason(localizer: BoundLocalizer, reason: str | None) -> str:
+    """渲染 /warnings 列表中的 reason 字段。
+
+    已知系统警告 code（含历史中文值）按群 locale 渲染；其余视为管理员自由
+    输入文本，escape 后展示；空值回落到 no_reason label。
+    """
+
+    if not reason:
+        return localizer.t("moderation.warnings.no_reason.label")
+    catalog_key = _WARNING_REASON_CATALOG_KEYS.get(reason)
+    if catalog_key:
+        return localizer.t(catalog_key)
+    return escape_html(reason)
+
+
+# 举报默认 reason 稳定 code：不存本地化文案，避免群切换语言后旧举报仍显示旧语言。
+# 历史兼容：迁移前写入 reports.reason 的各语言默认 label 也视为“默认举报”。
+_REPORT_DEFAULT_REASON_CODE = "system:spam"
+_LEGACY_DEFAULT_REPORT_REASONS: frozenset[str] = frozenset(
+    {
+        _REPORT_DEFAULT_REASON_CODE,
+        "垃圾消息",
+        "垃圾訊息",
+        "Spam message",
+    }
+)
+
+
+def _render_report_reason(localizer: BoundLocalizer, reason: str | None) -> str:
+    """渲染举报 reason：默认 code/历史值→按 locale 默认标签；空值→无原因；其余 escape 原样。"""
+
+    if not reason:
+        return localizer.t("moderation.report.list.no_reason.label")
+    if reason in _LEGACY_DEFAULT_REPORT_REASONS:
+        return localizer.t("moderation.spam.reason.default.label")
+    return escape_html(reason)
 
 
 async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
@@ -148,34 +208,34 @@ def parse_duration(text: str) -> int | None:
     return minutes
 
 
-def parse_spam_args(text: str) -> tuple[bool, str]:
+def parse_spam_args(text: str) -> tuple[bool, str | None]:
     """解析 /spam 命令参数
 
     支持格式:
-        /spam           -> (False, "垃圾消息")
+        /spam           -> (False, None)
         /spam 原因       -> (False, "原因")
-        /spam -d        -> (True, "垃圾消息")
+        /spam -d        -> (True, None)
         /spam -d 原因    -> (True, "原因")
 
     Args:
         text: 完整的命令文本
 
     Returns:
-        (delete_all: bool, reason: str)
+        (delete_all: bool, reason: str | None)
         - delete_all: 是否删除用户的所有消息
-        - reason: 原因文本
+        - reason: 用户提供的原因文本，无原因时为 None（cmd_spam 写入 DB 时转稳定 code `system:spam`，展示层 _render_report_reason 按 locale 渲染）
     """
     parts = text.split(maxsplit=1)
 
     if len(parts) < 2:
-        return False, "垃圾消息"
+        return False, None
 
     args = parts[1].strip()
 
     # 检查 -d 参数（支持 "-d" 和 "-d原因" 格式）
     if args.startswith("-d"):
         remaining = args[2:].strip()
-        return True, remaining if remaining else "垃圾消息"
+        return True, remaining or None
 
     return False, args
 
@@ -282,33 +342,25 @@ def parse_mute_args(text: str, is_reply: bool) -> tuple[int | None, str | None]:
 
 
 @router.message(Command("kick"))
-async def cmd_kick(message: Message, bot: Bot) -> None:
+async def cmd_kick(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """踢出用户"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        await message.answer(
-            "❌ 请指定要踢出的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /kick &lt;用户ID&gt; [原因]\n"
-            "方式3: /kick @用户 [原因]\n\n"
-            "<b>新功能</b>:\n"
-            "• /kick -d [原因] - 踢出用户，<b>删除该用户的所有消息</b>\n"
-            "• /kick &lt;用户ID&gt; -d [原因] - 同上"
-        )
+        await message.answer(localizer.t("moderation.kick.usage.message"))
         return
 
     # 解析参数：-d 标志和原因
@@ -320,7 +372,7 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
     )
 
     # 执行踢出
-    success, error_msg = await ModerationService.kick_user(
+    result = await ModerationService.kick_user(
         bot=bot,
         chat_id=message.chat.id,
         user_id=target_user_id,
@@ -329,7 +381,7 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
         revoke_messages=delete_all,
     )
 
-    if success:
+    if result.success:
         # 如果是回复消息模式且未使用 -d 参数，删除被回复的消息
         # （使用 -d 时所有消息已通过 revoke_messages 删除）
         if message.reply_to_message and not delete_all:
@@ -339,44 +391,48 @@ async def cmd_kick(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.debug(f"删除被回复的消息失败: {e}")
 
+        reason_line = (
+            localizer.t("moderation.common.reason.line", reason=escape_html(reason))
+            if reason
+            else ""
+        )
+        deleted_all = localizer.t("moderation.common.deleted_all.suffix") if delete_all else ""
         reply = await message.answer(
-            f"✅ 已踢出用户 {target_user_id}"
-            + (f"\n原因: {escape_html(reason)}" if reason else "")
-            + (" (已删除所有消息)" if delete_all else "")
+            localizer.t(
+                "moderation.kick.success.message",
+                target_user_id=target_user_id,
+                reason_line=reason_line,
+                deleted_all=deleted_all,
+            )
         )
         await auto_delete_message(reply)
     else:
-        # ✅ M7: 显示详细的错误消息
-        reply = await message.answer(f"❌ {error_msg}")
+        # ✅ M7: 按 code 渲染本地化错误消息
+        assert result.code is not None
+        reply = await message.answer(f"❌ {_render_moderation_error(localizer, result.code)}")
         await auto_delete_message(reply)
 
 
 @router.message(Command("mute"))
-async def cmd_mute(message: Message, bot: Bot) -> None:
+async def cmd_mute(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """禁言用户"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        await message.answer(
-            "❌ 请指定要禁言的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /mute &lt;用户ID&gt; [时长] [原因]\n"
-            "方式3: /mute @用户 [时长] [原因]\n\n"
-            "时长格式: 30m (30分钟), 2h (2小时), 1d (1天), 不填为永久"
-        )
+        await message.answer(localizer.t("moderation.mute.usage.message"))
         return
 
     # 解析参数：时长和原因
@@ -388,7 +444,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
     )
 
     # 执行禁言
-    success, error_msg = await ModerationService.mute_user(
+    result = await ModerationService.mute_user(
         bot=bot,
         chat_id=message.chat.id,
         user_id=target_user_id,
@@ -397,7 +453,7 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
         reason=reason,
     )
 
-    if success:
+    if result.success:
         # 如果是回复消息模式，删除被回复的消息
         if message.reply_to_message:
             try:
@@ -406,20 +462,34 @@ async def cmd_mute(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.debug(f"删除被回复的消息失败: {e}")
 
-        duration_text = "永久" if duration is None else f"{duration}分钟"
+        duration_text = (
+            localizer.t("moderation.duration.permanent.label")
+            if duration is None
+            else localizer.t("moderation.duration.minutes.label", minutes=duration)
+        )
+        reason_line = (
+            localizer.t("moderation.common.reason.line", reason=escape_html(reason))
+            if reason
+            else ""
+        )
         reply = await message.answer(
-            f"✅ 已禁言用户 {target_user_id}，时长: {duration_text}"
-            + (f"\n原因: {escape_html(reason)}" if reason else "")
+            localizer.t(
+                "moderation.mute.success.message",
+                target_user_id=target_user_id,
+                duration=duration_text,
+                reason_line=reason_line,
+            )
         )
         await auto_delete_message(reply)
     else:
-        # ✅ M7: 显示详细的错误消息
-        reply = await message.answer(f"❌ {error_msg}")
+        # ✅ M7: 按 code 渲染本地化错误消息
+        assert result.code is not None
+        reply = await message.answer(f"❌ {_render_moderation_error(localizer, result.code)}")
         await auto_delete_message(reply)
 
 
 @router.message(Command("unmute"))
-async def cmd_unmute(message: Message, bot: Bot) -> None:
+async def cmd_unmute(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """解除禁言/封禁（与 /unban 等价）
 
     统一解除用户的所有限制，无论是禁言还是封禁
@@ -429,24 +499,18 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        await message.answer(
-            "❌ 请指定要解除限制的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /unmute &lt;用户ID&gt;\n"
-            "方式3: /unmute @用户\n\n"
-            "💡 提示：/unmute 和 /unban 功能完全相同"
-        )
+        await message.answer(localizer.t("moderation.unmute.usage.message"))
         return
 
     # 执行解除禁言/封禁
@@ -458,41 +522,35 @@ async def cmd_unmute(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的所有限制（禁言/封禁）")
+        reply = await message.answer(
+            localizer.t("moderation.unmute.success.message", target_user_id=target_user_id)
+        )
         await auto_delete_message(reply)
     else:
-        reply = await message.answer("❌ 操作失败，请检查Bot权限")
+        reply = await message.answer(localizer.t("moderation.unmute.error.failed.message"))
         await auto_delete_message(reply)
 
 
 @router.message(Command("ban"))
-async def cmd_ban(message: Message, bot: Bot) -> None:
+async def cmd_ban(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """封禁用户"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        await message.answer(
-            "❌ 请指定要封禁的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /ban &lt;用户ID&gt; [原因]\n"
-            "方式3: /ban @用户 [原因]\n\n"
-            "<b>新功能</b>:\n"
-            "• /ban -d [原因] - 封禁用户，<b>删除该用户的所有消息</b>\n"
-            "• /ban &lt;用户ID&gt; -d [原因] - 同上"
-        )
+        await message.answer(localizer.t("moderation.ban.usage.message"))
         return
 
     # 获取原因和删除标志
@@ -504,7 +562,7 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
     )
 
     # 执行封禁
-    success, error_msg = await ModerationService.ban_user(
+    result = await ModerationService.ban_user(
         bot=bot,
         chat_id=message.chat.id,
         user_id=target_user_id,
@@ -513,7 +571,7 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
         revoke_messages=delete_all,
     )
 
-    if success:
+    if result.success:
         # 如果是回复消息模式且未使用 -d 参数，删除被回复的消息
         # （使用 -d 时所有消息已通过 revoke_messages 删除）
         if message.reply_to_message and not delete_all:
@@ -523,20 +581,30 @@ async def cmd_ban(message: Message, bot: Bot) -> None:
             except Exception as e:
                 logger.debug(f"删除被回复的消息失败: {e}")
 
+        reason_line = (
+            localizer.t("moderation.common.reason.line", reason=escape_html(reason))
+            if reason
+            else ""
+        )
+        deleted_all = localizer.t("moderation.common.deleted_all.suffix") if delete_all else ""
         reply = await message.answer(
-            f"✅ 已封禁用户 {target_user_id}"
-            + (f"\n原因: {escape_html(reason)}" if reason else "")
-            + (" (已删除所有消息)" if delete_all else "")
+            localizer.t(
+                "moderation.ban.success.message",
+                target_user_id=target_user_id,
+                reason_line=reason_line,
+                deleted_all=deleted_all,
+            )
         )
         await auto_delete_message(reply)
     else:
-        # ✅ M7: 显示详细的错误消息
-        reply = await message.answer(f"❌ {error_msg}")
+        # ✅ M7: 按 code 渲染本地化错误消息
+        assert result.code is not None
+        reply = await message.answer(f"❌ {_render_moderation_error(localizer, result.code)}")
         await auto_delete_message(reply)
 
 
 @router.message(Command("unban"))
-async def cmd_unban(message: Message, bot: Bot) -> None:
+async def cmd_unban(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """解除封禁/禁言（与 /unmute 等价）
 
     统一解除用户的所有限制，无论是禁言还是封禁
@@ -546,24 +614,18 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        await message.answer(
-            "❌ 请指定要解除限制的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /unban &lt;用户ID&gt;\n"
-            "方式3: /unban @用户\n\n"
-            "💡 提示：/unban 和 /unmute 功能完全相同"
-        )
+        await message.answer(localizer.t("moderation.unban.usage.message"))
         return
 
     # 执行解除封禁/禁言
@@ -575,38 +637,35 @@ async def cmd_unban(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已解除用户 {target_user_id} 的所有限制（禁言/封禁）")
+        reply = await message.answer(
+            localizer.t("moderation.unban.success.message", target_user_id=target_user_id)
+        )
         await auto_delete_message(reply)
     else:
-        reply = await message.answer("❌ 操作失败，请检查Bot权限或用户未被封禁")
+        reply = await message.answer(localizer.t("moderation.unmute.error.failed.message"))
         await auto_delete_message(reply)
 
 
 @router.message(Command("warn"))
-async def cmd_warn(message: Message, bot: Bot) -> None:
+async def cmd_warn(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """警告用户"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        await message.answer(
-            "❌ 请指定要警告的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /warn &lt;用户ID&gt; [原因]\n"
-            "方式3: /warn @用户 [原因]"
-        )
+        await message.answer(localizer.t("moderation.warn.usage.message"))
         return
 
     # 获取原因
@@ -626,7 +685,9 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
     try:
         target_member = await bot.get_chat_member(message.chat.id, target_user_id)
         if target_member.status in ["creator", "administrator"]:
-            reply = await message.answer("❌ 无法对群组管理员执行此操作")
+            reply = await message.answer(
+                f"❌ {_render_moderation_error(localizer, ModerationErrorCode.target_is_admin)}"
+            )
             await auto_delete_message(reply)
             return
     except Exception as e:
@@ -642,55 +703,66 @@ async def cmd_warn(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        response = (
-            f"⚠️ 已警告用户 {target_user_id}\n"
-            f"有效警告: {warning_count} "
-            f"({settings.warning_expiration_days}天内)"
+        reason_line = (
+            localizer.t("moderation.common.reason.line", reason=escape_html(reason))
+            if reason
+            else ""
         )
-        if reason:
-            # ✅ P1-8: 转义用户输入的原因，防止 HTML 注入
-            response += f"\n原因: {escape_html(reason)}"
-
-        # 根据警告次数显示处罚提示
+        punishment_line = ""
         if auto_punished:
             if warning_count >= settings.warning_ban_threshold:
-                response += f"\n\n🚫 用户已达到 {settings.warning_ban_threshold} 次警告，已被封禁"
-            elif warning_count >= settings.warning_kick_threshold:
-                response += f"\n\n👢 用户已达到 {settings.warning_kick_threshold} 次警告，已被踢出"
-            elif warning_count >= settings.max_warnings:
-                response += (
-                    f"\n\n🔇 用户已达到 {settings.max_warnings} 次警告，"
-                    f"自动禁言 {settings.warning_mute_duration_hours} 小时"
+                punishment_line = localizer.t(
+                    "moderation.warn.punishment.ban.line",
+                    threshold=settings.warning_ban_threshold,
                 )
-
-        # 显示下一阶段处罚提示
+            elif warning_count >= settings.warning_kick_threshold:
+                punishment_line = localizer.t(
+                    "moderation.warn.punishment.kick.line",
+                    threshold=settings.warning_kick_threshold,
+                )
+            elif warning_count >= settings.max_warnings:
+                punishment_line = localizer.t(
+                    "moderation.warn.punishment.mute.line",
+                    threshold=settings.max_warnings,
+                    hours=settings.warning_mute_duration_hours,
+                )
         else:
             if warning_count == settings.max_warnings - 1:
-                response += (
-                    f"\n\n💡 提示：再 1 次警告将自动禁言 "
-                    f"{settings.warning_mute_duration_hours} 小时"
+                punishment_line = localizer.t(
+                    "moderation.warn.next.mute.line",
+                    hours=settings.warning_mute_duration_hours,
                 )
             elif warning_count == settings.warning_kick_threshold - 1:
-                response += "\n\n💡 提示：再 1 次警告将被踢出群组"
+                punishment_line = localizer.t("moderation.warn.next.kick.line")
             elif warning_count == settings.warning_ban_threshold - 1:
-                response += "\n\n💡 提示：再 1 次警告将被封禁"
+                punishment_line = localizer.t("moderation.warn.next.ban.line")
+        response = (
+            localizer.t(
+                "moderation.warn.success.message",
+                target_user_id=target_user_id,
+                warning_count=warning_count,
+                expiration_days=settings.warning_expiration_days,
+                reason_line=reason_line,
+            )
+            + punishment_line
+        )
 
         reply = await message.answer(response)
         await auto_delete_message(reply)
     else:
-        reply = await message.answer("❌ 操作失败")
+        reply = await message.answer(localizer.t("moderation.warn.error.failed.message"))
         await auto_delete_message(reply)
 
 
 @router.message(Command("warnings"))
-async def cmd_warnings(message: Message, bot: Bot) -> None:
+async def cmd_warnings(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """查看用户警告记录"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 解析目标用户
@@ -703,7 +775,7 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     if target_user_id != message.from_user.id:
         # 查看他人警告需要管理员权限
         if not await check_admin_permission_strict_message(message, bot):
-            reply = await message.answer("❌ 只有管理员可以查看其他用户的警告记录")
+            reply = await message.answer(localizer.t("moderation.warnings.admin_required.message"))
             await auto_delete_message(reply)
             return
 
@@ -711,7 +783,9 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     warnings = await UserRepository.get_warnings(message.chat.id, target_user_id)
 
     if not warnings:
-        reply = await message.answer(f"✅ 用户 {target_user_id} 没有警告记录")
+        reply = await message.answer(
+            localizer.t("moderation.warnings.empty.message", target_user_id=target_user_id)
+        )
         await auto_delete_message(reply)
         return
 
@@ -721,61 +795,62 @@ async def cmd_warnings(message: Message, bot: Bot) -> None:
     )
 
     # 格式化警告列表
-    response = (
-        f"⚠️ 用户 {target_user_id} 的警告记录:\n"
-        f"有效警告: {recent_count} ({settings.warning_expiration_days}天内)\n"
-        f"历史记录: {len(warnings)} 次\n\n"
-        f"📋 处罚阶梯:\n"
-        f"• {settings.max_warnings} 次 → 禁言 {settings.warning_mute_duration_hours} 小时\n"
-        f"• {settings.warning_kick_threshold} 次 → 踢出群组\n"
-        f"• {settings.warning_ban_threshold} 次 → 封禁（拉黑）\n\n"
+    response = localizer.t(
+        "moderation.warnings.summary.message",
+        target_user_id=target_user_id,
+        recent_count=recent_count,
+        expiration_days=settings.warning_expiration_days,
+        total=len(warnings),
+        max_warnings=settings.max_warnings,
+        mute_hours=settings.warning_mute_duration_hours,
+        kick_threshold=settings.warning_kick_threshold,
+        ban_threshold=settings.warning_ban_threshold,
     )
 
     for idx, warning in enumerate(warnings[:10], 1):  # 只显示最近10条
         date = warning.created_at.strftime("%Y-%m-%d %H:%M")
-        reason = escape_html(warning.reason) if warning.reason else "无原因"
+        reason = _render_warning_reason(localizer, warning.reason)
 
         # 判断警告是否在有效期内
         days_ago = (datetime.utcnow() - warning.created_at).days
         if days_ago < settings.warning_expiration_days:
             # 有效警告标记为 ✅
-            response += f"{idx}. ✅ [{date}] {reason}\n"
+            response += localizer.t(
+                "moderation.warnings.row_active.line", idx=idx, date=date, reason=reason
+            )
         else:
             # 过期警告标记为 ⏱️
-            response += f"{idx}. ⏱️ [{date}] {reason} (已过期)\n"
+            response += localizer.t(
+                "moderation.warnings.row_expired.line", idx=idx, date=date, reason=reason
+            )
 
     if len(warnings) > 10:
-        response += f"\n... 还有 {len(warnings) - 10} 条历史记录"
+        response += localizer.t("moderation.warnings.more.line", count=len(warnings) - 10)
 
     reply = await message.answer(response)
     await auto_delete_message(reply)
 
 
 @router.message(Command("clearwarnings"))
-async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
+async def cmd_clear_warnings(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """清除用户警告"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析目标用户
     target_user_id = await parse_user_from_message(message, bot)
     if target_user_id is None:
-        reply = await message.answer(
-            "❌ 请指定要清除警告的用户：\n\n"
-            "方式1: 回复用户的消息\n"
-            "方式2: /clearwarnings &lt;用户ID&gt;\n"
-            "方式3: /clearwarnings @用户"
-        )
+        reply = await message.answer(localizer.t("moderation.clearwarnings.usage.message"))
         await auto_delete_message(reply)
         return
 
@@ -787,15 +862,21 @@ async def cmd_clear_warnings(message: Message, bot: Bot) -> None:
     )
 
     if success:
-        reply = await message.answer(f"✅ 已清除用户 {target_user_id} 的 {count} 条警告记录")
+        reply = await message.answer(
+            localizer.t(
+                "moderation.clearwarnings.success.message",
+                target_user_id=target_user_id,
+                count=count,
+            )
+        )
         await auto_delete_message(reply)
     else:
-        reply = await message.answer("❌ 操作失败")
+        reply = await message.answer(localizer.t("moderation.clearwarnings.error.failed.message"))
         await auto_delete_message(reply)
 
 
 @router.message(Command("delbefore"))
-async def cmd_delete_before(message: Message, bot: Bot) -> None:
+async def cmd_delete_before(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """删除往前（更早）的消息
 
     用法：回复某条消息，然后使用 /delbefore <N> 删除包含该消息在内的共N条消息
@@ -805,21 +886,17 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 必须回复某条消息
     if not message.reply_to_message:
-        reply = await message.answer(
-            "❌ 请回复要删除的消息\n\n"
-            "<b>用法</b>: 回复某条消息，然后使用 /delbefore &lt;数量&gt;\n"
-            "<b>示例</b>: /delbefore 10  (删除包含该消息在内往前共10条消息)"
-        )
+        reply = await message.answer(localizer.t("moderation.delbefore.usage.message"))
         await auto_delete_message(reply)
         return
 
@@ -829,18 +906,20 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
 
     parts = message.text.split()
     if len(parts) < 2:
-        reply = await message.answer("❌ 请指定要删除的消息数量")
+        reply = await message.answer(localizer.t("moderation.delete.common.count_required.message"))
         await auto_delete_message(reply)
         return
 
     try:
         count = int(parts[1])
         if count <= 0 or count > 1000:
-            reply = await message.answer("❌ 删除数量必须在 1-1000 之间")
+            reply = await message.answer(
+                localizer.t("moderation.delete.common.count_range.message")
+            )
             await auto_delete_message(reply)
             return
     except ValueError:
-        reply = await message.answer("❌ 删除数量必须是数字")
+        reply = await message.answer(localizer.t("moderation.delete.common.count_invalid.message"))
         await auto_delete_message(reply)
         return
 
@@ -855,13 +934,17 @@ async def cmd_delete_before(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\n" f"成功: {success_count} 条\n" f"失败: {fail_count} 条"
+        localizer.t(
+            "moderation.delete.common.result.message",
+            success_count=success_count,
+            fail_count=fail_count,
+        )
     )
     await auto_delete_message(reply)
 
 
 @router.message(Command("delafter"))
-async def cmd_delete_after(message: Message, bot: Bot) -> None:
+async def cmd_delete_after(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """删除往后（更晚）的消息
 
     用法：回复某条消息，然后使用 /delafter <N> 删除包含该消息在内的共N条消息
@@ -871,21 +954,17 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 必须回复某条消息
     if not message.reply_to_message:
-        reply = await message.answer(
-            "❌ 请回复要删除的消息\n\n"
-            "<b>用法</b>: 回复某条消息，然后使用 /delafter &lt;数量&gt;\n"
-            "<b>示例</b>: /delafter 10  (删除包含该消息在内往后共10条消息)"
-        )
+        reply = await message.answer(localizer.t("moderation.delafter.usage.message"))
         await auto_delete_message(reply)
         return
 
@@ -895,18 +974,20 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
 
     parts = message.text.split()
     if len(parts) < 2:
-        reply = await message.answer("❌ 请指定要删除的消息数量")
+        reply = await message.answer(localizer.t("moderation.delete.common.count_required.message"))
         await auto_delete_message(reply)
         return
 
     try:
         count = int(parts[1])
         if count <= 0 or count > 1000:
-            reply = await message.answer("❌ 删除数量必须在 1-1000 之间")
+            reply = await message.answer(
+                localizer.t("moderation.delete.common.count_range.message")
+            )
             await auto_delete_message(reply)
             return
     except ValueError:
-        reply = await message.answer("❌ 删除数量必须是数字")
+        reply = await message.answer(localizer.t("moderation.delete.common.count_invalid.message"))
         await auto_delete_message(reply)
         return
 
@@ -921,13 +1002,17 @@ async def cmd_delete_after(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\n" f"成功: {success_count} 条\n" f"失败: {fail_count} 条"
+        localizer.t(
+            "moderation.delete.common.result.message",
+            success_count=success_count,
+            fail_count=fail_count,
+        )
     )
     await auto_delete_message(reply)
 
 
 @router.message(Command("delrange"))
-async def cmd_delete_range(message: Message, bot: Bot) -> None:
+async def cmd_delete_range(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """删除消息范围
 
     用法：回复起始消息，然后使用 /delrange <结束消息ID或链接> 删除两条消息之间的所有消息
@@ -937,23 +1022,17 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 必须回复某条消息
     if not message.reply_to_message:
-        reply = await message.answer(
-            "❌ 请回复起始消息\n\n"
-            "<b>用法</b>: 回复起始消息，然后使用 /delrange &lt;结束消息ID或链接&gt;\n\n"
-            "<b>示例1</b>: /delrange 12345\n"
-            "<b>示例2</b>: /delrange https://t.me/c/1234567890/12345\n\n"
-            '💡 <b>提示</b>: 在电脑端右键点击消息选择"复制消息链接"，然后直接粘贴即可'
-        )
+        reply = await message.answer(localizer.t("moderation.delrange.usage.message"))
         await auto_delete_message(reply)
         return
 
@@ -963,7 +1042,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
 
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        reply = await message.answer("❌ 请指定结束消息ID或消息链接")
+        reply = await message.answer(localizer.t("moderation.delrange.error.end_required.message"))
         await auto_delete_message(reply)
         return
 
@@ -971,13 +1050,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     link_chat_id, end_message_id, link_username = parse_message_link_with_chat(parts[1])
 
     if end_message_id is None:
-        reply = await message.answer(
-            "❌ 无法解析消息ID\n\n"
-            "支持的格式：\n"
-            "1. 纯数字：12345\n"
-            "2. 私有群组链接：https://t.me/c/1234567890/12345\n"
-            "3. 公开群组链接：https://t.me/groupname/12345"
-        )
+        reply = await message.answer(localizer.t("moderation.delrange.error.invalid_link.message"))
         await auto_delete_message(reply)
         return
 
@@ -986,10 +1059,11 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     if link_chat_id is not None:
         if link_chat_id != message.chat.id:
             reply = await message.answer(
-                "❌ 消息链接不属于当前群组\n\n"
-                f"链接所属群组ID: {link_chat_id}\n"
-                f"当前群组ID: {message.chat.id}\n\n"
-                "💡 提示：请确保复制的是本群组的消息链接"
+                localizer.t(
+                    "moderation.delrange.error.wrong_chat_id.message",
+                    link_chat_id=link_chat_id,
+                    current_chat_id=message.chat.id,
+                )
             )
             await auto_delete_message(reply)
             return
@@ -1004,10 +1078,7 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
 
             if current_username is None:
                 reply = await message.answer(
-                    "❌ 当前群组未设置公开用户名，无法验证公开链接\n\n"
-                    "💡 提示：\n"
-                    "• 对于私有群组，请使用消息ID或私有链接\n"
-                    "• 或在群组设置中添加公开用户名"
+                    localizer.t("moderation.delrange.error.no_public_username.message")
                 )
                 await auto_delete_message(reply)
                 return
@@ -1015,22 +1086,24 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
             # 验证 username 是否匹配（不区分大小写）
             if link_username.lower() != current_username.lower():
                 reply = await message.answer(
-                    "❌ 消息链接不属于当前群组\n\n"
-                    f"链接所属群组: @{link_username}\n"
-                    f"当前群组: @{current_username}\n\n"
-                    "💡 提示：请确保复制的是本群组的消息链接"
+                    localizer.t(
+                        "moderation.delrange.error.wrong_chat_username.message",
+                        link_username=escape_html(link_username),
+                        current_username=escape_html(current_username),
+                    )
                 )
                 await auto_delete_message(reply)
                 return
 
             logger.debug(
-                f"验证通过：公开群组链接属于当前群组 @{current_username} "
-                f"(匹配 @{link_username})"
+                f"验证通过：公开群组链接属于当前群组 @{current_username} (匹配 @{link_username})"
             )
 
         except Exception as e:
             logger.error(f"获取群组信息失败: {e}")
-            reply = await message.answer("❌ 验证群组信息失败，请稍后重试")
+            reply = await message.answer(
+                localizer.t("moderation.delrange.error.lookup_failed.message")
+            )
             await auto_delete_message(reply)
             return
 
@@ -1045,7 +1118,10 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     message_range = abs(end_message_id - start_message_id) + 1
     if message_range > 1000:
         reply = await message.answer(
-            f"❌ 删除范围过大（{message_range} 条消息）\n" "为了安全，单次最多删除 1000 条消息"
+            localizer.t(
+                "moderation.delrange.error.range_too_large.message",
+                count=message_range,
+            )
         )
         await auto_delete_message(reply)
         return
@@ -1059,16 +1135,19 @@ async def cmd_delete_range(message: Message, bot: Bot) -> None:
     )
 
     reply = await message.answer(
-        f"✅ 删除完成\n"
-        f"消息范围: {min(start_message_id, end_message_id)} - {max(start_message_id, end_message_id)}\n"
-        f"成功: {success_count} 条\n"
-        f"失败: {fail_count} 条"
+        localizer.t(
+            "moderation.delrange.result.message",
+            start=min(start_message_id, end_message_id),
+            end=max(start_message_id, end_message_id),
+            success_count=success_count,
+            fail_count=fail_count,
+        )
     )
     await auto_delete_message(reply)
 
 
 @router.message(Command("spam", "report"))
-async def cmd_spam(message: Message, bot: Bot) -> None:
+async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """标记垃圾消息
 
     - 普通用户：创建举报记录，通知管理员
@@ -1077,29 +1156,18 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
     """
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 必须回复某条消息
     if not message.reply_to_message:
-        reply = await message.answer(
-            "❌ 请回复要标记为垃圾的消息\n\n"
-            "<b>用法</b>:\n"
-            "• /spam [原因] - 封禁用户，删除被回复的消息\n"
-            "• /spam -d [原因] - 封禁用户，<b>删除该用户的所有消息</b>\n\n"
-            "<b>示例</b>:\n"
-            "• /spam 发送广告\n"
-            "• /spam -d 大量发送垃圾信息\n\n"
-            "💡 <b>说明</b>:\n"
-            "• 普通用户：创建举报记录\n"
-            "• 管理员：直接封禁并添加到训练库"
-        )
+        reply = await message.answer(localizer.t("moderation.spam.usage.message"))
         await auto_delete_message(reply)
         return
 
     # ✅ 修复：检查是否为用户消息（排除频道消息）
     if not message.reply_to_message.from_user:
-        reply = await message.answer("❌ 无法举报频道消息，请回复用户消息")
+        reply = await message.answer(localizer.t("moderation.spam.channel_message.message"))
         await auto_delete_message(reply)
         return
 
@@ -1109,6 +1177,10 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
 
     # 解析参数：检测 -d 参数和原因
     delete_all, reason = parse_spam_args(message.text or "")
+    spam_reason_label = localizer.t(
+        "moderation.spam.reason.default.label"
+    )  # 管理员模式 audit reason 用
+    reason_value = reason or _REPORT_DEFAULT_REASON_CODE  # 写入 DB（稳定 code，跨 locale 展示一致）
 
     # 获取消息文本内容
     spam_text = ""
@@ -1117,10 +1189,12 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
     elif message.reply_to_message.caption:
         spam_text = message.reply_to_message.caption
 
-    # 如果没有文本内容，记录消息类型
+    # 无文本时记录媒体类型 code（稳定 type 区分训练样本；占位无本地化后缀避免中英混排）
     if not spam_text:
-        content_type = message.reply_to_message.content_type
-        spam_text = f"[{content_type}消息]"
+        spam_text = localizer.t(
+            "moderation.report.content_type.fallback",
+            content_type=escape_html(message.reply_to_message.content_type),
+        )
 
     # 检查是否是管理员
     is_admin = await check_admin_permission_strict_message(message, bot)
@@ -1130,23 +1204,25 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
         try:
             target_member = await bot.get_chat_member(message.chat.id, target_user_id)
             if target_member.status in ["creator", "administrator"]:
-                reply = await message.answer("❌ 无法对群组管理员执行此操作")
+                reply = await message.answer(
+                    f"❌ {_render_moderation_error(localizer, ModerationErrorCode.target_is_admin)}"
+                )
                 await auto_delete_message(reply)
                 return
         except Exception as e:
             logger.debug(f"检查目标用户管理员身份失败: {e}")
 
         # 管理员模式：直接封禁+删除+训练库
-        success, error_msg = await ModerationService.ban_user(
+        result = await ModerationService.ban_user(
             bot=bot,
             chat_id=message.chat.id,
             user_id=target_user_id,
             operator_id=message.from_user.id,
-            reason=f"垃圾消息: {reason}",
+            reason=f"{spam_reason_label}: {reason}" if reason else spam_reason_label,
             revoke_messages=delete_all,
         )
 
-        if success:
+        if result.success:
             # 删除消息
             # 如果使用 -d，API 已自动删除所有消息
             # 如果不使用 -d，只删除被回复的消息
@@ -1178,34 +1254,30 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 from src.services.spam_detector import get_detector
 
                 detector = get_detector()
-                triggered, train_message = await detector.check_and_auto_train(
-                    admin_ids=settings.admin_ids
-                )
-                if triggered:
-                    logger.info(f"样本添加后触发自动训练: {train_message}")
+                train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
+                if train_result is not None:
+                    logger.info(f"样本添加后触发自动训练 [结果:{train_result.code.value}]")
             except Exception as e:
                 logger.error(f"检查自动训练失败: {e}")
 
             # 发送响应消息
-            if delete_all:
-                reply = await message.answer(
-                    f"✅ 已处理垃圾消息\n"
-                    f"• 用户已封禁: {target_user_id}\n"
-                    f"• 已删除该用户的所有消息\n"
-                    f"• 已添加到训练库\n"
-                    f"• 原因: {escape_html(reason)}"
+            reason_line = localizer.t(
+                "moderation.common.reason.line",
+                reason=_render_report_reason(localizer, reason_value),
+            )
+            deleted_all = localizer.t("moderation.common.deleted_all.suffix") if delete_all else ""
+            reply = await message.answer(
+                localizer.t(
+                    "moderation.spam.processed.message",
+                    target_user_id=target_user_id,
+                    reason_line=reason_line,
+                    deleted_all=deleted_all,
                 )
-            else:
-                reply = await message.answer(
-                    f"✅ 已处理垃圾消息\n"
-                    f"• 用户已封禁: {target_user_id}\n"
-                    f"• 消息已删除\n"
-                    f"• 已添加到训练库\n"
-                    f"• 原因: {escape_html(reason)}"
-                )
+            )
             await auto_delete_message(reply)
         else:
-            reply = await message.answer(f"❌ {error_msg}")
+            assert result.code is not None
+            reply = await message.answer(f"❌ {_render_moderation_error(localizer, result.code)}")
             await auto_delete_message(reply)
     else:
         # 普通用户模式：创建举报记录
@@ -1218,9 +1290,7 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             )
 
             if recent_reports >= 10:
-                reply = await message.answer(
-                    "❌ 您今天的举报次数已达上限（10次）\n" "如有紧急情况，请联系管理员"
-                )
+                reply = await message.answer(localizer.t("moderation.spam.report_limit.message"))
                 await auto_delete_message(reply)
                 return
 
@@ -1231,7 +1301,7 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 reported_user_id=target_user_id,
                 message_id=message.reply_to_message.message_id,
                 message_text=spam_text,
-                reason=reason,
+                reason=reason_value,
             )
 
             # 统计待处理举报数量
@@ -1253,10 +1323,12 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="✅ 接受", callback_data=f"report_approve:{report.id}"
+                            text=localizer.t("moderation.spam.button.approve.label"),
+                            callback_data=f"report_approve:{report.id}",
                         ),
                         InlineKeyboardButton(
-                            text="❌ 拒绝", callback_data=f"report_reject:{report.id}"
+                            text=localizer.t("moderation.spam.button.reject.label"),
+                            callback_data=f"report_reject:{report.id}",
                         ),
                     ]
                 ]
@@ -1266,24 +1338,25 @@ async def cmd_spam(message: Message, bot: Bot) -> None:
             report_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
 
             reply = await message.answer(
-                f"{report_header}"
-                f"✅ 举报已提交\n"
-                f"• 举报ID: #{report.id}\n"
-                f"• 原因: {escape_html(reason)}\n"
-                f"• 待处理举报: {pending_count} 条\n\n"
-                f"💡 管理员可点击按钮快速处理",
+                report_header
+                + localizer.t(
+                    "moderation.spam.report.submitted.message",
+                    report_id=report.id,
+                    reason=_render_report_reason(localizer, reason_value),
+                    pending_count=pending_count,
+                ),
                 reply_markup=keyboard,
             )
             await auto_delete_message(reply)
 
         except Exception as e:
             logger.error(f"创建举报记录失败: {e}")
-            reply = await message.answer("❌ 举报提交失败，请稍后重试")
+            reply = await message.answer(localizer.t("moderation.spam.submit_failed.message"))
             await auto_delete_message(reply)
 
 
 @router.message(Command("notspam", "nospam", "unspam"))
-async def cmd_notspam(message: Message, bot: Bot) -> None:
+async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """标记为非垃圾消息（误报修正 + 预防性训练）
 
     支持的命令：/notspam, /nospam, /unspam
@@ -1299,12 +1372,12 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查是否是管理员
     if not await check_admin_permission_strict_message(message, bot):
-        reply = await message.answer("❌ 只有管理员可以使用此命令")
+        reply = await message.answer(localizer.t("common.error.permission_denied"))
         await auto_delete_message(reply)
         return
 
@@ -1319,7 +1392,7 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
         # ==================== 场景A：预防性训练 ====================
         # ✅ 检查是否为用户消息（排除频道消息）
         if not message.reply_to_message.from_user:
-            reply = await message.answer("❌ 无法标记频道消息，请回复用户消息")
+            reply = await message.answer(localizer.t("moderation.notspam.channel_message.message"))
             await auto_delete_message(reply)
             return
 
@@ -1333,36 +1406,19 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
         elif message.reply_to_message.caption:
             message_text = message.reply_to_message.caption
 
-        # 如果没有文本内容，记录消息类型
+        # 无文本时记录媒体类型 code（稳定 type 区分训练样本；占位无本地化后缀避免中英混排）
         if not message_text:
-            content_type = message.reply_to_message.content_type
-            message_text = f"[{content_type}消息]"
+            message_text = localizer.t(
+                "moderation.report.content_type.fallback",
+                content_type=escape_html(message.reply_to_message.content_type),
+            )
 
-        usage_type = "预防性训练"
+        usage_type = localizer.t("moderation.notspam.mode.preventive.label")
 
     else:
         # ==================== 场景B：误报修正（通过 message_id） ====================
         if len(args) < 2:
-            reply = await message.answer(
-                "❌ 请提供消息ID或回复要标记的消息\n\n"
-                "<b>用法</b>:\n"
-                "• /notspam [备注] - 回复消息，预防性训练\n"
-                "• /notspam &lt;消息ID或链接&gt; [备注] - 标记已删除消息为误报\n\n"
-                "<b>支持的格式</b>:\n"
-                "• 纯数字：12345\n"
-                "• 私有群组链接：https://t.me/c/1234567890/12345\n"
-                "• 公开群组链接：https://t.me/channel_name/12345\n\n"
-                "<b>示例</b>:\n"
-                "• /notspam （回复正常消息）\n"
-                "• /notspam 这是正常讨论 （回复正常消息）\n"
-                "• /notspam 12345 （标记已删除的消息12345为误报）\n"
-                "• /notspam 12345 这是误报 （标记已删除消息并添加备注）\n"
-                "• /notspam https://t.me/c/1234567890/12345 （使用消息链接）\n\n"
-                "💡 <b>说明</b>:\n"
-                "• 仅管理员可用\n"
-                "• 预防性训练：增强模型对正常消息的识别\n"
-                "• 误报修正：修正被误判的消息（警告消息删除后仍可用）"
-            )
+            reply = await message.answer(localizer.t("moderation.notspam.usage.message"))
             await auto_delete_message(reply)
             return
 
@@ -1371,11 +1427,10 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
 
         if target_message_id is None:
             reply = await message.answer(
-                f"❌ 无法解析消息ID: {escape_html(args[1])}\n\n"
-                "支持的格式：\n"
-                "• 纯数字：/notspam 12345\n"
-                "• 私有群组链接：/notspam https://t.me/c/1234567890/12345\n"
-                "• 公开群组链接：/notspam https://t.me/channel_name/12345"
+                localizer.t(
+                    "moderation.notspam.invalid_message_id.message",
+                    arg=escape_html(args[1]),
+                )
             )
             await auto_delete_message(reply)
             return
@@ -1389,18 +1444,12 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
         cached_text = await redis.get(text_cache_key)
 
         if not cached_text:
-            reply = await message.answer(
-                "❌ 未找到该消息的缓存\n\n"
-                "可能原因：\n"
-                "• 消息ID不正确\n"
-                "• 缓存已过期（1天后自动删除）\n"
-                "• 该消息未被检测为垃圾"
-            )
+            reply = await message.answer(localizer.t("moderation.notspam.cache_missing.message"))
             await auto_delete_message(reply)
             return
 
         message_text = cached_text
-        usage_type = "误报修正"
+        usage_type = localizer.t("moderation.notspam.mode.false_positive.label")
 
     # ==================== 通用处理：添加到训练库 ====================
     try:
@@ -1436,30 +1485,37 @@ async def cmd_notspam(message: Message, bot: Bot) -> None:
             from src.services.spam_detector import get_detector
 
             detector = get_detector()
-            triggered, train_message = await detector.check_and_auto_train(
-                admin_ids=settings.admin_ids
-            )
-            if triggered:
-                logger.info(f"样本添加后触发自动训练: {train_message}")
+            train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
+            if train_result is not None:
+                logger.info(f"样本添加后触发自动训练 [结果:{train_result.code.value}]")
         except Exception as e:
             logger.error(f"检查自动训练失败: {e}")
 
+        note_line = (
+            localizer.t("moderation.notspam.note.line", note=escape_html(note)) if note else ""
+        )
         reply = await message.answer(
-            f"✅ 已标记为正常消息（{usage_type}）\n"
-            "• 已添加到训练库（负样本）\n"
-            "• 帮助模型避免类似误判\n"
-            + (f"• 备注: {escape_html(note)}\n" if note else "")
-            + "\n💡 积累足够样本后会自动触发训练"
+            localizer.t(
+                "moderation.notspam.success.message",
+                usage_type=usage_type,
+                note_line=note_line,
+            )
         )
         await auto_delete_message(reply)
 
     except Exception as e:
         logger.error(f"添加非垃圾样本失败: {e}")
-        reply = await message.answer("❌ 操作失败，请稍后重试")
+        reply = await message.answer(localizer.t("moderation.notspam.failed.message"))
         await auto_delete_message(reply)
 
 
 # ========== 举报处理辅助函数 ==========
+
+
+def _report_status_label(localizer: BoundLocalizer, status: str | None) -> str:
+    """把持久化的举报状态映射为受控的本地化标签。"""
+    status_key = status if status in {"pending", "approved", "rejected"} else "unknown"
+    return localizer.t(f"moderation.report.status.{status_key}.label")
 
 
 async def _process_report_approval(
@@ -1467,35 +1523,35 @@ async def _process_report_approval(
     report_id: int,
     chat_id: int,
     operator_id: int,
+    localizer: BoundLocalizer,
 ) -> tuple[bool, str]:
-    """处理举报接受的核心逻辑（供命令和回调共用）
+    """处理举报接受的核心逻辑（供命令和回调共用）。
 
-    Args:
-        bot: Bot 实例
-        report_id: 举报ID
-        chat_id: 群组ID
-        operator_id: 操作者ID
-
-    Returns:
-        (success: bool, message: str) - 成功状态和消息
+    返回成功状态及完整的本地化错误文案；成功时错误文案为空。
     """
     try:
         # 获取举报记录
         report = await ReportRepository.get_report_by_id(report_id)
 
         if not report:
-            return False, f"未找到举报记录 #{report_id}"
+            return False, localizer.t(
+                "moderation.report.process.not_found.message",
+                report_id=report_id,
+            )
 
         # 检查是否属于当前群组
         if report.group_id != chat_id:
-            return False, "此举报不属于当前群组"
+            return False, localizer.t("moderation.report.process.wrong_group.message")
 
         # 检查状态
         if report.status != "pending":
-            return False, f"此举报已被处理（状态: {report.status}）"
+            return False, localizer.t(
+                "moderation.report.process.already_processed.message",
+                status=_report_status_label(localizer, report.status),
+            )
 
         # 执行封禁
-        success, error_msg = await ModerationService.ban_user(
+        result = await ModerationService.ban_user(
             bot=bot,
             chat_id=chat_id,
             user_id=report.reported_user_id,
@@ -1503,8 +1559,12 @@ async def _process_report_approval(
             reason=f"举报#{report_id}: {report.reason}",
         )
 
-        if not success:
-            return False, f"封禁失败: {error_msg}"
+        if not result.success:
+            assert result.code is not None
+            return False, localizer.t(
+                "moderation.report.approval.ban_failed.message",
+                error=escape_html(_render_moderation_error(localizer, result.code)),
+            )
 
         # 删除被举报的消息
         try:
@@ -1523,8 +1583,7 @@ async def _process_report_approval(
                     labeled_by=operator_id,
                 )
                 logger.info(
-                    f"举报#{report_id}的内容已添加到训练库 "
-                    f"[文本长度:{len(report.message_text)}]"
+                    f"举报#{report_id}的内容已添加到训练库 [文本长度:{len(report.message_text)}]"
                 )
             except Exception as e:
                 logger.error(f"添加训练样本失败: {e}")
@@ -1536,42 +1595,43 @@ async def _process_report_approval(
             handled_by=operator_id,
         )
 
-        return True, "举报已接受并处理"
+        return True, ""
 
     except Exception as e:
         logger.error(f"处理举报接受失败: {e}")
-        return False, f"处理失败: {e!s}"
+        return False, localizer.t("moderation.report.process.operation_failed.message")
 
 
 async def _process_report_rejection(
     report_id: int,
     chat_id: int,
     operator_id: int,
+    localizer: BoundLocalizer,
 ) -> tuple[bool, str]:
-    """处理举报拒绝的核心逻辑（供命令和回调共用）
+    """处理举报拒绝的核心逻辑（供命令和回调共用）。
 
-    Args:
-        report_id: 举报ID
-        chat_id: 群组ID
-        operator_id: 操作者ID
-
-    Returns:
-        (success: bool, message: str) - 成功状态和消息
+    返回成功状态及完整的本地化错误文案；成功时错误文案为空。
     """
     try:
         # 获取举报记录
         report = await ReportRepository.get_report_by_id(report_id)
 
         if not report:
-            return False, f"未找到举报记录 #{report_id}"
+            return False, localizer.t(
+                "moderation.report.process.not_found.message",
+                report_id=report_id,
+            )
 
         # 检查是否属于当前群组
         if report.group_id != chat_id:
-            return False, "此举报不属于当前群组"
+            return False, localizer.t("moderation.report.process.wrong_group.message")
 
         # 检查状态
         if report.status != "pending":
-            return False, f"此举报已被处理（状态: {report.status}）"
+            return False, localizer.t(
+                "moderation.report.process.already_processed.message",
+                status=_report_status_label(localizer, report.status),
+            )
 
         # 更新举报状态
         await ReportRepository.update_report_status(
@@ -1580,30 +1640,30 @@ async def _process_report_rejection(
             handled_by=operator_id,
         )
 
-        return True, "举报已拒绝"
+        return True, ""
 
     except Exception as e:
         logger.error(f"处理举报拒绝失败: {e}")
-        return False, f"处理失败: {e!s}"
+        return False, localizer.t("moderation.report.process.operation_failed.message")
 
 
 # ========== 举报查询命令 ==========
 
 
 @router.message(Command("reports"))
-async def cmd_reports(message: Message, bot: Bot) -> None:
+async def cmd_reports(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """查看待处理的举报列表（仅管理员）"""
     if not message.from_user:
         return
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     try:
@@ -1611,44 +1671,52 @@ async def cmd_reports(message: Message, bot: Bot) -> None:
         reports = await ReportRepository.get_pending_reports(message.chat.id, limit=10)
 
         if not reports:
-            reply = await message.answer("✅ 当前没有待处理的举报")
+            reply = await message.answer(localizer.t("moderation.report.empty.message"))
             await auto_delete_message(reply)
             return
 
         # 构建举报列表
-        response = f"📋 <b>待处理举报</b> (共 {len(reports)} 条)\n\n"
+        response = localizer.t("moderation.report.list.header.message", count=len(reports))
 
         for _idx, report in enumerate(reports, 1):
             # 格式化时间
             time_str = report.created_at.strftime("%m-%d %H:%M")
 
-            # 截断消息文本
-            text_preview = report.message_text[:50] if report.message_text else "[无文本]"
-            if len(report.message_text or "") > 50:
-                text_preview += "..."
+            # 截断消息文本；无文本用 no_content 占位（保留"无内容"语义）
+            if report.message_text:
+                text_preview = report.message_text[:50]
+                if len(report.message_text) > 50:
+                    text_preview += "..."
+                content_preview = escape_html(text_preview)
+            else:
+                content_preview = localizer.t("moderation.report.list.no_content.label")
 
-            response += (
-                f"<b>#{report.id}</b> [{time_str}]\n"
-                f"• 举报者: {report.reporter_id}\n"
-                f"• 被举报: {report.reported_user_id}\n"
-                f"• 原因: {escape_html(report.reason or '无')}\n"
-                f"• 内容: {escape_html(text_preview)}\n"
-                f"• 操作: /approve {report.id}\n\n"
+            reason_display = _render_report_reason(localizer, report.reason)
+
+            response += localizer.t(
+                "moderation.report.list.item.message",
+                id=report.id,
+                time=time_str,
+                reporter_id=report.reporter_id,
+                reported_user_id=report.reported_user_id,
+                reason=reason_display,
+                content_preview=content_preview,
+                action=f"/approve {report.id}",
             )
 
-        response += "💡 使用 /approve &lt;ID&gt; 处理举报"
+        response += localizer.t("moderation.report.list.footer.message")
 
         reply = await message.answer(response)
         await auto_delete_message(reply, delay=60)  # 60秒后删除
 
     except Exception as e:
         logger.error(f"获取举报列表失败: {e}")
-        reply = await message.answer("❌ 获取举报列表失败")
+        reply = await message.answer(localizer.t("moderation.report.fetch_failed.message"))
         await auto_delete_message(reply)
 
 
 @router.message(Command("approve"))
-async def cmd_approve(message: Message, bot: Bot) -> None:
+async def cmd_approve(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """接受举报并执行封禁（仅管理员）
 
     用法：/approve <report_id>
@@ -1658,12 +1726,12 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析参数
@@ -1672,49 +1740,48 @@ async def cmd_approve(message: Message, bot: Bot) -> None:
 
     parts = message.text.split()
     if len(parts) < 2:
-        reply = await message.answer(
-            "❌ 请指定举报ID\n\n"
-            "<b>用法</b>: /approve &lt;举报ID&gt;\n"
-            "<b>示例</b>: /approve 123"
-        )
+        reply = await message.answer(localizer.t("moderation.approve.usage.message"))
         await auto_delete_message(reply)
         return
 
     try:
         report_id = int(parts[1])
     except ValueError:
-        reply = await message.answer("❌ 举报ID必须是数字")
+        reply = await message.answer(localizer.t("moderation.approve.invalid_id.message"))
         await auto_delete_message(reply)
         return
 
     # 调用辅助函数处理
-    success, msg = await _process_report_approval(
+    success, error_msg = await _process_report_approval(
         bot=bot,
         report_id=report_id,
         chat_id=message.chat.id,
         operator_id=message.from_user.id,
+        localizer=localizer,
     )
 
     if success:
         # 获取举报信息用于显示
         report = await ReportRepository.get_report_by_id(report_id)
+        reason_display = _render_report_reason(localizer, report.reason if report else None)
         reply = await message.answer(
-            f"✅ 举报#{report_id}已处理\n"
-            f"• 用户已封禁: {(report.reported_user_id if report else 0)}\n"
-            f"• 消息已删除\n"
-            f"• 已添加到训练库\n"
-            f"• 举报者: {(report.reporter_id if report else 0)}\n"
-            f"• 原因: {escape_html((report.reason if report else "未知") or '无')}"
+            localizer.t(
+                "moderation.approve.processed.message",
+                report_id=report_id,
+                reported_user_id=report.reported_user_id if report else 0,
+                reporter_id=report.reporter_id if report else 0,
+                reason=reason_display,
+            )
         )
         logger.info(f"管理员 {message.from_user.id} 通过命令接受了举报 #{report_id}")
     else:
-        reply = await message.answer(f"❌ {msg}")
+        reply = await message.answer(error_msg)
 
     await auto_delete_message(reply)
 
 
 @router.message(Command("reject"))
-async def cmd_reject(message: Message, bot: Bot) -> None:
+async def cmd_reject(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """拒绝举报（仅管理员）
 
     用法：/reject <report_id>
@@ -1724,12 +1791,12 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
 
     # 检查是否在群组中
     if message.chat.type == "private":
-        await message.answer("❌ 此命令只能在群组中使用")
+        await message.answer(localizer.t("common.error.group_only"))
         return
 
     # 检查权限
     if not await check_admin_permission_strict_message(message, bot):
-        await message.answer("❌ 只有管理员可以使用此命令")
+        await message.answer(localizer.t("common.error.permission_denied"))
         return
 
     # 解析参数
@@ -1738,55 +1805,63 @@ async def cmd_reject(message: Message, bot: Bot) -> None:
 
     parts = message.text.split()
     if len(parts) < 2:
-        reply = await message.answer(
-            "❌ 请指定举报ID\n\n" "<b>用法</b>: /reject &lt;举报ID&gt;\n" "<b>示例</b>: /reject 123"
-        )
+        reply = await message.answer(localizer.t("moderation.reject.usage.message"))
         await auto_delete_message(reply)
         return
 
     try:
         report_id = int(parts[1])
     except ValueError:
-        reply = await message.answer("❌ 举报ID必须是数字")
+        reply = await message.answer(localizer.t("moderation.reject.invalid_id.message"))
         await auto_delete_message(reply)
         return
 
     # 调用辅助函数处理
-    success, msg = await _process_report_rejection(
+    success, error_msg = await _process_report_rejection(
         report_id=report_id,
         chat_id=message.chat.id,
         operator_id=message.from_user.id,
+        localizer=localizer,
     )
 
     if success:
         # 获取举报详情用于显示
         report = await ReportRepository.get_report_by_id(report_id)
+        reason_display = _render_report_reason(localizer, report.reason if report else None)
         reply = await message.answer(
-            f"✅ 举报#{report_id}已拒绝\n"
-            f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-            f"• 举报者: {(report.reporter_id if report else 0)}\n"
-            f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n\n"
-            f"💡 此举报已被标记为误报或不需要处理"
+            localizer.t(
+                "moderation.reject.processed.message",
+                report_id=report_id,
+                reported_user_id=report.reported_user_id if report else 0,
+                reporter_id=report.reporter_id if report else 0,
+                reason=reason_display,
+            )
         )
         await auto_delete_message(reply)
     else:
-        reply = await message.answer(f"❌ {msg}")
+        reply = await message.answer(error_msg)
         await auto_delete_message(reply)
 
 
 @router.callback_query(F.data.startswith("report_approve:"))
-async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
+async def on_report_approve(callback: CallbackQuery, bot: Bot, localizer: BoundLocalizer) -> None:
     """处理举报接受回调（通过按钮）"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.invalid_data.toast"),
+                show_alert=True,
+            )
             return
 
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.inaccessible.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
@@ -1799,54 +1874,74 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot) -> None:
         # ⚠️ 校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
         # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
         if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
-            await callback.answer("❌ 只有管理员可以接受举报", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.admin_only.approve.toast"),
+                show_alert=True,
+            )
             return
 
         # 调用辅助函数处理
-        success, msg = await _process_report_approval(
+        success, error_msg = await _process_report_approval(
             bot=bot,
             report_id=report_id,
             chat_id=message.chat.id,
             operator_id=callback.from_user.id,
+            localizer=localizer,
         )
 
         if success:
             # 获取举报详情用于显示
             report = await ReportRepository.get_report_by_id(report_id)
+            reason_display = _render_report_reason(localizer, report.reason if report else None)
 
             # 更新消息（移除按钮）
             await message.edit_text(
-                f"✅ 举报已接受处理\n"
-                f"• 举报ID: #{report_id}\n"
-                f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
-                f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-                f"• 处理者: {escape_html(callback.from_user.full_name)}\n\n"
-                f"✓ 用户已封禁\n"
-                f"✓ 消息已删除\n"
-                f"✓ 已添加到训练库"
+                localizer.t(
+                    "moderation.report.callback.approved.message",
+                    report_id=report_id,
+                    reason=reason_display,
+                    reported_user_id=report.reported_user_id if report else 0,
+                    operator=escape_html(callback.from_user.full_name),
+                )
             )
-            await callback.answer("✅ 举报已接受并处理", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.approved.toast"),
+                show_alert=True,
+            )
         else:
-            await callback.answer(f"❌ {msg}", show_alert=True)
+            await callback.answer(error_msg, show_alert=True)
 
     except Exception as e:
         logger.error(f"处理举报接受回调失败: {e}")
-        await callback.answer("❌ 处理失败，请稍后重试", show_alert=True)
+        await callback.answer(
+            localizer.t("moderation.report.callback.failed.toast"),
+            show_alert=True,
+        )
 
 
 @router.callback_query(F.data.startswith("report_reject:"))
-async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
+async def on_report_reject(
+    callback: CallbackQuery,
+    bot: Bot,
+    localizer: BoundLocalizer,
+) -> None:
     """处理举报拒绝回调（通过按钮）"""
     try:
         # 类型检查
         if not callback.data or not callback.message:
-            await callback.answer("❌ 数据错误", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.invalid_data.toast"),
+                show_alert=True,
+            )
             return
 
         from aiogram.types import InaccessibleMessage, Message
 
         if isinstance(callback.message, InaccessibleMessage):
-            await callback.answer("❌ 消息不可访问", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.inaccessible.toast"),
+                show_alert=True,
+            )
             return
 
         message: Message = callback.message
@@ -1859,33 +1954,45 @@ async def on_report_reject(callback: CallbackQuery, bot: Bot) -> None:
         # ⚠️ 校验实际点击者 callback.from_user；callback.message 由 Bot 发送，
         # 其 from_user 是 Bot 自身，不可作为权限依据（否则任意成员可绕过）
         if not await check_admin_permission_strict(bot, message.chat.id, callback.from_user.id):
-            await callback.answer("❌ 只有管理员可以拒绝举报", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.admin_only.reject.toast"),
+                show_alert=True,
+            )
             return
 
         # 调用辅助函数处理
-        success, msg = await _process_report_rejection(
+        success, error_msg = await _process_report_rejection(
             report_id=report_id,
             chat_id=message.chat.id,
             operator_id=callback.from_user.id,
+            localizer=localizer,
         )
 
         if success:
             # 获取举报详情用于显示
             report = await ReportRepository.get_report_by_id(report_id)
+            reason_display = _render_report_reason(localizer, report.reason if report else None)
 
             # 更新消息（移除按钮）
             await message.edit_text(
-                f"❌ 举报已拒绝\n"
-                f"• 举报ID: #{report_id}\n"
-                f"• 原因: {escape_html((report.reason if report else "未知") or '无')}\n"
-                f"• 被举报用户: {(report.reported_user_id if report else 0)}\n"
-                f"• 处理者: {escape_html(callback.from_user.full_name)}\n\n"
-                f"💡 此举报已被标记为误报或不需要处理"
+                localizer.t(
+                    "moderation.report.callback.rejected.message",
+                    report_id=report_id,
+                    reason=reason_display,
+                    reported_user_id=report.reported_user_id if report else 0,
+                    operator=escape_html(callback.from_user.full_name),
+                )
             )
-            await callback.answer("✅ 举报已拒绝", show_alert=True)
+            await callback.answer(
+                localizer.t("moderation.report.callback.rejected.toast"),
+                show_alert=True,
+            )
         else:
-            await callback.answer(f"❌ {msg}", show_alert=True)
+            await callback.answer(error_msg, show_alert=True)
 
     except Exception as e:
         logger.error(f"处理举报拒绝回调失败: {e}")
-        await callback.answer("❌ 处理失败，请稍后重试", show_alert=True)
+        await callback.answer(
+            localizer.t("moderation.report.callback.failed.toast"),
+            show_alert=True,
+        )

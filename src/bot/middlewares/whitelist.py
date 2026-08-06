@@ -1,7 +1,7 @@
 """群组白名单中间件 - 仅在白名单群组中提供服务"""
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.enums import ChatType
@@ -9,6 +9,9 @@ from aiogram.types import CallbackQuery, ChatMemberUpdated, Message, TelegramObj
 from loguru import logger
 
 from src.repositories.group_repo import GroupRepository
+
+if TYPE_CHECKING:
+    from src.core.i18n import BoundLocalizer
 
 
 class WhitelistMiddleware(BaseMiddleware):
@@ -25,6 +28,7 @@ class WhitelistMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         """检查群组白名单"""
+        localizer: BoundLocalizer = data["localizer"]
 
         # 获取 bot 实例
         bot = data.get("bot")
@@ -71,13 +75,15 @@ class WhitelistMiddleware(BaseMiddleware):
 
         logger.warning(f"群组不在白名单中，准备退出: {group_name} (ID: {chat_id})")
 
-        # 尝试发送提示消息
+        # 尝试发送提示消息（与 events 入群未授权复用同一 key，统一含 chat_id）
         try:
             if bot:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text="⚠️ 此群组未在授权列表中，Bot 将自动退出。\n"
-                    "如需使用，请联系 Bot 管理员添加群组白名单。",
+                    text=localizer.t(
+                        "common.group.unauthorized.message",
+                        chat_id=chat_id,
+                    ),
                 )
         except Exception as e:
             logger.debug(f"发送退出提示消息失败: {e}")

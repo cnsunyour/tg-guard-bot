@@ -131,6 +131,13 @@
 - **管理员反馈** - 误判纠正，持续优化
 - **自动模型训练** - 达到阈值自动触发训练
 
+### 🌐 多语言支持
+- **三种语言**：简体中文（zh-Hans，默认）/ 繁體中文（zh-Hant）/ English
+- **按群组/用户切换**：`/lang` 命令切换语言偏好（群组语言 + 用户私聊语言独立设置）
+- **全链路本地化**：bot 出站消息、命令菜单、验证挑战、反垃圾检测原因、CAPTCHA WebApp 页面均按 locale 渲染
+- **业务数据稳定 code**：检测原因、举报原因等用稳定 code 存储（如 `system:spam`），展示层按 locale 渲染——群切语言后旧记录不会显示旧语言
+- **地区别名兼容**：自动归一 zh-CN/zh-TW/zh-HK 等 Telegram 历史值到规范 locale
+
 ### ⚡ 其他功能
 - **群组白名单** - 只在授权群组中提供服务，自动退出未授权群组
 - **反频道马甲** - 禁止用户以频道身份发言，避免广告滥用
@@ -285,6 +292,7 @@ make backup-setup-cron                    # 设置自动备份定时任务
 ### 用户命令
 - `/start` - 查看帮助信息
 - `/help` - 查看帮助信息
+- `/lang` - 切换语言（简体中文 / 繁體中文 / English）
 
 ### 管理员命令
 
@@ -430,8 +438,10 @@ tg-guard-bot/
 │       ├── config.py           # 配置管理
 │       ├── database.py         # DB 连接
 │       ├── redis.py            # Redis 连接
+│       ├── i18n/               # 多语言（catalog/translator/resolver/locale 别名归一）
 │       ├── telethon_client.py  # Telethon 客户端（大群管理）
 │       └── health.py           # 健康检查
+├── locales/                    # i18n catalog（zh-Hans/zh-Hant/en.json，三语 parity）
 ├── captcha-webapp/             # 统一 CAPTCHA WebApp
 │   ├── index.html              # 前端页面
 │   ├── functions/api/          # Cloudflare Functions
@@ -473,6 +483,9 @@ tg-guard-bot/
 | `REDIS_PASSWORD` | Redis 密码 | 空 | ❌ |
 | `MODEL_SIGNATURE_KEY` | 模型文件签名密钥（至少 32 字符） | - | ✅ |
 | `LOG_LEVEL` | 日志级别 | INFO | ❌ |
+| `DEFAULT_LOCALE` | 默认语言（BCP 47） | zh-Hans | ❌ |
+| `SUPPORTED_LOCALES` | 支持的语言列表（逗号分隔） | zh-Hans,zh-Hant,en | ❌ |
+| `LOCALE_CACHE_TTL_SECONDS` | 群组/用户语言偏好缓存时间（秒） | 3600 | ❌ |
 
 #### Telethon 配置（用于大群管理）
 
@@ -642,6 +655,7 @@ AI_SPAM_VISION_BACKUP_TIMEOUT=30
 - [x] **v1.1.0**: 上下文一致性检测（降低误判率）
 - [x] **v1.2.0**: 高级正则规则引擎 + @username 解析
 - [x] **v1.5.0**: 删除 OCR，重构 Vision 为独立配置（主备双服务商）
+- [x] **多语言 i18n**: zh-Hans/zh-Hant/en 全链路本地化（catalog + 稳定 code 持久化 + 命令菜单 locale + WebApp 页面）
 
 ## 🤝 贡献
 

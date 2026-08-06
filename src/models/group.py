@@ -68,6 +68,11 @@ class Group(Base):
         Integer, default=8, comment="时区偏移（相对UTC小时数）"
     )
 
+    # i18n 多语言配置
+    locale: Mapped[str] = mapped_column(
+        String(16), default="zh-Hans", comment="群组消息语言（BCP 47，如 zh-Hans/zh-Hant/en）"
+    )
+
     # 白名单配置
     is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否在白名单中")
 
