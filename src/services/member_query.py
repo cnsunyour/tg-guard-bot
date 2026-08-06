@@ -20,6 +20,18 @@ from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
 
 
+class MemberQueryFloodWaitError(Exception):
+    """成员枚举因 Telegram FloodWait 无法继续（重试耗尽或等待时间过长）。
+
+    消息仅供日志/调试；用户可见文案由调用方按 locale 渲染（见
+    cleanup.error.flood_wait.message），不参与业务判断。
+    """
+
+    def __init__(self, seconds: int) -> None:
+        super().__init__(f"flood wait {seconds}s")
+        self.seconds = seconds
+
+
 class MemberQueryService:
     """基于 Telethon 的成员查询服务（带 Redis 缓存）"""
 
@@ -120,7 +132,7 @@ class MemberQueryService:
             else:
                 # 等待时间太长或重试次数过多，抛出异常
                 logger.error(f"FloodWait 时间过长 ({wait_seconds}s) 或重试次数过多，请稍后再试")
-                raise Exception(f"获取成员列表受限，请等待 {wait_seconds} 秒后重试") from e
+                raise MemberQueryFloodWaitError(wait_seconds) from e
 
         except Exception as e:
             logger.error(f"获取群组成员失败: {e}")

@@ -170,6 +170,39 @@ def _localizer() -> MagicMock:
     return loc
 
 
+# ===== _render_warning_reason 渲染（/warnings reason 字段）=====
+def test_render_warning_reason_system_code_uses_catalog() -> None:
+    """系统警告 code → catalog 渲染；历史中文值也映射（兼容旧 warnings.reason 记录）。"""
+    localizer = _localizer()
+    expected = "<moderation.warnings.system_reason.channel_impersonation.label>"
+    assert (
+        moderation_handler._render_warning_reason(localizer, "system:channel_impersonation")
+        == expected
+    )
+    # 历史兼容：修复前直接写入 warnings.reason 的中文也走同一 catalog key
+    assert moderation_handler._render_warning_reason(localizer, "使用频道马甲发言") == expected
+
+
+def test_render_warning_reason_free_text_escapes() -> None:
+    """管理员自由输入文本 → escape_html；不调 catalog。"""
+    localizer = _localizer()
+    result = moderation_handler._render_warning_reason(localizer, "发了<广告> & 骚扰")
+    assert result == "发了&lt;广告&gt; &amp; 骚扰"
+
+
+def test_render_warning_reason_none_falls_back_to_no_reason() -> None:
+    """空 reason → moderation.warnings.no_reason.label。"""
+    localizer = _localizer()
+    assert (
+        moderation_handler._render_warning_reason(localizer, None)
+        == "<moderation.warnings.no_reason.label>"
+    )
+    assert (
+        moderation_handler._render_warning_reason(localizer, "")
+        == "<moderation.warnings.no_reason.label>"
+    )
+
+
 def _message() -> MagicMock:
     message = MagicMock()
     message.chat.type = "group"

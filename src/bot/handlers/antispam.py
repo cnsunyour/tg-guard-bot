@@ -281,7 +281,7 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
                 chat_id=message.chat.id,
                 user_id=message.from_user.id,
                 operator_id=bot.id,
-                reason="使用频道马甲发言",
+                reason="system:channel_impersonation",
             )
         else:
             # 没有实际用户信息，仅在群组发送提示

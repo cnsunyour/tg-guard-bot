@@ -16,9 +16,21 @@ from src.services.cleanup import (
     CleanupResult,
     CleanupService,
 )
-from src.services.member_query import MemberQueryService
+from src.services.member_query import MemberQueryFloodWaitError, MemberQueryService
 
 router = Router(name="cleanup")
+
+
+def _render_cleanup_exception(localizer: BoundLocalizer, error: Exception) -> str:
+    """渲染 cleanup handler 捕获的异常为用户可见文本。
+
+    MemberQueryFloodWaitError 按群 locale 渲染速率限制提示；其余异常保留
+    escape 后的诊断文本（cleanup 为管理员命令，技术错误信息有诊断价值）。
+    """
+
+    if isinstance(error, MemberQueryFloodWaitError):
+        return localizer.t("cleanup.error.flood_wait.message", wait_seconds=error.seconds)
+    return escape_html(str(error))
 
 
 @router.message(Command("cleanup"))
@@ -103,7 +115,10 @@ async def cmd_cleanup(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
     except Exception as e:
         logger.error(f"清理命令执行失败: {e}")
         await message.answer(
-            localizer.t("cleanup.error.execution_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.execution_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return None
 
@@ -124,7 +139,10 @@ async def _handle_refresh(
     except Exception as e:
         logger.error(f"刷新缓存失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.refresh_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.refresh_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg  # 返回消息对象以便中间件自动删除
 
@@ -155,7 +173,10 @@ async def _handle_cache_info(
     except Exception as e:
         logger.error(f"获取缓存信息失败: {e}")
         return await message.answer(
-            localizer.t("cleanup.error.cache_lookup_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.cache_lookup_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
 
 
@@ -195,7 +216,10 @@ async def _handle_preview(
     except Exception as e:
         logger.error(f"预览清理失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.preview_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.preview_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg
 
@@ -299,7 +323,10 @@ async def _handle_run(
     except Exception as e:
         logger.error(f"执行清理失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.execution_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.execution_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg
 
@@ -342,7 +369,10 @@ async def _handle_deleted(
     except Exception as e:
         logger.error(f"清理已删除用户失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.execution_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.execution_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg
 
@@ -385,7 +415,10 @@ async def _handle_restricted(
     except Exception as e:
         logger.error(f"清理受限用户失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.execution_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.execution_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg
 
@@ -426,7 +459,10 @@ async def _handle_scam(
     except Exception as e:
         logger.error(f"清理诈骗标记用户失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.execution_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.execution_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg
 
@@ -467,7 +503,10 @@ async def _handle_fake(
     except Exception as e:
         logger.error(f"清理虚假标记用户失败: {e}")
         await status_msg.edit_text(
-            localizer.t("cleanup.error.execution_failed.message", error=escape_html(str(e)))
+            localizer.t(
+                "cleanup.error.execution_failed.message",
+                error=_render_cleanup_exception(localizer, e),
+            )
         )
         return status_msg
 

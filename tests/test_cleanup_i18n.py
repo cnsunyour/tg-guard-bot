@@ -6,7 +6,7 @@
 - _increment_kicked/failed 用 enum identity（删 "已删除" 字符串 fallback）
 - _render_cleanup_error 按 code 选 catalog key + 注入 user_id + escape detail
 - detail=None 安全（escape_html(None)=""，无 {detail} 占位符的 code 不受影响）
-- catalog 三语 parity（35 cleanup.* key + 占位符对等）
+- catalog 三语 parity（36 cleanup.* key + 占位符对等）
 """
 
 import json
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-from src.bot.handlers.cleanup import _render_cleanup_error
+from src.bot.handlers.cleanup import _render_cleanup_error, _render_cleanup_exception
 from src.services.cleanup import (
     CleanupError,
     CleanupErrorCode,
@@ -24,6 +24,7 @@ from src.services.cleanup import (
     CleanupResult,
     CleanupService,
 )
+from src.services.member_query import MemberQueryFloodWaitError
 
 pytestmark = pytest.mark.unit
 
@@ -171,7 +172,7 @@ def test_render_cleanup_error_renders_code_with_params() -> None:
     )
     result = _render_cleanup_error(localizer, error)
     assert result == (
-        "<cleanup.error.telegram_bad_request.message:" "{'user_id': 123, 'detail': 'bad request'}>"
+        "<cleanup.error.telegram_bad_request.message:{'user_id': 123, 'detail': 'bad request'}>"
     )
 
 
@@ -197,16 +198,34 @@ def test_render_cleanup_error_none_detail_safe() -> None:
     assert "user_id': 42" in result
 
 
+# ===== _render_cleanup_exception 渲染（handler except 块捕获的异常）=====
+def test_render_cleanup_exception_flood_wait_uses_catalog() -> None:
+    """MemberQueryFloodWaitError → cleanup.error.flood_wait.message + wait_seconds 注入。"""
+    localizer = _localizer()
+    error = MemberQueryFloodWaitError(30)
+    result = _render_cleanup_exception(localizer, error)
+    assert result == "<cleanup.error.flood_wait.message:{'wait_seconds': 30}>"
+    assert error.seconds == 30
+
+
+def test_render_cleanup_exception_other_exception_escapes_str() -> None:
+    """非 FloodWait 异常 → escape_html(str(e)) 保留诊断文本（防注入）。"""
+    localizer = _localizer()
+    result = _render_cleanup_exception(localizer, RuntimeError("<bad> & data"))
+    assert result == "&lt;bad&gt; &amp; data"
+    localizer.t.assert_not_called()
+
+
 # ===== catalog 三语 parity =====
 def test_cleanup_catalog_keys_exist_in_three_locales() -> None:
-    """35 cleanup.* key 三语均存在。"""
+    """36 cleanup.* key 三语均存在。"""
     root = Path(__file__).resolve().parents[1]
     all_keys: set[str] = set()
     for locale in ("zh-Hans", "zh-Hant", "en"):
         catalog = json.loads((root / "locales" / f"{locale}.json").read_text("utf-8"))
         cleanup_keys = {k for k in catalog if k.startswith("cleanup.")}
         all_keys |= cleanup_keys
-    assert len(all_keys) == 35
+    assert len(all_keys) == 36
 
 
 @pytest.mark.parametrize("locale", ["zh-Hans", "zh-Hant", "en"])

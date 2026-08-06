@@ -41,6 +41,29 @@ def _render_moderation_error(
     return localizer.t(f"moderation.error.{code.value}.message")
 
 
+# 系统警告 reason（bot 自动警告）的稳定 code → catalog key 映射。
+# 历史兼容：修复前直接写入 warnings.reason 的中文也映射，避免旧记录跨 locale 泄漏。
+_WARNING_REASON_CATALOG_KEYS: dict[str, str] = {
+    "system:channel_impersonation": "moderation.warnings.system_reason.channel_impersonation.label",
+    "使用频道马甲发言": "moderation.warnings.system_reason.channel_impersonation.label",
+}
+
+
+def _render_warning_reason(localizer: BoundLocalizer, reason: str | None) -> str:
+    """渲染 /warnings 列表中的 reason 字段。
+
+    已知系统警告 code（含历史中文值）按群 locale 渲染；其余视为管理员自由
+    输入文本，escape 后展示；空值回落到 no_reason label。
+    """
+
+    if not reason:
+        return localizer.t("moderation.warnings.no_reason.label")
+    catalog_key = _WARNING_REASON_CATALOG_KEYS.get(reason)
+    if catalog_key:
+        return localizer.t(catalog_key)
+    return escape_html(reason)
+
+
 async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
     """从消息中解析用户ID
 
@@ -763,11 +786,7 @@ async def cmd_warnings(message: Message, bot: Bot, localizer: BoundLocalizer) ->
 
     for idx, warning in enumerate(warnings[:10], 1):  # 只显示最近10条
         date = warning.created_at.strftime("%Y-%m-%d %H:%M")
-        reason = (
-            escape_html(warning.reason)
-            if warning.reason
-            else localizer.t("moderation.warnings.no_reason.label")
-        )
+        reason = _render_warning_reason(localizer, warning.reason)
 
         # 判断警告是否在有效期内
         days_ago = (datetime.utcnow() - warning.created_at).days
