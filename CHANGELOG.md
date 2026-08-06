@@ -5,6 +5,48 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.7.0] - 2026-08-07
+
+### 新增功能
+
+#### i18n 多语言支持（zh-Hans / zh-Hant / en） 🌐
+- 扁平点分 catalog（`locales/{locale}.json`）+ `{var}` 占位符；启动校验重复 key / 占位符 parity / Telegram HTML 白名单
+- `LocaleMiddleware` 注入 `BoundLocalizer`，handler 经 `localizer.t(key, **vars)` 访问文案；`LocaleResolver` 解析群组/用户/跨目的地语言偏好（不依赖 ContextVar，适配异步/延迟/定时任务）
+- 全量出站文案 i18n：验证流程、反垃圾检测/确认/反馈、群管命令、宵禁、管理配置、WebApp 验证页
+- 业务数据用稳定 code 持久化（如 `system:spam`、`system:channel_impersonation`），展示层按 locale 渲染——群切语言后旧记录不显示旧语言
+- `/lang` 命令切换群组/用户语言，按钮用 endonym 自称（简体中文/繁體中文/English，不随当前语言变）
+- locale 地区别名映射（zh-CN→zh-Hans 等）；rehydrate 对不支持 locale 容错（启动防崩溃）
+
+#### 反垃圾确认/举报提示新增「忽略」按钮 ⏭
+- 自动检测 review prompt 与群成员举报 prompt 新增第三按钮「忽略」：不处罚、不入库、仅关闭本次提示
+- approve/reject 同行、ignore 独立一行（移动端三按钮同行过窄）
+
+#### review prompt 自动清理 TTL 配置 ⏱
+- 新增 `SPAM_REVIEW_PROMPT_AUTO_DELETE_SECONDS`（默认 3600s）：未处理的确认提示到期自动清理，不处罚、不写入训练样本；Redis state 同步过期，prompt 与 state TTL 必须一致（否则旧 state 因 SET NX 阻止同一消息重建 review）
+
+### Bug 修复
+
+#### 反垃圾确认提示失败/已处理时残留 🔧
+- **问题**：自动检测的 review prompt 在 ban 失败、状态已被他人消费、或异常路径下，callback 仅弹 toast，提示消息保留按钮残留，管理员需手动删；恶意 bot 连发两条垃圾、管理员处理第一条后第二条提示因原消息已删报 message not found
+- **修复**：`on_spam_review_callback` 改 try/finally 统一清理——进入处理后无论成功/业务失败/异常，finally 始终 edit_text 移除按钮 + auto_delete(30)；单次 answer 契约（前置失败各自 toast，通过前置则 processing toast 防超时）；ban 显式 revoke_messages=False/allow_left=True；ban 失败审计 `spam_review_ban_failed` 含 error_code
+
+#### 举报提示按钮失败/已处理时残留 🔧
+- **问题**：`/spam`、`/report` 举报提示的 approve/reject 按钮在失败（ban 失败、举报已被命令路径处理、异常）时仅 `callback.answer(alert)`，提示消息按钮原样保留残留
+- **修复**：抽取 `_handle_report_callback` 公共函数（approve/reject/ignore 共用），同款 try/finally 统一清理；新增 `_process_report_ignore`（status=ignored）与 `on_report_ignore`；提示 auto_delete delay 对齐 review（复用 `SPAM_REVIEW_PROMPT_AUTO_DELETE_SECONDS`）；ban 显式 revoke_messages=False/allow_left=True；`update_report_status` 返回值检查
+
+#### i18n 出站文案多轮审查补迁 🔧
+- reason code 化：warn reason / rule description / moderation 默认 reason 改稳定 code 持久化，展示层按 locale 渲染
+- Vision 提示占位拆分（recognized_text 截断 200 后 escape）
+- 验证码题库三语翻译 + WebApp 第三方组件 locale 跟随
+- suspicious_platforms 繁体用词修正（opencc **s2tw** 校验，非 s2t 避免 羣/喫 假阳性）
+- content_type 等库枚举不嵌入本地化文案（避免中英混排）；标点 i18n（顿号」、「对应 en ", "）
+- codex 全新 session 双向审查（找遗漏 + 验证修复副作用），补迁训练样本回归等 5 处
+
+### 代码质量
+
+- 📝 CLAUDE.md / README 新增 i18n 多语言章节（架构 / 新增出站文案守则 / 配置 / 命令 / 路线图）
+- 📝 memory 记录版本 bump 流程、i18n 迁移项目、callback 权限陷阱、群消息用户名脱敏约定等
+
 ## [1.6.4] - 2026-07-24
 
 ### Bug 修复
