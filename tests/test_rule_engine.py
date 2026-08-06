@@ -111,9 +111,9 @@ def test_rule_engine_contact_info_detection():
     ]
     for text in non_phone_texts:
         has_contact, contact_type = engine.check_contact_info(text)
-        assert not (has_contact and contact_type == "电话号码"), (
-            f"不应将长数字串识别为电话号码: {text}"
-        )
+        assert not (
+            has_contact and contact_type == "电话号码"
+        ), f"不应将长数字串识别为电话号码: {text}"
 
 
 @pytest.mark.unit

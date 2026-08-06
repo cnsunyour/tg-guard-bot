@@ -284,7 +284,7 @@
   "antispam.reason.rule.adult_chat_service.label": "成人陪聊服務",
   "antispam.reason.rule.private_contact_service.label": "私密聯絡方式服務",
   "antispam.reason.rule.trading_signals.label": "交易訊號/行銷",
-  "antispam.reason.rule.suspicious_platforms.label": "可疑博弈平台",
+  "antispam.reason.rule.suspicious_platforms.label": "可疑博彩平臺",
   "antispam.reason.rule.telegram_spam.label": "Telegram 垃圾推廣",
   "antispam.reason.short_link.label": "短連結",
   "antispam.reason.suspicious_domain.label": "可疑網域：{domain}",
