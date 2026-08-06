@@ -547,6 +547,27 @@ tail -f logs/error_*.log  # 查看错误日志
 
 ---
 
+## 🌐 i18n 多语言
+
+**支持语言**: zh-Hans（源/默认）/ zh-Hant / en
+
+**架构**:
+- catalog: `locales/{locale}.json`，扁平点分 key，`{var}` 占位符（**不支持 format spec**）；启动校验重复 key / 占位符 parity / Telegram HTML 白名单，zh-Hans 缺失或损坏阻止启动
+- 翻译访问: handler 经 LocaleMiddleware 注入 `BoundLocalizer`，调用 `localizer.t(key, **vars)`
+- locale 解析（**不可依赖 ContextVar**——跨目的地发送/定时/延迟任务拿不到）: 群消息 `LocaleResolver.for_group`、私聊 `for_user`、跨目的地 `for_private_from_group`
+- 渲染层: `antispam_render`（检测原因 reason_codes）、`verification_render`（验证挑战）、`moderation._render_warning_reason` / `_render_report_reason`——业务数据用稳定 code，展示层按 locale 渲染
+
+**新增出站文案守则**（bot 发给用户的消息，含 button text + 异步/延迟/定时任务发的消息）:
+1. 必须 `localizer.t(key)`，不硬编码中文；用户可控文本（用户名/chat_title/reason/OCR）插入消息须 `escape_html`
+2. 跨目的地发送（service/定时器/延迟任务）用 `LocaleResolver` 显式解析，不用 ContextVar
+3. 存 DB/Redis 的业务字段（reason/状态）用**稳定 code**（如 `system:spam`、`system:channel_impersonation`），展示层渲染——**不存本地化文案**（群切语言后旧记录会显示旧语言）
+4. service 返回的中文字段可能多用途（展示 + 训练样本/审计/日志），改其来源须**追全下游**（如 `spam_text` 同时进 /reports 展示与训练样本库、`recognized_text` 同时展示与 feedback）
+5. 英文库枚举/标识符（`content_type`=photo、reason code）**不嵌入本地化文案**（避免 "[photo消息]" 中英混排）；持久化用稳定值，展示层渲染
+6. catalog value 翻译完整性自检: en value 不含 CJK；zh-Hant 用 `opencc -c s2tw` 验证无简体残留（**s2t 有群→羣/吃→喫假阳性，必须用 s2tw 台湾正体**）；批量翻译 value（题库/rule label）做三语语义并排核对（语言检测抓不到"博弈≠博彩"用词错）
+7. 标点 i18n: 分隔符等标点走 catalog（中文顿号"、"对应 en ", "），不硬编码
+
+---
+
 ## ⚠️ 常见陷阱
 
 1. **编辑文件前必须先读取**: 使用 Edit 工具前必须先用 Read 工具读取文件
@@ -558,6 +579,7 @@ tail -f logs/error_*.log  # 查看错误日志
 7. **上下文检测需要AI检测**: `CONTEXT_ENABLED` 需要 `AI_SPAM_ENABLED=true` 才能工作
 8. **上下文一致性可独立使用**: `CONTEXT_CONSISTENCY_ENABLED` 即使没有AI也能通过Embedding工作
 9. **入群 inflight 锁 TTL 须大于检测最坏耗时**: `VERIFICATION_INFLIGHT_TTL_SECONDS` 应覆盖 AI 主备链路串行×重试的总时长；正常处理结束锁立即释放，TTL 仅作进程异常退出的死锁兜底
+10. **i18n 新增出站文案守则**: 见上方 🌐 i18n 多语言章节（走 catalog / 稳定 code 持久化 / service 字段追下游 / 库枚举不嵌入 / catalog value 三语校验 / 标点 i18n）
 
 ---
 
@@ -673,6 +695,6 @@ grep "Stage [1-3] 检测到垃圾" logs/bot_*.log | wc -l
 
 ---
 
-**最后更新**: 2026-07-23
-**版本**: v1.2.0
-**适用于**: tg-guard-bot 多层反垃圾检测版本
+**最后更新**: 2026-08-07
+**版本**: v1.3.0
+**适用于**: tg-guard-bot 多层反垃圾检测 + i18n 多语言版本

@@ -223,7 +223,7 @@ def parse_spam_args(text: str) -> tuple[bool, str | None]:
     Returns:
         (delete_all: bool, reason: str | None)
         - delete_all: 是否删除用户的所有消息
-        - reason: 用户提供的原因文本，无原因时为 None（展示层用默认 label）
+        - reason: 用户提供的原因文本，无原因时为 None（cmd_spam 写入 DB 时转稳定 code `system:spam`，展示层 _render_report_reason 按 locale 渲染）
     """
     parts = text.split(maxsplit=1)
 

@@ -28,7 +28,7 @@ class ReportRepository:
             reported_user_id: 被举报者ID
             message_id: 消息ID
             message_text: 消息文本
-            reason: 举报原因
+            reason: 举报原因（cmd_spam 无原因时传稳定 code `system:spam`，展示层 _render_report_reason 按 locale 渲染；历史中文值兼容映射）
         """
         async with get_db_session() as session:
             report = Report(
