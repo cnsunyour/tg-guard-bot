@@ -44,7 +44,7 @@ def punishment_label(localizer: BoundLocalizer, key: PunishmentKey) -> str:
 # 需要参数的 code 及其必需参数集（缺参数则按旧格式 escape 原样显示）
 # 防 AI 自由文本恰好为纯 code 名（如 "rule_match"）导致 catalog 缺占位符
 _REQUIRED_REASON_PARAMS: dict[str, frozenset[str]] = {
-    "rule_match": frozenset({"description"}),
+    "rule_match": frozenset({"rule_id"}),
     "suspicious_domain": frozenset({"domain"}),
     "contact_info": frozenset({"type"}),
     "ml_classifier": frozenset({"confidence"}),
@@ -124,12 +124,18 @@ def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
         type_label = localizer.t(f"antispam.reason.contact_type.{contact_type}.label")
         return localizer.t("antispam.reason.contact_info.label", type=type_label)
 
-    # rule_match 需注入 description 占位符（规则描述含中文，需 escape）
+    # 内置规则按稳定 rule_id 从 catalog 渲染；自定义 JSON 规则 catalog 缺失时
+    # 回退为经过转义的 rule_id（不展示中文 description，避免跨 locale 泄漏）。
     if code == "rule_match":
-        return localizer.t(
-            "antispam.reason.rule_match.label",
-            description=escape_html(params["description"]),
-        )
+        rule_id = params["rule_id"]
+        rule_key = f"antispam.reason.rule.{rule_id}.label"
+        try:
+            rule_label = localizer.t(rule_key)
+            if rule_label == rule_key:
+                rule_label = escape_html(rule_id)
+        except KeyError:
+            rule_label = escape_html(rule_id)
+        return localizer.t("antispam.reason.rule_match.label", rule=rule_label)
 
     # suspicious_domain 需注入 domain 占位符（技术标识符，escape 防注入）
     if code == "suspicious_domain":

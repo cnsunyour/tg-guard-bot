@@ -847,7 +847,10 @@ class SpamDetector:
             "reasons": ai_reasons,
             "details": {
                 **ai_result.get("details", {}),
-                "recognized_text": sample_text,
+                "recognized_text": extracted_text,
+                # 反馈样本兜底：Vision 无文字时用占位符避免空串污染训练
+                # （展示用 recognized_text 上方的纯 OCR；此处专供下游 feedback）
+                "sample_text": sample_text,
                 "recognized_text_masked": (
                     mask_text(extracted_text) if extracted_text else "[无文字]"
                 ),
@@ -874,7 +877,7 @@ class SpamDetector:
             )
         else:
             logger.debug(
-                f"Vision 判定为正常图片 [用户:{user_id}] " f"[置信度:{result['confidence']:.2f}]"
+                f"Vision 判定为正常图片 [用户:{user_id}] [置信度:{result['confidence']:.2f}]"
             )
 
         return result

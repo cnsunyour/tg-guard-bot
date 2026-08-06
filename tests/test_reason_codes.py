@@ -48,14 +48,14 @@ def test_rule_engine_tg_invite_returns_encoded_code() -> None:
     assert "tg_invite" in result["reasons"]
 
 
-def test_rule_engine_rule_match_returns_encoded_code_with_description() -> None:
-    """规则匹配 → "rule_match:description=..." 编码。"""
+def test_rule_engine_rule_match_returns_encoded_code_with_rule_id() -> None:
+    """规则匹配 → "rule_match:rule_id=..." 编码（英文稳定 id，文案走 catalog）。"""
     engine = RuleEngine()
     result = engine.analyze("BTC行情分析，私聊带单，日赚十万")
     assert result["is_spam"]
     reason = result["reasons"][0]
-    assert reason.startswith("rule_match:description=")
-    assert "加密货币" in reason
+    assert reason.startswith("rule_match:rule_id=")
+    assert "crypto_multi_keyword" in reason
 
 
 def test_rule_engine_contact_info_returns_encoded_code_with_subtype() -> None:
@@ -122,10 +122,13 @@ def test_format_reasons_decodes_simple_code() -> None:
 
 
 def test_format_reasons_decodes_code_with_params() -> None:
-    """带参数 code → catalog key + params 注入。"""
+    """带参数 code → catalog key + params 注入（rule_match 嵌套 rule.<id>.label）。"""
     localizer = _localizer()
-    result = _format_reasons(localizer, ("rule_match:description=社工库非法获取",))
-    assert result == "<antispam.reason.rule_match.label:{'description': '社工库非法获取'}>"
+    result = _format_reasons(localizer, ("rule_match:rule_id=social_engine_db",))
+    # rule_match 嵌套：rule_label = t(rule.social_engine_db.label)，再 t(rule_match.label, rule=rule_label)
+    assert result == (
+        "<antispam.reason.rule_match.label:{'rule': '<antispam.reason.rule.social_engine_db.label>'}>"
+    )
 
 
 def test_format_reasons_decodes_contact_subtypes() -> None:
@@ -152,7 +155,7 @@ def test_format_reasons_mixed_codes_and_legacy_strings() -> None:
     """编码 + 旧格式字符串混合（兼容性）。"""
     localizer = _localizer()
     result = _format_reasons(
-        localizer, ("tg_invite", "AI检测:广告内容", "rule_match:description=规则")
+        localizer, ("tg_invite", "AI检测:广告内容", "rule_match:rule_id=social_engine_db")
     )
     assert "<antispam.reason.tg_invite.label>" in result
     assert "AI检测:广告内容" in result  # 旧格式保持原样
@@ -175,22 +178,57 @@ def test_format_reasons_empty_tuple_returns_empty_string() -> None:
 
 
 # ===== codex review P2 回归 =====
-def test_format_reasons_preserves_comma_in_description() -> None:
-    """P2: description 含逗号时不被截断（单参数解析取 = 后全部）。"""
+def test_format_reasons_preserves_comma_in_param() -> None:
+    """P2: 参数含逗号时不被截断（单参数解析取 = 后全部）。rule_match 改 rule_id
+    后无逗号场景，用 suspicious_domain 的 domain 参数覆盖逗号保留回归。"""
     localizer = _localizer()
-    result = _format_reasons(localizer, ("rule_match:description=promotion, phishing",))
-    assert result == "<antispam.reason.rule_match.label:{'description': 'promotion, phishing'}>"
+    result = _format_reasons(localizer, ("suspicious_domain:domain=bit.ly, phishing.com",))
+    assert result == (
+        "<antispam.reason.suspicious_domain.label:{'domain': 'bit.ly, phishing.com'}>"
+    )
 
 
 def test_format_reasons_missing_param_code_escapes_original() -> None:
     """P2: 纯 code 名无必需参数（如 AI 自由文本恰好 "rule_match"）→ escape 原样显示。"""
     localizer = _localizer()
-    # rule_match 无 description → escape 原样（不渲染 catalog key，防 TranslationError）
+    # rule_match 无 rule_id → escape 原样（不渲染 catalog key，防 TranslationError）
     assert _format_reasons(localizer, ("rule_match",)) == "rule_match"
     # contact_info 无 type → escape 原样
     assert _format_reasons(localizer, ("contact_info",)) == "contact_info"
     # suspicious_domain 无 domain → escape 原样
     assert _format_reasons(localizer, ("suspicious_domain",)) == "suspicious_domain"
+
+
+def test_format_reasons_rule_match_builtin_renders_from_catalog() -> None:
+    """内置规则 → catalog 嵌套渲染（rule.<id>.label + rule_match.label），无残留占位符。"""
+    from pathlib import Path
+
+    from src.core.i18n.catalog import load_catalogs
+    from src.core.i18n.translator import Translator
+
+    root = Path(__file__).resolve().parents[1]
+    catalogs = load_catalogs(root / "locales", ["zh-Hans", "zh-Hant", "en"], "zh-Hans")
+    localizer = Translator(catalogs, "zh-Hans", strict=True).for_locale("zh-Hans")
+    result = _format_reasons(localizer, ("rule_match:rule_id=social_engine_db",))
+    # rule.social_engine_db.label = "社工库非法获取"，rule_match.label = "规则匹配：{rule}"
+    assert result == "规则匹配：社工库非法获取"
+    assert "{" not in result  # 无残留占位符
+
+
+def test_format_reasons_rule_match_unknown_rule_id_falls_back_to_escaped_id() -> None:
+    """自定义 JSON 规则（catalog 无 rule.<id>.label）→ escape rule_id 兜底，不泄漏中文 description。"""
+    from pathlib import Path
+
+    from src.core.i18n.catalog import load_catalogs
+    from src.core.i18n.translator import Translator
+
+    root = Path(__file__).resolve().parents[1]
+    catalogs = load_catalogs(root / "locales", ["zh-Hans", "zh-Hant", "en"], "zh-Hans")
+    localizer = Translator(catalogs, "zh-Hans", strict=True).for_locale("zh-Hans")
+    result = _format_reasons(localizer, ("rule_match:rule_id=custom_unknown",))
+    # catalog 无 rule.custom_unknown.label → strict t() 抛 KeyError → 兜底 escape_html(rule_id)
+    # rule_match.label = "规则匹配：{rule}" → "规则匹配：custom_unknown"
+    assert result == "规则匹配：custom_unknown"
 
 
 def test_format_reasons_unknown_contact_subtype_escapes_original() -> None:

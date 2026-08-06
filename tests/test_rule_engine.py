@@ -54,9 +54,9 @@ def test_rule_engine_with_regex_rules():
     result = engine.analyze("BTC行情分析，私聊带单，日赚十万")
     assert result["is_spam"]
     assert result["confidence"] >= 0.88
-    # 现在 reasons 是编码格式 "rule_match:description=..."
-    assert result["reasons"][0].startswith("rule_match:description=")
-    assert "加密货币" in result["reasons"][0]
+    # 现在 reasons 是编码格式 "rule_match:rule_id=..."（英文稳定 id，文案走 catalog）
+    assert result["reasons"][0].startswith("rule_match:rule_id=")
+    assert "crypto_multi_keyword" in result["reasons"][0]
     assert result["details"]["category"] == "crypto_scam"
 
     # 测试违禁药品（应该被 CRITICAL 规则捕获）
@@ -111,9 +111,9 @@ def test_rule_engine_contact_info_detection():
     ]
     for text in non_phone_texts:
         has_contact, contact_type = engine.check_contact_info(text)
-        assert not (
-            has_contact and contact_type == "电话号码"
-        ), f"不应将长数字串识别为电话号码: {text}"
+        assert not (has_contact and contact_type == "电话号码"), (
+            f"不应将长数字串识别为电话号码: {text}"
+        )
 
 
 @pytest.mark.unit

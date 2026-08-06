@@ -426,7 +426,7 @@ class RuleEngine:
         is_match, rule, matched_text = self.regex_engine.check(text)
         if is_match and rule:
             result["confidence"] = rule.confidence
-            result["reasons"].append(f"{ReasonCode.rule_match}:description={rule.description}")
+            result["reasons"].append(f"{ReasonCode.rule_match}:rule_id={rule.id}")
             result["details"].update(
                 {
                     "rule_id": rule.id,

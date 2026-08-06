@@ -452,7 +452,9 @@ async def _handle_spam_with_review(
         message_type=message_type,
         original_text=original_text,
         recognized_text=recognized_text,
-        sample_text=recognized_text or original_text,
+        sample_text=result.get("details", {}).get("sample_text")
+        or recognized_text
+        or original_text,
         reason_codes=tuple(str(reason) for reason in result["reasons"]),
         confidence=float(result["confidence"]),
     )
@@ -531,7 +533,13 @@ async def _apply_immediate_punishment(
             logger.error(f"处罚垃圾用户失败: {punishment.code.value}")
             return
 
-        sample_text = recognized_text or message.text or message.caption or ""
+        sample_text = (
+            result.get("details", {}).get("sample_text")
+            or recognized_text
+            or message.text
+            or message.caption
+            or ""
+        )
         await get_redis().setex(
             RedisKeys.spam_message_text(message.chat.id, message.message_id),
             86400,
