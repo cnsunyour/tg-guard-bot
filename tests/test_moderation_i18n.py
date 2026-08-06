@@ -282,11 +282,12 @@ async def test_report_approval_ban_failure_localizes_and_escapes_error(mocker) -
         "get_report_by_id",
         new=AsyncMock(return_value=report),
     )
-    mocker.patch.object(
+    ban = mocker.patch.object(
         moderation_handler.ModerationService,
         "ban_user",
         new=AsyncMock(return_value=ModerationResult(code=ModerationErrorCode.operation_failed)),
     )
+    bot = MagicMock()
 
     localizer = MagicMock()
 
@@ -300,7 +301,7 @@ async def test_report_approval_ban_failure_localizes_and_escapes_error(mocker) -
     localizer.t.side_effect = translate
 
     success, msg = await moderation_handler._process_report_approval(
-        bot=MagicMock(),
+        bot=bot,
         report_id=1,
         chat_id=CHAT_ID,
         operator_id=OPERATOR_ID,
@@ -308,6 +309,15 @@ async def test_report_approval_ban_failure_localizes_and_escapes_error(mocker) -
     )
 
     assert success is False
+    ban.assert_awaited_once_with(
+        bot=bot,
+        chat_id=CHAT_ID,
+        user_id=USER_ID,
+        operator_id=OPERATOR_ID,
+        reason="举报#1: spam",
+        revoke_messages=False,
+        allow_left=True,
+    )
     # moderation.error 文案经 escape_html 后(无 HTML 字符则不变)注入 ban_failed
     assert msg == "ban failed: 操作失败，请检查 Bot 权限"
     localizer.t.assert_any_call("moderation.error.operation_failed.message")

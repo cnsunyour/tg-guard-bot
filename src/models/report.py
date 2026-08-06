@@ -22,7 +22,7 @@ class Report(Base):
     reason: Mapped[str] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", index=True
-    )  # pending, approved, rejected
+    )  # pending, approved, rejected, ignored
     handled_by: Mapped[int] = mapped_column(BigInteger, nullable=True)
     handled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
