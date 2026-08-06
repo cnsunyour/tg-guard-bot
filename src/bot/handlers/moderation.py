@@ -64,6 +64,29 @@ def _render_warning_reason(localizer: BoundLocalizer, reason: str | None) -> str
     return escape_html(reason)
 
 
+# 举报默认 reason 稳定 code：不存本地化文案，避免群切换语言后旧举报仍显示旧语言。
+# 历史兼容：迁移前写入 reports.reason 的各语言默认 label 也视为“默认举报”。
+_REPORT_DEFAULT_REASON_CODE = "system:spam"
+_LEGACY_DEFAULT_REPORT_REASONS: frozenset[str] = frozenset(
+    {
+        _REPORT_DEFAULT_REASON_CODE,
+        "垃圾消息",
+        "垃圾訊息",
+        "Spam message",
+    }
+)
+
+
+def _render_report_reason(localizer: BoundLocalizer, reason: str | None) -> str:
+    """渲染举报 reason：默认 code/历史值→按 locale 默认标签；空值→无原因；其余 escape 原样。"""
+
+    if not reason:
+        return localizer.t("moderation.report.list.no_reason.label")
+    if reason in _LEGACY_DEFAULT_REPORT_REASONS:
+        return localizer.t("moderation.spam.reason.default.label")
+    return escape_html(reason)
+
+
 async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
     """从消息中解析用户ID
 
@@ -1154,8 +1177,10 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
 
     # 解析参数：检测 -d 参数和原因
     delete_all, reason = parse_spam_args(message.text or "")
-    spam_reason_label = localizer.t("moderation.spam.reason.default.label")
-    reason_display = reason or spam_reason_label
+    spam_reason_label = localizer.t(
+        "moderation.spam.reason.default.label"
+    )  # 管理员模式 audit reason 用
+    reason_value = reason or _REPORT_DEFAULT_REASON_CODE  # 写入 DB（稳定 code，跨 locale 展示一致）
 
     # 获取消息文本内容
     spam_text = ""
@@ -1164,12 +1189,11 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
     elif message.reply_to_message.caption:
         spam_text = message.reply_to_message.caption
 
-    # 如果没有文本内容，记录消息类型
+    # 无文本时记录媒体类型 code（稳定 type 区分训练样本；占位无本地化后缀避免中英混排）
     if not spam_text:
-        content_type = message.reply_to_message.content_type
         spam_text = localizer.t(
             "moderation.report.content_type.fallback",
-            content_type=escape_html(content_type),
+            content_type=escape_html(message.reply_to_message.content_type),
         )
 
     # 检查是否是管理员
@@ -1239,7 +1263,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             # 发送响应消息
             reason_line = localizer.t(
                 "moderation.common.reason.line",
-                reason=escape_html(reason_display),
+                reason=_render_report_reason(localizer, reason_value),
             )
             deleted_all = localizer.t("moderation.common.deleted_all.suffix") if delete_all else ""
             reply = await message.answer(
@@ -1277,7 +1301,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 reported_user_id=target_user_id,
                 message_id=message.reply_to_message.message_id,
                 message_text=spam_text,
-                reason=reason_display,
+                reason=reason_value,
             )
 
             # 统计待处理举报数量
@@ -1318,7 +1342,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 + localizer.t(
                     "moderation.spam.report.submitted.message",
                     report_id=report.id,
-                    reason=escape_html(reason_display),
+                    reason=_render_report_reason(localizer, reason_value),
                     pending_count=pending_count,
                 ),
                 reply_markup=keyboard,
@@ -1382,12 +1406,11 @@ async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
         elif message.reply_to_message.caption:
             message_text = message.reply_to_message.caption
 
-        # 如果没有文本内容，记录消息类型
+        # 无文本时记录媒体类型 code（稳定 type 区分训练样本；占位无本地化后缀避免中英混排）
         if not message_text:
-            content_type = message.reply_to_message.content_type
             message_text = localizer.t(
                 "moderation.report.content_type.fallback",
-                content_type=escape_html(content_type),
+                content_type=escape_html(message.reply_to_message.content_type),
             )
 
         usage_type = localizer.t("moderation.notspam.mode.preventive.label")
@@ -1668,11 +1691,7 @@ async def cmd_reports(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
             else:
                 content_preview = localizer.t("moderation.report.list.no_content.label")
 
-            reason_display = (
-                escape_html(report.reason)
-                if report.reason
-                else localizer.t("moderation.report.list.no_reason.label")
-            )
+            reason_display = _render_report_reason(localizer, report.reason)
 
             response += localizer.t(
                 "moderation.report.list.item.message",
@@ -1744,11 +1763,7 @@ async def cmd_approve(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
     if success:
         # 获取举报信息用于显示
         report = await ReportRepository.get_report_by_id(report_id)
-        reason_display = (
-            escape_html(report.reason)
-            if report and report.reason
-            else localizer.t("moderation.report.list.no_reason.label")
-        )
+        reason_display = _render_report_reason(localizer, report.reason if report else None)
         reply = await message.answer(
             localizer.t(
                 "moderation.approve.processed.message",
@@ -1812,11 +1827,7 @@ async def cmd_reject(message: Message, bot: Bot, localizer: BoundLocalizer) -> N
     if success:
         # 获取举报详情用于显示
         report = await ReportRepository.get_report_by_id(report_id)
-        reason_display = (
-            escape_html(report.reason)
-            if report and report.reason
-            else localizer.t("moderation.report.list.no_reason.label")
-        )
+        reason_display = _render_report_reason(localizer, report.reason if report else None)
         reply = await message.answer(
             localizer.t(
                 "moderation.reject.processed.message",
@@ -1881,11 +1892,7 @@ async def on_report_approve(callback: CallbackQuery, bot: Bot, localizer: BoundL
         if success:
             # 获取举报详情用于显示
             report = await ReportRepository.get_report_by_id(report_id)
-            reason_display = (
-                escape_html(report.reason)
-                if report and report.reason
-                else localizer.t("moderation.report.list.no_reason.label")
-            )
+            reason_display = _render_report_reason(localizer, report.reason if report else None)
 
             # 更新消息（移除按钮）
             await message.edit_text(
@@ -1964,11 +1971,7 @@ async def on_report_reject(
         if success:
             # 获取举报详情用于显示
             report = await ReportRepository.get_report_by_id(report_id)
-            reason_display = (
-                escape_html(report.reason)
-                if report and report.reason
-                else localizer.t("moderation.report.list.no_reason.label")
-            )
+            reason_display = _render_report_reason(localizer, report.reason if report else None)
 
             # 更新消息（移除按钮）
             await message.edit_text(

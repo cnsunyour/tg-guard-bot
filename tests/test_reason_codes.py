@@ -118,7 +118,10 @@ def test_format_reasons_decodes_simple_code() -> None:
     """无参数 code → catalog key。"""
     localizer = _localizer()
     result = _format_reasons(localizer, ("tg_invite", "short_link"))
-    assert result == "<antispam.reason.tg_invite.label>、<antispam.reason.short_link.label>"
+    assert (
+        result
+        == "<antispam.reason.tg_invite.label><antispam.reason.separator.label><antispam.reason.short_link.label>"
+    )
 
 
 def test_format_reasons_decodes_code_with_params() -> None:
@@ -139,8 +142,8 @@ def test_format_reasons_decodes_contact_subtypes() -> None:
     )
     assert result == (
         "<antispam.reason.contact_info.label:{'type': '<antispam.reason.contact_type.wechat.label>'}>"
-        "、<antispam.reason.contact_info.label:{'type': '<antispam.reason.contact_type.qq.label>'}>"
-        "、<antispam.reason.contact_info.label:{'type': '<antispam.reason.contact_type.phone.label>'}>"
+        "<antispam.reason.separator.label><antispam.reason.contact_info.label:{'type': '<antispam.reason.contact_type.qq.label>'}>"
+        "<antispam.reason.separator.label><antispam.reason.contact_info.label:{'type': '<antispam.reason.contact_type.phone.label>'}>"
     )
 
 
@@ -274,7 +277,7 @@ def test_format_reasons_renders_reply_relevant_and_topic_consistent() -> None:
     )
     assert result == (
         "<antispam.reason.reply_relevant.label:{'similarity': '0.72'}>"
-        "、<antispam.reason.topic_consistent.label:{'similarity': '0.85'}>"
+        "<antispam.reason.separator.label><antispam.reason.topic_consistent.label:{'similarity': '0.85'}>"
     )
 
 

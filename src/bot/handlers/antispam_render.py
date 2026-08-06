@@ -164,7 +164,7 @@ def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
 def _format_reasons(localizer: BoundLocalizer, reason_codes: tuple[str, ...]) -> str:
     """渲染原因列表（code 化 + 兼容旧格式/AI 自由文本）。"""
     rendered = [_format_single_reason(localizer, reason) for reason in reason_codes]
-    return "、".join(rendered)
+    return localizer.t("antispam.reason.separator.label").join(rendered)
 
 
 def _format_confidence(confidence: float) -> str:
