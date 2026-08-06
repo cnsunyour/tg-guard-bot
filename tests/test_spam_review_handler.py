@@ -109,12 +109,15 @@ def _authorize(mocker, allowed: bool = True):
 async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localizer) -> None:
     message = _message()
     create_state = mocker.patch.object(
-        antispam, "create_review_state", new=AsyncMock(side_effect=lambda state, *_: state)
+        antispam,
+        "create_review_state",
+        new=AsyncMock(side_effect=lambda state, *args, **kwargs: state),
     )
     mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
     mocker.patch.object(
         antispam, "get_chat_administrators_mention", new=AsyncMock(return_value="@admins")
     )
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
 
     await antispam._handle_spam_with_review(
         message,
@@ -128,8 +131,11 @@ async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localiz
     assert state.original_text == "spam text"
     assert state.sample_text == "spam text"
     assert state.message_type is SpamMessageType.text
-    create_state.assert_awaited_once_with(state, CHAT_ID, ORIG_MSG_ID)
+    review_ttl = antispam.settings.spam_review_prompt_auto_delete_seconds
+    create_state.assert_awaited_once_with(state, CHAT_ID, ORIG_MSG_ID, ttl=review_ttl)
     message.answer.assert_awaited_once()
+    # prompt 发出后安排与 state TTL 一致的自动删除（兜底未处理残留）
+    auto_delete.assert_awaited_once_with(message.answer.return_value, delay=review_ttl)
 
 
 async def test_review_producer_does_not_send_when_state_already_exists(mocker, localizer) -> None:
@@ -149,7 +155,9 @@ async def test_review_producer_does_not_send_when_state_already_exists(mocker, l
 async def test_review_producer_cleans_state_when_prompt_send_fails(mocker, localizer) -> None:
     message = _message(answer_side_effect=RuntimeError("send failed"))
     create_state = mocker.patch.object(
-        antispam, "create_review_state", new=AsyncMock(side_effect=lambda state, *_: state)
+        antispam,
+        "create_review_state",
+        new=AsyncMock(side_effect=lambda state, *args, **kwargs: state),
     )
     cleanup = mocker.patch.object(
         antispam, "delete_review_state_if_match", new=AsyncMock(return_value=True)
@@ -258,6 +266,7 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
         user_id=OFFENDER_ID,
         operator_id=OPERATOR_ID,
         reason="垃圾信息（管理员确认）",
+        revoke_messages=False,
         allow_left=True,
     )
     detector.add_feedback.assert_awaited_once_with(
@@ -277,10 +286,13 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     auto_delete.assert_awaited_once_with(message, delay=30)
 
 
-async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
+async def test_review_callback_ban_failure_consumes_state_and_cleans_prompt(
     mocker, localizer
 ) -> None:
-    """处罚失败：toast 报错，保留原提示与按钮供重试（不破坏消息、不消费 state）。"""
+    """处罚失败：显示失败原因、消费 state、审计 spam_review_ban_failed 并清理 prompt。
+
+    不再保留按钮重试（原失败分支 return 不清理之弊）；重试需重新触发检测。
+    """
     message = _message()
     callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
     _authorize(mocker)
@@ -291,19 +303,34 @@ async def test_review_callback_ban_failure_reports_via_toast_and_keeps_message(
         "ban_user",
         new=AsyncMock(return_value=ModerationResult(code=ModerationErrorCode.operation_failed)),
     )
+    audit = mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
     consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
+    mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
 
     await antispam.on_spam_review_callback(callback, MagicMock())
 
-    consume.assert_not_awaited()
-    # P2：action_failed 追加到原提示（保留证据 + 按钮，不替换整个 prompt）
+    # 失败仍消费 state + 审计 ban_failed + 清理 prompt（杜绝残留）
+    consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
+    audit.assert_awaited_once_with(
+        group_id=CHAT_ID,
+        operator_id=OPERATOR_ID,
+        action="spam_review_ban_failed",
+        target_user_id=OFFENDER_ID,
+        details={
+            "orig_msg_id": ORIG_MSG_ID,
+            "text_preview": "sample text",
+            "error_code": "operation_failed",
+        },
+    )
     message.edit_text.assert_awaited_once()
-    assert message.edit_text.await_args.kwargs["reply_markup"] == "review-keyboard"
+    assert message.edit_text.await_args.kwargs["reply_markup"] is None
     edit_text = message.edit_text.await_args.args[0]
     # ban 失败 code 透传为 moderation.error.<code>.message，再注入 review action_failed
     assert "moderation.error.operation_failed.message" in edit_text
     assert "antispam.review.action_failed.message" in edit_text
     assert "spam text" in edit_text  # 原 message.text 保留
+    auto_delete.assert_awaited_once_with(message, delay=30)
 
 
 async def test_review_callback_false_positive_keeps_original_message(mocker, localizer) -> None:
@@ -329,6 +356,71 @@ async def test_review_callback_false_positive_keeps_original_message(mocker, loc
     consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
     bot.delete_message.assert_not_awaited()  # 保留原消息
     message.delete.assert_not_awaited()
+    assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    auto_delete.assert_awaited_once_with(message, delay=30)
+
+
+async def test_review_callback_ignore_closes_without_punishment(mocker, localizer) -> None:
+    """忽略：不处罚、不入库、不删原消息，仅消费 state + 审计 spam_review_ignore + 清理 prompt。"""
+    message = _message()
+    callback = _callback(f"spam_review:ignore:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
+    ban = mocker.patch.object(antispam.ModerationService, "ban_user", new=AsyncMock())
+    detector = SimpleNamespace(add_feedback=AsyncMock())
+    mocker.patch.object(antispam, "get_detector", return_value=detector)
+    audit = mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
+    consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
+    mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
+
+    await antispam.on_spam_review_callback(callback, bot)
+
+    ban.assert_not_awaited()
+    detector.add_feedback.assert_not_awaited()
+    bot.delete_message.assert_not_awaited()  # 保留原消息
+    consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
+    audit.assert_awaited_once_with(
+        group_id=CHAT_ID,
+        operator_id=OPERATOR_ID,
+        action="spam_review_ignore",
+        target_user_id=OFFENDER_ID,
+        details={"orig_msg_id": ORIG_MSG_ID, "text_preview": "sample text"},
+    )
+    assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    auto_delete.assert_awaited_once_with(message, delay=30)
+
+
+async def test_review_callback_ban_success_cleans_prompt_even_if_feedback_fails(
+    mocker, localizer
+) -> None:
+    """try/finally 兜底：ban 成功但 add_feedback 抛异常时，finally 仍消费 state + 清理 prompt。"""
+    message = _message()
+    callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
+    bot = MagicMock()
+    bot.delete_message = AsyncMock()
+    _authorize(mocker)
+    _patch_lock(mocker, acquired=True)
+    mocker.patch.object(antispam, "get_review_state", new=AsyncMock(return_value=_state()))
+    mocker.patch.object(
+        antispam.ModerationService, "ban_user", new=AsyncMock(return_value=ModerationResult())
+    )
+    detector = SimpleNamespace(add_feedback=AsyncMock(side_effect=RuntimeError("db down")))
+    mocker.patch.object(antispam, "get_detector", return_value=detector)
+    mocker.patch.object(antispam.AuditRepository, "log_action", new=AsyncMock())
+    consume = mocker.patch.object(antispam, "consume_review_state", new=AsyncMock())
+    mocker.patch.object(antispam, "format_trusted_user_mention", return_value="Admin")
+    auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
+
+    await antispam.on_spam_review_callback(callback, bot)
+
+    # add_feedback 异常被独立 suppress；completed_text 已在 ban 成功时设置；
+    # finally 仍消费 state + edit（ban 结果）+ auto_delete，杜绝残留
+    consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
+    message.edit_text.assert_awaited_once()
     assert message.edit_text.await_args.kwargs["reply_markup"] is None
     auto_delete.assert_awaited_once_with(message, delay=30)
 

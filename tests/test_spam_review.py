@@ -218,6 +218,18 @@ async def test_create_review_state_uses_nx_and_keeps_first_snapshot() -> None:
     assert redis.expirations[key] == 86400
 
 
+async def test_create_review_state_respects_custom_ttl() -> None:
+    """handler 传 ttl=spam_review_prompt_auto_delete_seconds，覆盖默认 86400。"""
+    redis = _FakeRedis()
+    state = _state()
+    key = RedisKeys.spam_review(-100, 123)
+
+    with patch.object(spam_review, "get_redis", return_value=redis):
+        assert await create_review_state(state, -100, 123, ttl=3600) is state
+
+    assert redis.expirations[key] == 3600
+
+
 async def test_get_review_state_returns_state_or_none() -> None:
     redis = _FakeRedis()
     state = _state()

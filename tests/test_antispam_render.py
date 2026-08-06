@@ -27,6 +27,7 @@ from src.bot.handlers.antispam_render import (
     build_immediate_processed,
     build_review_ban_result,
     build_review_false_positive_result,
+    build_review_ignore_result,
     build_review_keyboard,
     build_review_prompt,
     message_type_label,
@@ -192,7 +193,8 @@ def test_review_keyboard_callback_data_and_labels() -> None:
     review_id = "0123456789abcdef"
     keyboard = build_review_keyboard(localizer, orig_msg_id=321, review_id=review_id)
 
-    assert len(keyboard.inline_keyboard) == 1
+    # ban / false_positive 同行，ignore 单独一行（移动端三按钮同行过窄）
+    assert len(keyboard.inline_keyboard) == 2
     assert [button.callback_data for button in keyboard.inline_keyboard[0]] == [
         "spam_review:ban:321:0123456789abcdef",
         "spam_review:false_positive:321:0123456789abcdef",
@@ -200,6 +202,12 @@ def test_review_keyboard_callback_data_and_labels() -> None:
     assert [button.text for button in keyboard.inline_keyboard[0]] == [
         localizer.t("antispam.review.ban.button"),
         localizer.t("antispam.review.false_positive.button"),
+    ]
+    assert [button.callback_data for button in keyboard.inline_keyboard[1]] == [
+        "spam_review:ignore:321:0123456789abcdef",
+    ]
+    assert [button.text for button in keyboard.inline_keyboard[1]] == [
+        localizer.t("antispam.review.ignore.button"),
     ]
 
 
@@ -247,6 +255,7 @@ def test_review_and_feedback_results_keep_preescaped_operator_mention() -> None:
     rendered = (
         build_review_ban_result(localizer, operator, "permanent_ban"),
         build_review_false_positive_result(localizer, operator),
+        build_review_ignore_result(localizer, operator),
         build_feedback_result(localizer, True, operator),
         build_feedback_result(localizer, False, operator),
     )
@@ -267,6 +276,7 @@ def test_all_renderers_render_real_catalog_without_placeholders(locale: str) -> 
         build_review_prompt(localizer, _state(recognized_text=None), "Alice"),
         build_review_ban_result(localizer, "Admin", "mute"),
         build_review_false_positive_result(localizer, "Admin"),
+        build_review_ignore_result(localizer, "Admin"),
         build_immediate_processed(
             localizer,
             message_type=SpamMessageType.sticker,
