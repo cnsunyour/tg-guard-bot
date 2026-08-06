@@ -40,6 +40,7 @@ from src.core.redis import RedisKeys, get_redis  # ✅ P1-12: 导入 Redis 和�
 from src.core.utils import (
     auto_delete_message,
     check_admin_permission,
+    check_admin_permission_by_id,
     escape_html,
     format_trusted_user_mention,
     format_user_mention,
@@ -1376,20 +1377,10 @@ async def on_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    # 跳过超级管理员消息
-    if message.from_user.id in settings.admin_ids:
-        logger.debug(f"跳过超级管理员文本消息 [用户:{message.from_user.id}]")
+    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
+        logger.debug(f"跳过管理员文本消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
         # ✅ 记录管理员消息到上下文（有助于 AI 理解群组讨论主题）
-        await ContextService.record_message(message)
-        return
-
-    # ✅ P1-10: 使用 Redis 缓存减少 API 调用
-    # 跳过群组管理员消息
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
-        logger.debug(
-            f"跳过群组管理员文本消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
-        )
-        # ✅ 记录管理员消息到上下文
         await ContextService.record_message(message)
         return
 
@@ -1522,16 +1513,18 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     if message.chat.type == "private":
         return
 
+    # 跳过匿名管理员消息
+    if is_anonymous_admin(message):
+        logger.debug(f"跳过匿名管理员图片消息 [群组:{message.chat.id}]")
+        return
+
     # 跳过没有发送者的消息
     if not message.from_user:
         return
 
-    # 跳过管理员消息
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    # ✅ P1-10: 使用 Redis 缓存减少 API 调用
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
+        logger.debug(f"跳过管理员图片消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
         return
 
     # 获取群组配置
@@ -1670,16 +1663,9 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    # 跳过超级管理员消息
-    if message.from_user.id in settings.admin_ids:
-        logger.debug(f"跳过超级管理员贴纸消息 [用户:{message.from_user.id}]")
-        return
-
-    # 跳过群组管理员消息
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
-        logger.debug(
-            f"跳过群组管理员贴纸消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]"
-        )
+    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
+        logger.debug(f"跳过管理员贴纸消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
         return
 
     # 检查群组配置
@@ -2096,10 +2082,7 @@ async def on_video_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组配置
@@ -2136,10 +2119,7 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组配置
@@ -2176,10 +2156,7 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组配置
@@ -2216,10 +2193,7 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组配置
@@ -2256,10 +2230,7 @@ async def on_document_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组配置
@@ -2296,10 +2267,7 @@ async def on_audio_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组配置
@@ -2348,12 +2316,8 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    # 跳过超级管理员消息
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    # 跳过群组管理员消息
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组是否启用反垃圾
@@ -2470,12 +2434,8 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
     # ✅ 更新 username 映射
     await update_username_mapping_if_needed(message)
 
-    # 跳过超级管理员消息
-    if message.from_user.id in settings.admin_ids:
-        return
-
-    # 跳过群组管理员消息
-    if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
+    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
         return
 
     # 检查群组是否启用反垃圾

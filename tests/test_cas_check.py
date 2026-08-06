@@ -1,8 +1,14 @@
 """CAS 黑名单检查中间件测试"""
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram import Bot
+from aiogram.types import Message
+
+from src.bot.middlewares import cas_check
 
 
 class _MockUser:
@@ -67,3 +73,35 @@ def test_cas_notification_unknown_status_falls_back_to_unknown_label():
     # 未知状态用 unknown.label（zh-Hans「未知状态」），不展示裸 weird
     assert "weird" not in text
     assert "未知状态" in text
+
+
+@pytest.mark.unit
+async def test_anonymous_message_bypasses_cas_checks(mocker, monkeypatch) -> None:
+    """匿名管理员消息（sender_chat==chat）跳过 CAS / 用户状态检查"""
+    monkeypatch.setattr(cas_check.settings, "cas_enabled", True)
+    monkeypatch.setattr(cas_check.settings, "user_status_check_enabled", False)
+
+    event = MagicMock(spec=Message)
+    event.chat = SimpleNamespace(type="supergroup", id=-100123)
+    event.from_user = SimpleNamespace(id=1087968824)
+    event.sender_chat = SimpleNamespace(id=-100123)
+    event.new_chat_members = None
+    event.left_chat_member = None
+    event.message_id = 1
+
+    bot = MagicMock(spec=Bot)
+    bot.id = 999
+    localizer = MagicMock()
+    handler = AsyncMock(return_value="handled")
+    permission = mocker.patch.object(
+        cas_check, "check_admin_permission", new=AsyncMock(return_value=True)
+    )
+    get_cas = mocker.patch.object(cas_check, "get_cas_service")
+
+    result = await cas_check.CASCheckMiddleware()(
+        handler, event, {"bot": bot, "localizer": localizer}
+    )
+
+    assert result == "handled"
+    permission.assert_awaited_once_with(event, bot)
+    get_cas.assert_not_called()

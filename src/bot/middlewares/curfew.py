@@ -7,8 +7,8 @@ from aiogram import BaseMiddleware, Bot
 from aiogram.types import Message, TelegramObject
 from loguru import logger
 
-from src.core.cache import PermissionCache
 from src.core.config import settings
+from src.core.utils import check_admin_permission
 from src.repositories.group_repo import GroupRepository
 from src.services.activity import ActivityService
 from src.services.curfew import CurfewService
@@ -48,7 +48,7 @@ class CurfewMiddleware(BaseMiddleware):
         if message.from_user.id in settings.admin_ids:
             return await handler(event, data)
 
-        if await PermissionCache.is_admin(bot, message.chat.id, message.from_user.id):
+        if await check_admin_permission(message, bot):
             return await handler(event, data)
 
         # 获取群组配置

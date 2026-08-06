@@ -1,6 +1,6 @@
 """/lang 语言偏好命令与 inline keyboard 处理器
 
-- 群聊：仅管理员可切换群 locale（PermissionCache.is_admin + 超管直通）
+- 群聊：仅管理员可切换群 locale（统一管理员权限检查，含匿名管理员）
 - 私聊：用户自助切换私聊 locale
 - 选中态直接查 DB（不经过 for_user_explicit，避免查询失败语义混淆）
 - 写穿后用「新 locale」的 BoundLocalizer 重渲染菜单，不依赖 middleware 注入的旧 localizer
@@ -21,11 +21,11 @@ from aiogram.types import (
 from loguru import logger
 
 from src.bot.commands import sync_chat_commands
-from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.i18n.locales import normalize_supported_locale
 from src.core.i18n.resolver import LocaleResolver
 from src.core.i18n.translator import BoundLocalizer, Translator
+from src.core.utils import check_admin_permission, check_admin_permission_by_id
 from src.repositories.group_repo import GroupRepository
 from src.repositories.user_settings_repo import UserSettingsRepository
 from src.services.locale_preference import LocalePreferenceService
@@ -128,13 +128,6 @@ async def _read_user_locale(user_id: int, resolver: LocaleResolver) -> str:
     return normalized
 
 
-async def _is_group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
-    """沿用现有权限缓存，超管直通"""
-    if user_id in settings.admin_ids:
-        return True
-    return await PermissionCache.is_admin(bot, chat_id, user_id)
-
-
 async def _send_menu(
     message: Message,
     resolver: LocaleResolver,
@@ -190,7 +183,7 @@ async def cmd_lang(
         return await message.answer(localizer.t("lang.change.invalid_data.toast"))
 
     chat_id = message.chat.id
-    if not await _is_group_admin(bot, chat_id, message.from_user.id):
+    if not await check_admin_permission(message, bot):
         return await message.answer(localizer.t("lang.change.permission_denied.toast"))
 
     try:
@@ -296,7 +289,7 @@ async def on_lang_callback(
             if message.chat.type not in _GROUP_TYPES or message.chat.id != chat_id:
                 await _answer_invalid_data(callback, localizer)
                 return
-            if not await _is_group_admin(bot, chat_id, callback.from_user.id):
+            if not await check_admin_permission_by_id(bot, chat_id, callback.from_user.id):
                 await callback.answer(
                     localizer.t("lang.change.permission_denied.toast"), show_alert=True
                 )
