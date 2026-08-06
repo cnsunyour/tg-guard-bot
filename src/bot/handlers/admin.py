@@ -229,6 +229,7 @@ _HELP_COMMANDS = frozenset(
         "groupset",
         "help",
         "kick",
+        "lang",
         "mute",
         "nospam",
         "notspam",
