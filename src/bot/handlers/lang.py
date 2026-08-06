@@ -48,7 +48,12 @@ def _supported_locales(resolver: LocaleResolver) -> Sequence[str]:
 
 
 def _locale_name(localizer: BoundLocalizer, locale: str) -> str:
-    """取某语言在当前 localizer 下的显示名"""
+    """取某语言的 endonym（自称，固定不随当前 locale 变）。
+
+    语言切换器最佳实践：按钮标签用目标语言的自称（endonym），即使界面是
+    不认识的语言，用户也能认出自己想选的选项。因此 catalog 的
+    lang.locale.*.button 三语同值（均为 endonym，不翻译）。
+    """
     return localizer.t(f"lang.locale.{_locale_key(locale)}.button")
 
 
