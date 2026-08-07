@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.7.1] - 2026-08-07
+
+### 新增功能
+
+#### /lang 命令支持直接参数切换语言 🌐
+- **问题**：匿名管理员（sender_chat==chat）无法通过 inline button 回调切换语言——Telegram 的 callback_query 不携带 sender_chat，无法识别匿名管理员身份，导致 /lang 按钮对匿名管理员不可用
+- **新增**：`/lang <locale>` 直接通过消息路径切换（`check_admin_permission` 可检测匿名管理员），匿名管理员输入 `/lang en` 即可；别名归一化（zh-HK→zh-Hant、en-GB→en），无效 locale 友好提示
+- button 路径与参数路径共用 `_persist_locale`，原有校验与菜单编辑保留
+
+### 代码质量
+
+#### on_* 处理器前置统一重构 ♻️
+- 抽取 `_run_message_prechecks` 公共函数 + `SkipReason` 枚举，统一 11 个 on_* 消息处理器的预处理逻辑（命令注册检查、频道消息过滤、权限等）
+- 修复 on_photo 频道路径遗漏（重构前未走统一前置，频道图片可绕过反垃圾检测）
+- 命令检查前移到频道过滤之后，堵住 anti-channel 绕过
+- 新增 `tests/test_antispam_prechecks.py`（34 个测试）锁定前置过滤行为，确认重构无回归
+- 用户名映射更新改为 best-effort
+
 ## [1.7.0] - 2026-08-07
 
 ### 新增功能
