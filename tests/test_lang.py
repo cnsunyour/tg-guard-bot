@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiogram.enums import ChatType
+from aiogram.filters import CommandObject
+from aiogram.types import Message
 
 from src.bot.handlers import lang as lang_module
 from src.core.i18n.resolver import LocalePreferenceCache, LocaleResolver
@@ -25,12 +27,12 @@ def _make_resolver() -> LocaleResolver:
 
 
 def _make_translator() -> Translator:
-    """含 /lang 所需 key 的小 catalog（zh-Hans + en）"""
+    """含 /lang 所需 key 的小 catalog（三种语言）"""
     base_keys = {
         "lang.menu.current.message": "当前：{locale_name}",
         "lang.locale.zh_hans.button": "简体中文",
-        "lang.locale.zh_hant.button": "繁体中文",
-        "lang.locale.en.button": "英语",
+        "lang.locale.zh_hant.button": "繁體中文",
+        "lang.locale.en.button": "English",
         "lang.option.selected.button": "✅ {locale_name}",
         "lang.change.permission_denied.toast": "❌ 无权限",
         "lang.change.saved.toast": "✅ 已切换 {locale_name}",
@@ -52,7 +54,45 @@ def _make_translator() -> Translator:
         "lang.change.save_failed.toast": "❌ Failed",
         "lang.change.message_unavailable.toast": "❌ Unavailable",
     }
-    return Translator({"zh-Hans": base_keys, "en": en_keys}, default_locale="zh-Hans")
+    hant_keys = {
+        "lang.menu.current.message": "目前：{locale_name}",
+        "lang.locale.zh_hans.button": "简体中文",
+        "lang.locale.zh_hant.button": "繁體中文",
+        "lang.locale.en.button": "English",
+        "lang.option.selected.button": "✅ {locale_name}",
+        "lang.change.permission_denied.toast": "❌ 無權限",
+        "lang.change.saved.toast": "✅ 已切換 {locale_name}",
+        "lang.change.invalid_data.toast": "❌ 無效",
+        "lang.change.invalid_locale.toast": "❌ 不支援",
+        "lang.change.save_failed.toast": "❌ 失敗",
+        "lang.change.message_unavailable.toast": "❌ 無法更新",
+    }
+    return Translator(
+        {"zh-Hans": base_keys, "zh-Hant": hant_keys, "en": en_keys},
+        default_locale="zh-Hans",
+    )
+
+
+def _make_message(
+    *,
+    chat_type: ChatType,
+    chat_id: int,
+    user_id: int = 42,
+    sender_chat: object | None = None,
+) -> MagicMock:
+    message = MagicMock()
+    message.chat.type = chat_type
+    message.chat.id = chat_id
+    message.chat.title = "Test" if chat_type in {ChatType.GROUP, ChatType.SUPERGROUP} else None
+    message.from_user = SimpleNamespace(id=user_id)
+    message.sender_chat = sender_chat
+    message.text = "/lang"
+    message.answer = AsyncMock(return_value=MagicMock(spec=Message))
+    return message
+
+
+def _make_command(args: str | None) -> CommandObject:
+    return CommandObject(command="lang", args=args)
 
 
 # ==================== LocalePreferenceService 写穿语义 ====================
@@ -154,6 +194,29 @@ async def test_read_user_locale_normalizes_historical_alias(mocker) -> None:
     assert await lang_module._read_user_locale(42, _make_resolver()) == "en"
 
 
+# ==================== _parse_locale_arg 参数解析 ====================
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ("en", "en"),
+        (" en zh ", "en"),
+        ("zh-HK", "zh-Hant"),
+        ("en-GB", "en"),
+    ],
+)
+def test_parse_locale_arg_normalizes_first_token(args: str, expected: str) -> None:
+    assert lang_module._parse_locale_arg(args, _make_resolver()) == expected
+
+
+def test_parse_locale_arg_invalid_returns_none() -> None:
+    assert lang_module._parse_locale_arg("xyz", _make_resolver()) is None
+
+
+# ==================== cmd_lang message 路径 ====================
+
+
 async def test_cmd_lang_group_uses_message_permission_helper(mocker) -> None:
     """群 /lang 走 message 版权限检查（含匿名管理员），通过则发菜单"""
     permission = mocker.patch.object(
@@ -163,24 +226,480 @@ async def test_cmd_lang_group_uses_message_permission_helper(mocker) -> None:
     mocker.patch.object(lang_module, "_read_group_locale", new=AsyncMock(return_value="en"))
     send_menu = mocker.patch.object(lang_module, "_send_menu", new=AsyncMock())
 
-    message = MagicMock()
-    message.chat.type = ChatType.SUPERGROUP
-    message.chat.id = -100
-    message.chat.title = "Test"
-    message.from_user = SimpleNamespace(id=42)
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
     bot = MagicMock()
     translator = _make_translator()
+    sent = MagicMock(spec=Message)
+    send_menu.return_value = sent
 
-    await lang_module.cmd_lang(
+    result = await lang_module.cmd_lang(
         message,
         bot,
+        _make_command(None),
         _make_resolver(),
         translator,
         translator.for_locale("zh-Hans"),
     )
 
+    assert result is sent
     permission.assert_awaited_once_with(message, bot)
     send_menu.assert_awaited_once()
+
+
+async def test_cmd_lang_private_without_args_keeps_menu_behavior(mocker) -> None:
+    """私聊无参数仍显示语言菜单，不执行持久化。"""
+    permission = mocker.patch.object(
+        lang_module, "check_admin_permission", new=AsyncMock(return_value=True)
+    )
+    mocker.patch.object(
+        lang_module.UserSettingsRepository,
+        "get_locale",
+        new=AsyncMock(return_value=None),
+    )
+    send_menu = mocker.patch.object(lang_module, "_send_menu", new=AsyncMock())
+    sent = MagicMock(spec=Message)
+    send_menu.return_value = sent
+
+    message = _make_message(chat_type=ChatType.PRIVATE, chat_id=42)
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command(None),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is sent
+    permission.assert_not_awaited()
+    send_menu.assert_awaited_once()
+
+
+async def test_cmd_lang_group_admin_direct_switch_returns_answer_message(mocker) -> None:
+    """群管理员 /lang en 直接切换，并返回 message.answer 的 Message。"""
+    mocker.patch.object(lang_module, "check_admin_permission", new=AsyncMock(return_value=True))
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
+    message.text = "/lang en"
+    bot = MagicMock()
+    resolver = _make_resolver()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("en"),
+        resolver,
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    get_or_create.assert_awaited_once_with(-100, "Test")
+    persist.assert_awaited_once_with(
+        bot,
+        scope="group",
+        chat_id=-100,
+        user_id=42,
+        locale="en",
+        resolver=resolver,
+        translator=translator,
+        message_chat_id=-100,
+        is_group=True,
+    )
+    message.answer.assert_awaited_once()
+    assert "Switched" in message.answer.await_args.args[0]
+
+
+async def test_cmd_lang_group_non_admin_direct_switch_denied(mocker) -> None:
+    """群非管理员 /lang en 返回 permission_denied，不写入。"""
+    permission = mocker.patch.object(
+        lang_module, "check_admin_permission", new=AsyncMock(return_value=False)
+    )
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
+    message.text = "/lang en"
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("en"),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    permission.assert_awaited_once_with(message, bot)
+    get_or_create.assert_not_awaited()
+    persist.assert_not_awaited()
+    assert "无权限" in message.answer.await_args.args[0]
+
+
+async def test_cmd_lang_group_non_admin_invalid_locale_still_denied(mocker) -> None:
+    """群非管理员 /lang xyz 仍返回 permission_denied，不暴露 locale 校验结果。"""
+    permission = mocker.patch.object(
+        lang_module, "check_admin_permission", new=AsyncMock(return_value=False)
+    )
+    parse_locale = mocker.patch.object(lang_module, "_parse_locale_arg")
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
+    message.text = "/lang xyz"
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("xyz"),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    permission.assert_awaited_once_with(message, bot)
+    parse_locale.assert_not_called()
+    get_or_create.assert_not_awaited()
+    persist.assert_not_awaited()
+    answer_text = message.answer.await_args.args[0]
+    assert "无权限" in answer_text
+    assert "不支持" not in answer_text
+
+
+async def test_cmd_lang_group_admin_invalid_locale_returns_invalid_locale(mocker) -> None:
+    """群管理员 /lang xyz 返回 invalid_locale，且不创建群记录。"""
+    mocker.patch.object(lang_module, "check_admin_permission", new=AsyncMock(return_value=True))
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
+    message.text = "/lang xyz"
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("xyz"),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    get_or_create.assert_not_awaited()
+    persist.assert_not_awaited()
+    assert "不支持" in message.answer.await_args.args[0]
+
+
+async def test_cmd_lang_private_direct_switch(mocker) -> None:
+    """私聊 /lang zh-Hant 写入用户 locale、同步私聊菜单并返回新语言确认。"""
+    permission = mocker.patch.object(
+        lang_module, "check_admin_permission", new=AsyncMock(return_value=True)
+    )
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.PRIVATE, chat_id=42)
+    message.text = "/lang zh-Hant"
+    bot = MagicMock()
+    resolver = _make_resolver()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("zh-Hant"),
+        resolver,
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    permission.assert_not_awaited()
+    get_or_create.assert_not_awaited()
+    persist.assert_awaited_once_with(
+        bot,
+        scope="private",
+        chat_id=None,
+        user_id=42,
+        locale="zh-Hant",
+        resolver=resolver,
+        translator=translator,
+        message_chat_id=42,
+        is_group=False,
+    )
+    assert "已切換" in message.answer.await_args.args[0]
+
+
+async def test_cmd_lang_private_invalid_locale(mocker) -> None:
+    """私聊 /lang xyz 返回 invalid_locale，不执行写入。"""
+    permission = mocker.patch.object(
+        lang_module, "check_admin_permission", new=AsyncMock(return_value=True)
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.PRIVATE, chat_id=42)
+    message.text = "/lang xyz"
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("xyz"),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    permission.assert_not_awaited()
+    persist.assert_not_awaited()
+    assert "不支持" in message.answer.await_args.args[0]
+
+
+async def test_cmd_lang_anonymous_admin_direct_switches_via_message_path(mocker) -> None:
+    """匿名管理员 message 路径可直接切换，且不调用 by_id 权限检查。"""
+    by_id = mocker.patch(
+        "src.core.utils.check_admin_permission_by_id",
+        new=AsyncMock(return_value=False),
+    )
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(
+        chat_type=ChatType.SUPERGROUP,
+        chat_id=-100,
+        sender_chat=SimpleNamespace(id=-100),
+    )
+    message.text = "/lang en"
+    bot = MagicMock()
+    resolver = _make_resolver()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("en"),
+        resolver,
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    by_id.assert_not_awaited()
+    get_or_create.assert_awaited_once_with(-100, "Test")
+    persist.assert_awaited_once()
+    assert "Switched" in message.answer.await_args.args[0]
+
+
+# ==================== _persist_locale helper ====================
+
+
+async def test_persist_locale_group_writes_and_syncs(mocker) -> None:
+    set_group = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_group_locale",
+        new=AsyncMock(return_value=True),
+    )
+    set_user = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_user_locale",
+        new=AsyncMock(return_value=True),
+    )
+    sync = mocker.patch.object(
+        lang_module,
+        "sync_chat_commands",
+        new=AsyncMock(),
+    )
+
+    bot = MagicMock()
+    resolver = _make_resolver()
+    translator = _make_translator()
+
+    result = await lang_module._persist_locale(
+        bot,
+        scope="group",
+        chat_id=-100,
+        user_id=42,
+        locale="en",
+        resolver=resolver,
+        translator=translator,
+        message_chat_id=-100,
+        is_group=True,
+    )
+
+    assert result is True
+    set_group.assert_awaited_once_with(-100, "en")
+    set_user.assert_not_awaited()
+    sync.assert_awaited_once()
+    assert sync.await_args.args[0] is bot
+    assert sync.await_args.args[1].locale == "en"
+    assert sync.await_args.kwargs == {"chat_id": -100, "is_group": True}
+
+
+async def test_persist_locale_private_writes_and_syncs(mocker) -> None:
+    set_group = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_group_locale",
+        new=AsyncMock(return_value=True),
+    )
+    set_user = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_user_locale",
+        new=AsyncMock(return_value=True),
+    )
+    sync = mocker.patch.object(
+        lang_module,
+        "sync_chat_commands",
+        new=AsyncMock(),
+    )
+
+    bot = MagicMock()
+    resolver = _make_resolver()
+    translator = _make_translator()
+
+    result = await lang_module._persist_locale(
+        bot,
+        scope="private",
+        chat_id=None,
+        user_id=42,
+        locale="zh-Hant",
+        resolver=resolver,
+        translator=translator,
+        message_chat_id=42,
+        is_group=False,
+    )
+
+    assert result is True
+    set_group.assert_not_awaited()
+    set_user.assert_awaited_once_with(42, "zh-Hant")
+    sync.assert_awaited_once()
+    assert sync.await_args.args[0] is bot
+    assert sync.await_args.args[1].locale == "zh-Hant"
+    assert sync.await_args.kwargs == {"chat_id": 42, "is_group": False}
+
+
+async def test_persist_locale_save_failure_does_not_sync(mocker) -> None:
+    set_group = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_group_locale",
+        new=AsyncMock(return_value=False),
+    )
+    sync = mocker.patch.object(
+        lang_module,
+        "sync_chat_commands",
+        new=AsyncMock(),
+    )
+
+    result = await lang_module._persist_locale(
+        MagicMock(),
+        scope="group",
+        chat_id=-100,
+        user_id=42,
+        locale="en",
+        resolver=_make_resolver(),
+        translator=_make_translator(),
+        message_chat_id=-100,
+        is_group=True,
+    )
+
+    assert result is False
+    set_group.assert_awaited_once_with(-100, "en")
+    sync.assert_not_awaited()
+
+
+async def test_persist_locale_sync_failure_keeps_saved_result(mocker) -> None:
+    mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_group_locale",
+        new=AsyncMock(return_value=True),
+    )
+    sync = mocker.patch.object(
+        lang_module,
+        "sync_chat_commands",
+        new=AsyncMock(side_effect=RuntimeError("sync unavailable")),
+    )
+
+    result = await lang_module._persist_locale(
+        MagicMock(),
+        scope="group",
+        chat_id=-100,
+        user_id=42,
+        locale="en",
+        resolver=_make_resolver(),
+        translator=_make_translator(),
+        message_chat_id=-100,
+        is_group=True,
+    )
+
+    assert result is True
+    sync.assert_awaited_once()
 
 
 # ==================== on_lang_callback 主链与拒绝路径 ====================
@@ -278,3 +797,139 @@ async def test_on_lang_callback_group_non_admin_rejected(mocker) -> None:
 
     update_locale.assert_not_awaited()
     assert "无权限" in callback.answer.await_args.args[0]
+
+
+# ==================== 防御分支与失败路径（codex review 补充建议）====================
+
+
+async def test_persist_locale_unknown_scope_returns_false(mocker) -> None:
+    """未知 scope → False，不写入、不同步（防御分支）"""
+    set_group = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_group_locale",
+        new=AsyncMock(return_value=True),
+    )
+    set_user = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_user_locale",
+        new=AsyncMock(return_value=True),
+    )
+    sync = mocker.patch.object(
+        lang_module,
+        "sync_chat_commands",
+        new=AsyncMock(),
+    )
+
+    result = await lang_module._persist_locale(
+        MagicMock(),
+        scope="unknown",
+        chat_id=-100,
+        user_id=42,
+        locale="en",
+        resolver=_make_resolver(),
+        translator=_make_translator(),
+        message_chat_id=-100,
+        is_group=False,
+    )
+
+    assert result is False
+    set_group.assert_not_awaited()
+    set_user.assert_not_awaited()
+    sync.assert_not_awaited()
+
+
+async def test_persist_locale_group_missing_chat_id_returns_false(mocker) -> None:
+    """群 scope 缺 chat_id → False，不写入、不同步（防御分支）"""
+    set_group = mocker.patch.object(
+        lang_module.LocalePreferenceService,
+        "set_group_locale",
+        new=AsyncMock(return_value=True),
+    )
+    sync = mocker.patch.object(
+        lang_module,
+        "sync_chat_commands",
+        new=AsyncMock(),
+    )
+
+    result = await lang_module._persist_locale(
+        MagicMock(),
+        scope="group",
+        chat_id=None,
+        user_id=42,
+        locale="en",
+        resolver=_make_resolver(),
+        translator=_make_translator(),
+        message_chat_id=-100,
+        is_group=True,
+    )
+
+    assert result is False
+    set_group.assert_not_awaited()
+    sync.assert_not_awaited()
+
+
+async def test_cmd_lang_group_admin_get_or_create_failure_returns_save_failed(mocker) -> None:
+    """群管理员 /lang en 但 get_or_create 失败 → save_failed，不调 _persist_locale"""
+    mocker.patch.object(lang_module, "check_admin_permission", new=AsyncMock(return_value=True))
+    get_or_create = mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(side_effect=Exception("db down")),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=True),
+    )
+
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
+    message.text = "/lang en"
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("en"),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    get_or_create.assert_awaited_once()
+    persist.assert_not_awaited()
+    assert "失败" in message.answer.await_args.args[0]
+
+
+async def test_cmd_lang_group_admin_persist_failure_returns_save_failed(mocker) -> None:
+    """群管理员 /lang en 但 _persist_locale 返回 False → save_failed"""
+    mocker.patch.object(lang_module, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(
+        lang_module.GroupRepository,
+        "get_or_create",
+        new=AsyncMock(),
+    )
+    persist = mocker.patch.object(
+        lang_module,
+        "_persist_locale",
+        new=AsyncMock(return_value=False),
+    )
+
+    message = _make_message(chat_type=ChatType.SUPERGROUP, chat_id=-100)
+    message.text = "/lang en"
+    bot = MagicMock()
+    translator = _make_translator()
+
+    result = await lang_module.cmd_lang(
+        message,
+        bot,
+        _make_command("en"),
+        _make_resolver(),
+        translator,
+        translator.for_locale("zh-Hans"),
+    )
+
+    assert result is message.answer.return_value
+    persist.assert_awaited_once()
+    assert "失败" in message.answer.await_args.args[0]
