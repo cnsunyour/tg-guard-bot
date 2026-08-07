@@ -110,6 +110,27 @@ def mask_sensitive_text(text: str | None, keep_chars: int = 10) -> str:
     return f"{text_str[:keep_chars]}...{text_str[-keep_chars:]}"
 
 
+def parse_enabled_arg(args: str | None) -> bool | None:
+    """解析开关类命令参数（on/off 等），返回目标布尔值；无法识别返回 None。
+
+    供 /activity /antispam /antichannel 等带参命令走 message 路径使用——匿名
+    管理员可操作，绕过 callback 无法识别匿名的 Telegram 限制。取第一个 token、
+    忽略多余参数，大小写不敏感。调用方应先判断是否存在非空参数：返回 None 在
+    「有参数」语境下代表「参数非法」，与「无参数」走原菜单分支相区分。
+    """
+    if args is None:
+        return None
+    stripped = args.strip()
+    if not stripped:
+        return None
+    token = stripped.split(maxsplit=1)[0].lower()
+    if token in {"on", "enable", "enabled", "1", "true", "yes"}:
+        return True
+    if token in {"off", "disable", "disabled", "0", "false", "no"}:
+        return False
+    return None
+
+
 async def check_admin_permission_by_id(bot, chat_id: int, user_id: int) -> bool:
     """按用户 ID 检查管理员权限（超管直通 + 缓存 API 查询）。
 

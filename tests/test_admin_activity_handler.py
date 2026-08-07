@@ -7,6 +7,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.filters import CommandObject
 
 from src.bot.handlers import admin as handler
 
@@ -35,6 +36,11 @@ def _localizer() -> MagicMock:
 
     loc.t.side_effect = fake_t
     return loc
+
+
+def _command(args: str | None = None) -> CommandObject:
+    """构造 CommandObject(无参 args=None;带参 args="xxx")。"""
+    return CommandObject(args=args)
 
 
 def _patch(mocker, is_admin: bool = True, activity_enabled: bool = True) -> MagicMock:
@@ -66,7 +72,7 @@ async def test_private_chat_rejected(mocker) -> None:
     localizer = _localizer()
     message = _message(chat_type="private")
 
-    await handler.cmd_activity(message, AsyncMock(), localizer)
+    await handler.cmd_activity(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.activity.error.group_only.message")
 
@@ -77,7 +83,7 @@ async def test_non_admin_rejected(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_activity(message, AsyncMock(), localizer)
+    await handler.cmd_activity(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.activity.error.admin_only.message")
 
@@ -91,7 +97,7 @@ async def test_load_failed(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_activity(message, AsyncMock(), localizer)
+    await handler.cmd_activity(message, AsyncMock(), _command(), localizer)
 
     assert message.answer.await_args.args[0] == "<admin.activity.error.load_failed.message>"
 
@@ -102,7 +108,7 @@ async def test_command_renders_panel(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_activity(message, AsyncMock(), localizer)
+    await handler.cmd_activity(message, AsyncMock(), _command(), localizer)
 
     # common status 先调用,再注入 activity status
     common = next(
@@ -119,6 +125,50 @@ async def test_command_renders_panel(mocker) -> None:
     assert panel.kwargs["status"] == (
         "<admin.activity.status.enabled.label:{'status': '<admin.common.status.enabled.label>'}>"
     )
+
+
+async def test_enable_with_arg_updates(mocker) -> None:
+    """/activity on → update_activity_settings(True) + enabled.toast。"""
+    _patch(mocker)
+    localizer = _localizer()
+    message = _message(text="/activity on")
+
+    await handler.cmd_activity(message, AsyncMock(), _command(args="on"), localizer)
+
+    handler.GroupRepository.update_activity_settings.assert_awaited_once_with(CHAT_ID, True)
+    assert next(
+        c
+        for c in localizer.t.call_args_list
+        if c.args == ("admin.activity.callback.enabled.toast",)
+    )
+
+
+async def test_disable_with_arg_updates(mocker) -> None:
+    """/activity off → update_activity_settings(False) + disabled.toast。"""
+    _patch(mocker)
+    localizer = _localizer()
+    message = _message(text="/activity off")
+
+    await handler.cmd_activity(message, AsyncMock(), _command(args="off"), localizer)
+
+    handler.GroupRepository.update_activity_settings.assert_awaited_once_with(CHAT_ID, False)
+    assert next(
+        c
+        for c in localizer.t.call_args_list
+        if c.args == ("admin.activity.callback.disabled.toast",)
+    )
+
+
+async def test_invalid_arg_shows_usage(mocker) -> None:
+    """/activity bogus → usage.message,不更新。"""
+    _patch(mocker)
+    localizer = _localizer()
+    message = _message(text="/activity bogus")
+
+    await handler.cmd_activity(message, AsyncMock(), _command(args="bogus"), localizer)
+
+    localizer.t.assert_called_once_with("admin.activity.usage.message")
+    handler.GroupRepository.update_activity_settings.assert_not_awaited()
 
 
 # ===== _render_activity_panel renderer =====
