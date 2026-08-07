@@ -10,7 +10,7 @@ from collections.abc import Sequence
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     InaccessibleMessage,
@@ -45,6 +45,25 @@ def _supported_locales(resolver: LocaleResolver) -> Sequence[str]:
     return tuple(
         locale for locale in settings.supported_locales if locale in resolver.supported_locales
     )
+
+
+def _parse_locale_arg(args: str | None, resolver: LocaleResolver) -> str | None:
+    """解析 ``/lang <locale>`` 参数，返回归一化后的支持 locale；无法归一返回 None。
+
+    调用方应先判断是否存在非空参数（``args is None or not args.strip()``），确认有
+    参数后才调用本函数——此时返回 None 代表"参数非法"。
+
+    多参数命令只取第一个 token（``/lang en zh`` 取 ``en``），额外参数忽略。
+    """
+    if args is None:
+        return None
+
+    stripped = args.strip()
+    if not stripped:
+        return None
+
+    token = stripped.split(maxsplit=1)[0]
+    return normalize_supported_locale(token, resolver.supported_locales)
 
 
 def _locale_name(localizer: BoundLocalizer, locale: str) -> str:
@@ -147,23 +166,160 @@ async def _send_menu(
     return await message.answer(text, reply_markup=keyboard)
 
 
+async def _persist_locale(
+    bot: Bot,
+    *,
+    scope: str,
+    chat_id: int | None,
+    user_id: int,
+    locale: str,
+    resolver: LocaleResolver,
+    translator: Translator,
+    message_chat_id: int,
+    is_group: bool,
+) -> bool:
+    """持久化 locale 并同步对应 chat 的 Telegram 命令菜单。
+
+    仅负责 DB/cache 写穿（LocalePreferenceService）与命令菜单同步，不包含权限
+    检查、建群、参数解析或响应消息逻辑。DB 是权威来源；命令菜单同步失败只记
+    日志、不回滚 locale（与既有"DB 是权威"语义一致）。
+
+    已知限制（last-write-wins）：同一 chat 并发 /lang 时，先完成持久化的请求
+    可能在后完成的请求之后同步菜单，导致 Telegram 菜单与最终 DB locale 短暂
+    不一致。恢复路径：启动 ``rehydrate_custom_locale_commands`` 按权威 locale
+    重新 sync，或用户再次执行 /lang。per-chat 锁可彻底消除但 ROI 不足。
+    """
+    preference_service = LocalePreferenceService(resolver)
+
+    if scope == "group":
+        if chat_id is None:
+            logger.error("群组 locale 持久化缺少 chat_id")
+            return False
+        saved = await preference_service.set_group_locale(chat_id, locale)
+    elif scope == "private":
+        saved = await preference_service.set_user_locale(user_id, locale)
+    else:
+        logger.error(f"未知 locale 持久化范围 [scope:{scope}]")
+        return False
+
+    if not saved:
+        return False
+
+    # 不传 language_code，命令语言只由 Bot 内 locale 决定（独立于 Telegram 系统语言）
+    try:
+        await sync_chat_commands(
+            bot,
+            translator.for_locale(locale),
+            chat_id=message_chat_id,
+            is_group=is_group,
+        )
+    except Exception as exc:
+        logger.error(
+            f"同步 locale 命令菜单异常 [scope:{scope}] "
+            f"[chat:{message_chat_id}] [locale:{locale}]: {exc}"
+        )
+
+    return True
+
+
+async def _switch_locale_via_message(
+    message: Message,
+    bot: Bot,
+    resolver: LocaleResolver,
+    translator: Translator,
+    localizer: BoundLocalizer,
+    *,
+    scope: str,
+    locale: str,
+) -> Message:
+    """通过 ``/lang <locale>`` 命令直接切换 locale（message 路径），返回确认消息。
+
+    走 message 路径，匿名管理员（sender_chat==chat）可操作——绕过 callback 无法
+    识别匿名的 Telegram 限制。群组合法参数路径才确保群记录存在（update_locale
+    需既有记录）；保存失败用旧 localizer 回 save_failed，成功用新 locale 回 saved。
+    """
+    if message.from_user is None:
+        return await message.answer(localizer.t("lang.change.save_failed.toast"))
+
+    chat_id: int | None = None
+    if scope == "group":
+        chat_id = message.chat.id
+        try:
+            await GroupRepository.get_or_create(chat_id, message.chat.title)
+        except Exception as exc:
+            logger.error(f"创建群记录失败 [群组:{chat_id}]: {exc}")
+            return await message.answer(localizer.t("lang.change.save_failed.toast"))
+
+    try:
+        saved = await _persist_locale(
+            bot,
+            scope=scope,
+            chat_id=chat_id,
+            user_id=message.from_user.id,
+            locale=locale,
+            resolver=resolver,
+            translator=translator,
+            message_chat_id=message.chat.id,
+            is_group=scope == "group",
+        )
+    except Exception as exc:
+        logger.error(
+            f"直接切换语言失败 [scope:{scope}] "
+            f"[chat:{message.chat.id}] [locale:{locale}]: {exc}"
+        )
+        saved = False
+
+    if not saved:
+        return await message.answer(localizer.t("lang.change.save_failed.toast"))
+
+    new_localizer = translator.for_locale(locale)
+    return await message.answer(
+        new_localizer.t(
+            "lang.change.saved.toast",
+            locale_name=_locale_name(new_localizer, locale),
+        )
+    )
+
+
 @router.message(Command("lang"))
 async def cmd_lang(
     message: Message,
     bot: Bot,
+    command: CommandObject,
     locale_resolver: LocaleResolver,
     translator: Translator,
     localizer: BoundLocalizer,
 ) -> Message | None:
-    """显示语言设置菜单
+    """显示语言设置菜单，或通过 /lang <locale> 直接切换语言。
+
+    用法：
+    - /lang：显示选择菜单
+    - /lang <locale>：直接切换（如 /lang en、/lang zh-Hant），走 message 路径，
+      匿名管理员可操作（绕过 callback 无法识别匿名的 Telegram 限制）
 
     返回发出的消息对象，使 AutoDeleteMiddleware 能在群组中自动删除命令响应。
     """
     if message.from_user is None:
         return None
 
+    raw_args = command.args
+    has_locale_arg = raw_args is not None and bool(raw_args.strip())
+
     # 私聊：用户自助
     if message.chat.type == ChatType.PRIVATE:
+        if has_locale_arg:
+            locale = _parse_locale_arg(raw_args, locale_resolver)
+            if locale is None:
+                return await message.answer(localizer.t("lang.change.invalid_locale.toast"))
+            return await _switch_locale_via_message(
+                message,
+                bot,
+                locale_resolver,
+                translator,
+                localizer,
+                scope="private",
+                locale=locale,
+            )
         try:
             current = await _read_user_locale(message.from_user.id, locale_resolver)
             return await _send_menu(
@@ -185,6 +341,20 @@ async def cmd_lang(
     chat_id = message.chat.id
     if not await check_admin_permission(message, bot):
         return await message.answer(localizer.t("lang.change.permission_denied.toast"))
+
+    if has_locale_arg:
+        locale = _parse_locale_arg(raw_args, locale_resolver)
+        if locale is None:
+            return await message.answer(localizer.t("lang.change.invalid_locale.toast"))
+        return await _switch_locale_via_message(
+            message,
+            bot,
+            locale_resolver,
+            translator,
+            localizer,
+            scope="group",
+            locale=locale,
+        )
 
     try:
         # 确保群记录存在（update_locale 需既有记录）
@@ -314,30 +484,22 @@ async def on_lang_callback(
         await callback.answer(localizer.t("lang.change.invalid_locale.toast"), show_alert=True)
         return
 
-    # 写穿：DB commit → 权威 setex（封装在 LocalePreferenceService）
-    preference_service = LocalePreferenceService(locale_resolver)
-    if scope == "group":
-        saved = await preference_service.set_group_locale(chat_id or 0, locale)
-    else:
-        saved = await preference_service.set_user_locale(callback.from_user.id, locale)
-
+    # 写穿：DB commit → 权威 setex + 命令菜单同步（封装在 _persist_locale；
+    # 并发 last-write-wins 说明见 _persist_locale docstring）
+    saved = await _persist_locale(
+        bot,
+        scope=scope,
+        chat_id=chat_id,
+        user_id=callback.from_user.id,
+        locale=locale,
+        resolver=locale_resolver,
+        translator=translator,
+        message_chat_id=message.chat.id,
+        is_group=scope == "group",
+    )
     if not saved:
         await callback.answer(localizer.t("lang.change.save_failed.toast"), show_alert=True)
         return
-
-    # locale 已持久化；命令菜单同步失败只记日志，不回滚 locale。
-    # 不传 language_code，命令语言只由 Bot 内 locale 决定（独立于 Telegram 系统语言）。
-    #
-    # 已知限制（codex review P2）：同一 chat 并发 /lang 时，先 commit 的 callback
-    # 可能在后 commit 的之后完成 sync，导致 Telegram 菜单与最终 DB locale 短暂不一致。
-    # 恢复路径：启动 rehydrate_custom_locale_commands 会按 DB 权威 locale 重新 sync；
-    # 或用户再点一次 /lang。per-chat 锁可彻底消除但 ROI 不足（极低频边缘场景）。
-    await sync_chat_commands(
-        bot,
-        translator.for_locale(locale),
-        chat_id=message.chat.id,
-        is_group=scope == "group",
-    )
 
     # 用新 locale 重渲染菜单 + toast，确保立即生效
     await _edit_saved_menu(
