@@ -1,6 +1,7 @@
 """反垃圾消息处理器"""
 
 import contextlib
+import enum
 import json
 import re
 import tempfile
@@ -72,15 +73,24 @@ _registered_commands: set[str] = set()
 
 
 async def update_username_mapping_if_needed(message: Message) -> None:
-    """更新 username 映射（如果用户有 username）
+    """更新 username → user_id 映射（best-effort，失败不阻塞消息处理）。
+
+    username 映射为辅助功能（供 /reports 等按 @username 定位用户），其 Redis
+    写入失败仅记日志、不向上抛出，避免基础设施抖动中断反垃圾检测等主流程。
 
     Args:
         message: 消息对象
     """
-    if message.from_user and message.from_user.username:
-        await UsernameMappingService.update_mapping(
-            user_id=message.from_user.id,
-            username=message.from_user.username,
+    user = message.from_user
+    if not user or not user.username:
+        return
+
+    try:
+        await UsernameMappingService.update_mapping(user_id=user.id, username=user.username)
+    except Exception as e:
+        logger.warning(
+            f"更新 username 映射失败（非关键，不影响消息处理）"
+            f" [群组:{message.chat.id}] [用户:{user.id}]: {e}"
         )
 
 
@@ -303,6 +313,111 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
     except Exception as e:
         logger.error(f"处理频道马甲消息失败: {e}")
         return False
+
+
+class SkipReason(enum.Enum):
+    """on_* 消息处理器统一前置过滤的跳过原因。
+
+    由 :func:`_run_message_prechecks` 返回，``None`` 表示通过、继续业务处理。
+    成员值仅作日志/调试标识（``auto`` 自增），不持久化、不展示、不参与 i18n。
+    """
+
+    PRIVATE = enum.auto()  # 私聊消息（反垃圾仅作用于群组）
+    ANONYMOUS = enum.auto()  # 匿名管理员（sender_chat == chat）
+    CHANNEL_HANDLED = enum.auto()  # 频道马甲/关联频道/系统来源（已消费）
+    NO_FROM_USER = enum.auto()  # 无 from_user（频道身份等无真实发送者）
+    REGISTERED_COMMAND = enum.auto()  # 已注册命令（仅文本处理器启用）
+    ADMIN = enum.auto()  # 管理员（超管 + 群管，免于反垃圾检测）
+
+
+def _is_registered_command(message: Message) -> bool:
+    """检查文本是否是已注册命令（on_message / on_edited_text 命令跳过用）。
+
+    匹配格式：``/command``、``/command@botname``、``/command args``；命令名在
+    ``_registered_commands`` 中时返回 True。未注册的命令格式（如 ``/abc spam``）
+    返回 False，使调用方继续垃圾检测。
+
+    Note:
+        正则不校验 ``@botname`` 是否指向本 Bot（``/help@OtherBot`` 也会被跳过），
+        保持既有行为；收紧需另开改动。
+    """
+    text = message.text or ""
+    if not text.startswith("/"):
+        return False
+    command_match = re.match(r"^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)", text)
+    return bool(command_match and command_match.group(1) in _registered_commands)
+
+
+async def _run_message_prechecks(
+    message: Message,
+    bot: Bot,
+    *,
+    skip_registered_commands: bool = False,
+) -> SkipReason | None:
+    """on_* 消息处理器统一前置过滤。
+
+    按固定顺序执行来源/发送者前置，返回首个命中的 :class:`SkipReason`；全部
+    通过返回 ``None``（调用方继续业务处理）。
+
+    顺序：私聊 → 匿名管理员 → 频道马甲(独立于 antispam 开关) → from_user →
+    (可选)已注册命令 → username 映射 → 管理员豁免。
+
+    本函数非纯检查，含副作用：频道分支可能删消息/发警告/写 DB，username 映射
+    写 Redis（best-effort，见 :func:`update_username_mapping_if_needed`）。
+
+    Args:
+        message: aiogram Message 对象
+        bot: aiogram Bot 对象
+        skip_registered_commands: 文本处理器（on_message / on_edited_text）启用。
+            命中已注册命令时返回 ``REGISTERED_COMMAND``。命令检查位于频道马甲
+            之后、username 映射与管理员豁免之前——既防止频道身份发命令绕过
+            anti-channel，也避免管理员命令触发 username 映射与上下文记录。
+
+    Returns:
+        跳过原因；``None`` 表示通过，调用方继续业务处理。
+
+    Note:
+        返回 ``None`` 时 ``message.from_user`` 已确保非空，但 mypy 无法跨函数
+        自动收窄，调用方需用 ``assert message.from_user is not None`` 显式收窄。
+    """
+
+    def _skip(reason: SkipReason) -> SkipReason:
+        user_id = message.from_user.id if message.from_user else "unknown"
+        logger.debug(
+            f"跳过消息处理 [类型:{message.content_type}] [群组:{message.chat.id}] "
+            f"[用户:{user_id}] [原因:{reason.name}]"
+        )
+        return reason
+
+    # 1. 私聊：反垃圾仅作用于群组
+    if message.chat.type == "private":
+        return _skip(SkipReason.PRIVATE)
+
+    # 2. 匿名管理员：sender_chat == chat.id（管理员以匿名身份发言）
+    if is_anonymous_admin(message):
+        return _skip(SkipReason.ANONYMOUS)
+
+    # 3. 频道马甲/关联频道/系统来源：独立于 antispam 开关，始终检测
+    if await check_and_handle_channel_as_sender(message, bot):
+        return _skip(SkipReason.CHANNEL_HANDLED)
+
+    # 4. 无 from_user：频道身份等无真实发送者的消息，后续逻辑均依赖 from_user
+    user = message.from_user
+    if user is None:
+        return _skip(SkipReason.NO_FROM_USER)
+
+    # 5. (可选) 已注册命令：仅文本处理器，位于频道之后以堵 anti-channel 绕过
+    if skip_registered_commands and _is_registered_command(message):
+        return _skip(SkipReason.REGISTERED_COMMAND)
+
+    # 6. username 映射：维护 user_id ↔ username（best-effort，不阻塞主流程）
+    await update_username_mapping_if_needed(message)
+
+    # 7. 管理员豁免：超管 + 群管，免于反垃圾检测
+    if await check_admin_permission_by_id(bot, message.chat.id, user.id):
+        return _skip(SkipReason.ADMIN)
+
+    return None
 
 
 async def check_non_text_message(
@@ -1338,51 +1453,13 @@ async def on_antichannel_toggle(callback: CallbackQuery, localizer: BoundLocaliz
 @router.message(F.text)
 async def on_message(message: Message, bot: Bot) -> None:
     """处理所有文本消息，检测垃圾"""
-    # 跳过私聊消息
-    if message.chat.type == "private":
-        return
-
-    # 跳过已注册的命令消息
-    if message.text and message.text.startswith("/"):
-        # 提取命令名（格式：/command 或 /command@botname 或 /command args）
-        command_match = re.match(r"^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)", message.text or "")
-        if command_match:
-            command_name = command_match.group(1)
-            # 只跳过已注册的命令
-            if command_name in _registered_commands:
-                logger.debug(
-                    f"[文本处理器] 跳过已注册命令 [群组:{message.chat.id}] [命令:{command_name}]"
-                )
-                return
-            # 未注册的命令格式文本（如 /abc spam）会继续进行垃圾检测
-            logger.debug(
-                f"检测到未注册命令格式的消息 [群组:{message.chat.id}] "
-                f"[命令:{command_name}]，将进行垃圾检测"
-            )
-
-    # 跳过匿名管理员消息
-    if is_anonymous_admin(message):
-        logger.debug(f"跳过匿名管理员文本消息 [群组:{message.chat.id}]")
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user，这里提前返回
-    if not message.from_user:
-        logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        logger.debug(f"跳过管理员文本消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
-        # ✅ 记录管理员消息到上下文（有助于 AI 理解群组讨论主题）
+    reason = await _run_message_prechecks(message, bot, skip_registered_commands=True)
+    if reason is SkipReason.ADMIN:
+        # 记录管理员消息到上下文（有助于 AI 理解群组讨论主题）
         await ContextService.record_message(message)
+    if reason is not None:
         return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组是否启用反垃圾
     try:
@@ -1509,23 +1586,10 @@ async def on_message(message: Message, bot: Bot) -> None:
 @router.message(F.photo)
 async def on_photo_message(message: Message, bot: Bot) -> None:
     """处理图片消息，检测垃圾"""
-    # 跳过私聊消息
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    # 跳过匿名管理员消息
-    if is_anonymous_admin(message):
-        logger.debug(f"跳过匿名管理员图片消息 [群组:{message.chat.id}]")
-        return
-
-    # 跳过没有发送者的消息
-    if not message.from_user:
-        return
-
-    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        logger.debug(f"跳过管理员图片消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 获取群组配置
     group = await GroupRepository.get_or_create(message.chat.id, message.chat.title)
@@ -1534,11 +1598,6 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     if not group.antispam_enabled:
         return
 
-    # ✅ 处理频道马甲（优先级最高）
-    if await check_and_handle_channel_as_sender(message, bot):
-        return  # 已处理频道马甲，直接返回
-
-    # ✅ 活跃度系统：检查是否允许发送非文本消息
     # ✅ 活跃度系统：检查是否允许发送非文本消息
     if await check_non_text_message(message, bot, "photo", group.activity_enabled):
         return  # 活跃度不足，消息已被删除
@@ -1566,9 +1625,6 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         # 记录到上下文
         await ContextService.record_message(message)
         return  # 直接返回，不进行垃圾检测
-
-    # 更新 username 映射
-    await update_username_mapping_if_needed(message)
 
     # 获取检测器
     detector = get_detector()
@@ -1642,31 +1698,10 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
 @router.message(F.sticker)
 async def on_sticker_message(message: Message, bot: Bot) -> None:
     """处理贴纸消息，检测垃圾"""
-    # 跳过私聊消息
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    # 跳过匿名管理员消息
-    if is_anonymous_admin(message):
-        logger.debug(f"跳过匿名管理员贴纸消息 [群组:{message.chat.id}]")
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user，这里提前返回
-    if not message.from_user:
-        logger.debug(f"消息没有 from_user 信息，跳过后续处理 [群组:{message.chat.id}]")
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        logger.debug(f"跳过管理员贴纸消息 [群组:{message.chat.id}] [用户:{message.from_user.id}]")
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2065,25 +2100,10 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 @router.message(F.video)
 async def on_video_message(message: Message, bot: Bot) -> None:
     """处理视频消息（活跃度检查）"""
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2102,25 +2122,10 @@ async def on_video_message(message: Message, bot: Bot) -> None:
 @router.message(F.animation)
 async def on_animation_message(message: Message, bot: Bot) -> None:
     """处理 GIF 动画消息（活跃度检查）"""
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2139,25 +2144,10 @@ async def on_animation_message(message: Message, bot: Bot) -> None:
 @router.message(F.voice)
 async def on_voice_message(message: Message, bot: Bot) -> None:
     """处理语音消息（活跃度检查）"""
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2176,25 +2166,10 @@ async def on_voice_message(message: Message, bot: Bot) -> None:
 @router.message(F.video_note)
 async def on_video_note_message(message: Message, bot: Bot) -> None:
     """处理视频笔记消息（活跃度检查）"""
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2213,25 +2188,10 @@ async def on_video_note_message(message: Message, bot: Bot) -> None:
 @router.message(F.document)
 async def on_document_message(message: Message, bot: Bot) -> None:
     """处理文件消息（活跃度检查）"""
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2250,25 +2210,10 @@ async def on_document_message(message: Message, bot: Bot) -> None:
 @router.message(F.audio)
 async def on_audio_message(message: Message, bot: Bot) -> None:
     """处理音频消息（活跃度检查）"""
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    # 频道马甲消息可能没有 from_user，后续逻辑需要 from_user
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组配置
     try:
@@ -2290,35 +2235,10 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
 
     场景：垃圾发送者先发普通消息，然后编辑成垃圾信息
     """
-    # 跳过私聊消息
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot, skip_registered_commands=True)
+    if reason is not None:
         return
-
-    # 跳过已注册的命令消息
-    if message.text and message.text.startswith("/"):
-        command_match = re.match(r"^/([a-zA-Z][a-zA-Z0-9_]*)(@\w+)?(\s|$)", message.text or "")
-        if command_match:
-            command_name = command_match.group(1)
-            if command_name in _registered_commands:
-                return
-
-    # 跳过匿名管理员消息
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组是否启用反垃圾
     try:
@@ -2416,27 +2336,10 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
 
     注意：Telegram 不允许更换图片，只能编辑 caption
     """
-    # 跳过私聊消息
-    if message.chat.type == "private":
+    reason = await _run_message_prechecks(message, bot)
+    if reason is not None:
         return
-
-    # 跳过匿名管理员消息
-    if is_anonymous_admin(message):
-        return
-
-    # ✅ 检测并处理频道马甲消息
-    if await check_and_handle_channel_as_sender(message, bot):
-        return
-
-    if not message.from_user:
-        return
-
-    # ✅ 更新 username 映射
-    await update_username_mapping_if_needed(message)
-
-    # 跳过管理员消息（超管 + 群管，统一 check_admin_permission_by_id）
-    if await check_admin_permission_by_id(bot, message.chat.id, message.from_user.id):
-        return
+    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
 
     # 检查群组是否启用反垃圾
     try:
