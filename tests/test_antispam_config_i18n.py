@@ -8,6 +8,7 @@ on_antispam_confirm_menu/on_antispam_confirm_toggle/on_antispam_back。
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.filters import CommandObject
 
 from src.bot.handlers import antispam as handler
 from src.services.spam_detector import RetrainCode, RetrainResult
@@ -38,6 +39,11 @@ def _message(chat_type: str = "group") -> MagicMock:
     return message
 
 
+def _command(args: str | None = None) -> CommandObject:
+    """构造 CommandObject(无参 args=None;带参 args="xxx")。"""
+    return CommandObject(args=args)
+
+
 def _callback(data: str, chat_id: int = CHAT_ID, clicker_id: int = 42) -> MagicMock:
     cb = MagicMock()
     cb.data = data
@@ -65,7 +71,7 @@ async def test_cmd_antispam_private_rejected(mocker) -> None:
     localizer = _localizer()
     message = _message(chat_type="private")
 
-    await handler.cmd_antispam(message, AsyncMock(), localizer)
+    await handler.cmd_antispam(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.antispam.error.group_only.message")
 
@@ -76,7 +82,7 @@ async def test_cmd_antispam_non_admin(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_antispam(message, AsyncMock(), localizer)
+    await handler.cmd_antispam(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.antispam.error.admin_only.message")
 
@@ -87,7 +93,7 @@ async def test_cmd_antispam_renders_menu_with_5_buttons(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_antispam(message, AsyncMock(), localizer)
+    await handler.cmd_antispam(message, AsyncMock(), _command(), localizer)
 
     # 主菜单 message + 5 按钮
     assert next(c for c in localizer.t.call_args_list if c.args == ("admin.antispam.menu.message",))
@@ -97,6 +103,76 @@ async def test_cmd_antispam_renders_menu_with_5_buttons(mocker) -> None:
             for c in localizer.t.call_args_list
             if c.args == (f"admin.antispam.menu.{btn}.button",)
         )
+
+
+async def test_cmd_antispam_enable_with_arg(mocker) -> None:
+    """/antispam on → update_antispam_settings(True) + result.message(enabled)。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock())
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_antispam_settings", new=AsyncMock()
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antispam(message, AsyncMock(), _command(args="on"), localizer)
+
+    update.assert_awaited_once_with(CHAT_ID, True)
+    result = next(
+        c for c in localizer.t.call_args_list if c.args == ("admin.antispam.result.message",)
+    )
+    assert result.kwargs["status"] == "<admin.common.status.enabled.label>"
+
+
+async def test_cmd_antispam_disable_with_arg(mocker) -> None:
+    """/antispam off → update_antispam_settings(False) + result.message(disabled)。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock())
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_antispam_settings", new=AsyncMock()
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antispam(message, AsyncMock(), _command(args="off"), localizer)
+
+    update.assert_awaited_once_with(CHAT_ID, False)
+    assert next(
+        c for c in localizer.t.call_args_list if c.args == ("admin.common.status.disabled.label",)
+    )
+
+
+async def test_cmd_antispam_invalid_arg(mocker) -> None:
+    """/antispam bogus → usage.message,不更新。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_antispam_settings", new=AsyncMock()
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antispam(message, AsyncMock(), _command(args="bogus"), localizer)
+
+    localizer.t.assert_called_once_with("admin.antispam.usage.message")
+    update.assert_not_awaited()
+
+
+async def test_cmd_antispam_db_failure_with_arg(mocker) -> None:
+    """带参路径 DB 异常 → failed.toast,不崩溃。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(
+        handler.GroupRepository, "get_or_create", new=AsyncMock(side_effect=RuntimeError("db"))
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antispam(message, AsyncMock(), _command(args="on"), localizer)
+
+    assert message.answer.await_args.args[0] == "<admin.antispam.callback.failed.toast>"
 
 
 # ===== on_antispam_stats =====
@@ -413,7 +489,7 @@ async def test_cmd_antichannel_private_rejected(mocker) -> None:
     localizer = _localizer()
     message = _message(chat_type="private")
 
-    await handler.cmd_antichannel(message, AsyncMock(), localizer)
+    await handler.cmd_antichannel(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.antichannel.error.group_only.message")
 
@@ -430,7 +506,7 @@ async def test_cmd_antichannel_group_exists_disabled(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_antichannel(message, AsyncMock(), localizer)
+    await handler.cmd_antichannel(message, AsyncMock(), _command(), localizer)
 
     # 复用 groupset antichannel message(含 status 占位符)
     msg = next(
@@ -453,7 +529,7 @@ async def test_cmd_antichannel_no_group_uses_default_enabled(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_antichannel(message, AsyncMock(), localizer)
+    await handler.cmd_antichannel(message, AsyncMock(), _command(), localizer)
 
     # default_enabled.label 注入 common enabled
     default = next(
@@ -474,10 +550,83 @@ async def test_cmd_antichannel_load_failure_uses_default(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_antichannel(message, AsyncMock(), localizer)
+    await handler.cmd_antichannel(message, AsyncMock(), _command(), localizer)
 
     assert next(
         c
         for c in localizer.t.call_args_list
         if c.args == ("admin.antichannel.status.default_enabled.label",)
     )
+
+
+async def test_cmd_antichannel_enable_with_arg(mocker) -> None:
+    """/antichannel on → update_antichannel_settings(True) + enabled.toast。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock())
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_antichannel_settings", new=AsyncMock()
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antichannel(message, AsyncMock(), _command(args="on"), localizer)
+
+    update.assert_awaited_once_with(CHAT_ID, True)
+    assert next(
+        c
+        for c in localizer.t.call_args_list
+        if c.args == ("admin.antichannel.callback.enabled.toast",)
+    )
+
+
+async def test_cmd_antichannel_disable_with_arg(mocker) -> None:
+    """/antichannel off → update_antichannel_settings(False) + disabled.toast。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock())
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_antichannel_settings", new=AsyncMock()
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antichannel(message, AsyncMock(), _command(args="off"), localizer)
+
+    update.assert_awaited_once_with(CHAT_ID, False)
+    assert next(
+        c
+        for c in localizer.t.call_args_list
+        if c.args == ("admin.antichannel.callback.disabled.toast",)
+    )
+
+
+async def test_cmd_antichannel_invalid_arg(mocker) -> None:
+    """/antichannel bogus → usage.message,不更新。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_antichannel_settings", new=AsyncMock()
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antichannel(message, AsyncMock(), _command(args="bogus"), localizer)
+
+    localizer.t.assert_called_once_with("admin.antichannel.usage.message")
+    update.assert_not_awaited()
+
+
+async def test_cmd_antichannel_db_failure_with_arg(mocker) -> None:
+    """带参路径 DB 异常 → failed.toast,不崩溃。"""
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
+    mocker.patch.object(
+        handler.GroupRepository, "get_or_create", new=AsyncMock(side_effect=RuntimeError("db"))
+    )
+    localizer = _localizer()
+    message = _message()
+
+    await handler.cmd_antichannel(message, AsyncMock(), _command(args="on"), localizer)
+
+    assert message.answer.await_args.args[0] == "<admin.antichannel.callback.failed.toast>"

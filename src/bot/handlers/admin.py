@@ -1,7 +1,7 @@
 """管理员配置命令处理器"""
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from loguru import logger
 
@@ -9,7 +9,12 @@ from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.health import get_health_checker
 from src.core.i18n import BoundLocalizer, get_resolver, get_translator
-from src.core.utils import auto_delete_message, check_admin_permission, escape_html
+from src.core.utils import (
+    auto_delete_message,
+    check_admin_permission,
+    escape_html,
+    parse_enabled_arg,
+)
 from src.repositories.group_repo import GroupRepository
 
 router = Router(name="admin")
@@ -544,8 +549,15 @@ async def on_groupset_back(callback: CallbackQuery, bot: Bot, localizer: BoundLo
 
 
 @router.message(Command("setverify"))
-async def cmd_set_verify(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """设置验证方式"""
+async def cmd_set_verify(
+    message: Message, bot: Bot, command: CommandObject, localizer: BoundLocalizer
+) -> None:
+    """设置验证方式。
+
+    用法：
+    - ``/setverify <方式>``：直接设置（走 message 路径，匿名管理员可操作）
+    - ``/setverify``：显示选择菜单
+    """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer(localizer.t("admin.setverify.error.group_only.message"))
@@ -556,7 +568,31 @@ async def cmd_set_verify(message: Message, bot: Bot, localizer: BoundLocalizer) 
         await message.answer(localizer.t("admin.setverify.error.admin_only.message"))
         return
 
-    # 显示验证方式选择
+    # 带参：直接设置验证方式（参照 /lang <locale> 的 message 路径，匿名管理员可操作）
+    raw_args = command.args
+    if raw_args is not None and raw_args.strip():
+        verify_type = raw_args.strip().split(maxsplit=1)[0].lower()
+        if verify_type not in _VALID_VERIFICATION_TYPES:
+            reply = await message.answer(localizer.t("admin.setverify.usage.message"))
+            await auto_delete_message(reply)
+            return
+        try:
+            await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+            await GroupRepository.update_verification_type(message.chat.id, verify_type)
+        except Exception as e:
+            logger.error(f"更新验证方式失败 [群组:{message.chat.id}]: {e}")
+            reply = await message.answer(localizer.t("admin.setverify.callback.save_failed.toast"))
+            await auto_delete_message(reply)
+            return
+        verify_type_label = localizer.t(f"admin.common.verification_type.{verify_type}.label")
+        reply = await message.answer(
+            localizer.t("admin.setverify.result.saved.message", verify_type=verify_type_label)
+        )
+        await auto_delete_message(reply)
+        logger.info(f"群组 {message.chat.id} 验证方式已设置为 {verify_type}")
+        return
+
+    # 无参：显示验证方式选择菜单
     keyboard = _build_setverify_keyboard(localizer, message.chat.id)
 
     reply = await message.answer(
@@ -1135,8 +1171,15 @@ async def cmd_whitelist(message: Message, localizer: BoundLocalizer) -> None:
 
 
 @router.message(Command("activity"))
-async def cmd_activity(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """控制群组活跃度系统开关"""
+async def cmd_activity(
+    message: Message, bot: Bot, command: CommandObject, localizer: BoundLocalizer
+) -> None:
+    """控制群组活跃度系统开关。
+
+    用法：
+    - ``/activity <on|off>``：直接切换（走 message 路径，匿名管理员可操作）
+    - ``/activity``：显示控制面板
+    """
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer(localizer.t("admin.activity.error.group_only.message"))
@@ -1145,6 +1188,28 @@ async def cmd_activity(message: Message, bot: Bot, localizer: BoundLocalizer) ->
     # 检查权限
     if not await check_admin_permission(message, bot):
         await message.answer(localizer.t("admin.activity.error.admin_only.message"))
+        return
+
+    # 带参：直接切换开关（参照 /lang <locale> 的 message 路径，匿名管理员可操作）
+    raw_args = command.args
+    if raw_args is not None and raw_args.strip():
+        enabled = parse_enabled_arg(raw_args)
+        if enabled is None:
+            reply = await message.answer(localizer.t("admin.activity.usage.message"))
+            await auto_delete_message(reply)
+            return
+        try:
+            await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+            await GroupRepository.update_activity_settings(message.chat.id, enabled)
+        except Exception as e:
+            logger.error(f"更新活跃度设置失败 [群组:{message.chat.id}]: {e}")
+            reply = await message.answer(localizer.t("admin.activity.error.load_failed.message"))
+            await auto_delete_message(reply)
+            return
+        state = "enabled" if enabled else "disabled"
+        reply = await message.answer(localizer.t(f"admin.activity.callback.{state}.toast"))
+        await auto_delete_message(reply)
+        logger.info(f"管理员通过带参命令将群组 {message.chat.id} 活跃度系统切换为 {state}")
         return
 
     # 显示活跃度控制面板

@@ -12,7 +12,7 @@ from typing import Any
 
 import imageio.v3 as iio
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     InaccessibleMessage,
@@ -46,6 +46,7 @@ from src.core.utils import (
     format_trusted_user_mention,
     format_user_mention,
     get_chat_administrators_mention,
+    parse_enabled_arg,
     should_skip_sender,
 )
 from src.models.group import Group
@@ -840,8 +841,15 @@ async def _require_antispam_admin(
 
 
 @router.message(Command("antispam"))
-async def cmd_antispam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """反垃圾配置命令"""
+async def cmd_antispam(
+    message: Message, bot: Bot, command: CommandObject, localizer: BoundLocalizer
+) -> None:
+    """反垃圾配置命令。
+
+    用法：
+    - ``/antispam <on|off>``：直接切换（走 message 路径，匿名管理员可操作）
+    - ``/antispam``：显示配置菜单
+    """
     # 类型缩小
     assert message.from_user
     assert message.chat
@@ -863,6 +871,29 @@ async def cmd_antispam(message: Message, bot: Bot, localizer: BoundLocalizer) ->
     if not await check_admin_permission(message, bot):
         reply = await message.answer(localizer.t("admin.antispam.error.admin_only.message"))
         await auto_delete_message(reply)
+        return
+
+    # 带参：直接切换开关（参照 /lang <locale> 的 message 路径，匿名管理员可操作）
+    raw_args = command.args
+    if raw_args is not None and raw_args.strip():
+        enabled = parse_enabled_arg(raw_args)
+        if enabled is None:
+            reply = await message.answer(localizer.t("admin.antispam.usage.message"))
+            await auto_delete_message(reply)
+            return
+        try:
+            await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+            await GroupRepository.update_antispam_settings(message.chat.id, enabled)
+        except Exception as e:
+            logger.error(f"更新反垃圾设置失败 [群组:{message.chat.id}]: {e}")
+            reply = await message.answer(localizer.t("admin.antispam.callback.failed.toast"))
+            await auto_delete_message(reply)
+            return
+        state = "enabled" if enabled else "disabled"
+        status = localizer.t(f"admin.common.status.{state}.label")
+        reply = await message.answer(localizer.t("admin.antispam.result.message", status=status))
+        await auto_delete_message(reply)
+        logger.info(f"管理员通过带参命令将群组 {message.chat.id} 反垃圾功能切换为 {state}")
         return
 
     logger.debug("权限检查通过，准备发送配置菜单")
@@ -1285,8 +1316,15 @@ async def on_antispam_back(callback: CallbackQuery, localizer: BoundLocalizer) -
 
 
 @router.message(Command("antichannel"))
-async def cmd_antichannel(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """反频道马甲配置命令"""
+async def cmd_antichannel(
+    message: Message, bot: Bot, command: CommandObject, localizer: BoundLocalizer
+) -> None:
+    """反频道马甲配置命令。
+
+    用法：
+    - ``/antichannel <on|off>``：直接切换（走 message 路径，匿名管理员可操作）
+    - ``/antichannel``：显示当前状态与配置菜单
+    """
     # 类型缩小
     assert message.from_user
     assert message.chat
@@ -1304,6 +1342,28 @@ async def cmd_antichannel(message: Message, bot: Bot, localizer: BoundLocalizer)
     if not await check_admin_permission(message, bot):
         reply = await message.answer(localizer.t("admin.antichannel.error.admin_only.message"))
         await auto_delete_message(reply)
+        return
+
+    # 带参：直接切换开关（参照 /lang <locale> 的 message 路径，匿名管理员可操作）
+    raw_args = command.args
+    if raw_args is not None and raw_args.strip():
+        enabled = parse_enabled_arg(raw_args)
+        if enabled is None:
+            reply = await message.answer(localizer.t("admin.antichannel.usage.message"))
+            await auto_delete_message(reply)
+            return
+        try:
+            await GroupRepository.get_or_create(message.chat.id, message.chat.title)
+            await GroupRepository.update_antichannel_settings(message.chat.id, enabled)
+        except Exception as e:
+            logger.error(f"更新反频道马甲设置失败 [群组:{message.chat.id}]: {e}")
+            reply = await message.answer(localizer.t("admin.antichannel.callback.failed.toast"))
+            await auto_delete_message(reply)
+            return
+        state = "enabled" if enabled else "disabled"
+        reply = await message.answer(localizer.t(f"admin.antichannel.callback.{state}.toast"))
+        await auto_delete_message(reply)
+        logger.info(f"管理员通过带参命令将群组 {message.chat.id} 反频道马甲功能切换为 {state}")
         return
 
     logger.debug("权限检查通过，准备查询当前配置")

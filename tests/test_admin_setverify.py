@@ -7,6 +7,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.filters import CommandObject
 
 from src.bot.handlers import admin as handler
 
@@ -37,6 +38,11 @@ def _localizer() -> MagicMock:
     return loc
 
 
+def _command(args: str | None = None) -> CommandObject:
+    """构造 CommandObject(无参 args=None;带参 args="xxx")。"""
+    return CommandObject(args=args)
+
+
 def _patch_admin_check(mocker, is_admin: bool = True) -> None:
     mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=is_admin))
     mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
@@ -49,7 +55,7 @@ async def test_private_chat_rejected(mocker) -> None:
     localizer = _localizer()
     message = _message(chat_type="private")
 
-    await handler.cmd_set_verify(message, AsyncMock(), localizer)
+    await handler.cmd_set_verify(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.setverify.error.group_only.message")
 
@@ -60,7 +66,7 @@ async def test_non_admin_rejected(mocker) -> None:
     localizer = _localizer()
     message = _message()
 
-    await handler.cmd_set_verify(message, AsyncMock(), localizer)
+    await handler.cmd_set_verify(message, AsyncMock(), _command(), localizer)
 
     localizer.t.assert_called_once_with("admin.setverify.error.admin_only.message")
 
@@ -72,7 +78,7 @@ async def test_prompt_and_13_buttons(mocker) -> None:
     message = _message()
     bot = AsyncMock()
 
-    await handler.cmd_set_verify(message, bot, localizer)
+    await handler.cmd_set_verify(message, bot, _command(), localizer)
 
     # prompt 调用一次
     prompt_calls = [
@@ -94,6 +100,54 @@ async def test_prompt_and_13_buttons(mocker) -> None:
     ]
     actual_keys = [c.args[0] for c in button_calls]
     assert actual_keys == expected_keys
+
+
+async def test_setverify_with_valid_arg_updates(mocker) -> None:
+    """带合法方式 /setverify math → update_verification_type + result.saved(common label)。"""
+    _patch_admin_check(mocker)
+    localizer = _localizer()
+    message = _message(text="/setverify math")
+    mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock())
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_verification_type", new=AsyncMock()
+    )
+
+    await handler.cmd_set_verify(message, AsyncMock(), _command(args="math"), localizer)
+
+    update.assert_awaited_once_with(CHAT_ID, "math")
+    saved = next(
+        c for c in localizer.t.call_args_list if c.args == ("admin.setverify.result.saved.message",)
+    )
+    assert saved.kwargs["verify_type"] == "<admin.common.verification_type.math.label>"
+
+
+async def test_setverify_with_invalid_arg_shows_usage(mocker) -> None:
+    """非法方式 /setverify bogus → usage.message,不更新。"""
+    _patch_admin_check(mocker)
+    localizer = _localizer()
+    message = _message(text="/setverify bogus")
+    update = mocker.patch.object(
+        handler.GroupRepository, "update_verification_type", new=AsyncMock()
+    )
+
+    await handler.cmd_set_verify(message, AsyncMock(), _command(args="bogus"), localizer)
+
+    localizer.t.assert_called_once_with("admin.setverify.usage.message")
+    update.assert_not_awaited()
+
+
+async def test_setverify_db_failure_shows_save_failed(mocker) -> None:
+    """带参路径 DB 异常 → save_failed.toast,不崩溃。"""
+    _patch_admin_check(mocker)
+    localizer = _localizer()
+    message = _message(text="/setverify math")
+    mocker.patch.object(
+        handler.GroupRepository, "get_or_create", new=AsyncMock(side_effect=RuntimeError("db"))
+    )
+
+    await handler.cmd_set_verify(message, AsyncMock(), _command(args="math"), localizer)
+
+    assert message.answer.await_args.args[0] == "<admin.setverify.callback.save_failed.toast>"
 
 
 # ===== on_setverify_callback =====
