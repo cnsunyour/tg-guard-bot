@@ -33,7 +33,7 @@ classifiers = [
 # ============================================================================
 dependencies = [
     # Telegram Bot 框架
-    "aiogram>=3.6.0,<4.0.0",
+    "aiogram>=3.25.0,<4.0.0",  # 下限 3.25：项目所用 API（DefaultBotProperties/ReplyParameters 3.7、InaccessibleMessage/MessageOrigin* 3.6）在此齐备；3.25→3.30 breaking 均不命中项目用法（hide_requester 经 extra="allow" 透传，非正式字段）
     "telethon>=1.42.0",  # User Bot API（用于获取群组成员列表）
     "python-socks[asyncio]>=2.4.3",  # Telethon 代理支持（socks5/socks4/http）
 
