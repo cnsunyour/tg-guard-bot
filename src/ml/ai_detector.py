@@ -27,50 +27,8 @@ from src.core.config import settings
 from src.core.http_errors import format_httpx_error
 
 # ============================================================================
-# Vision 支持工具（模型判定 + 图片编码）
+# Vision 图片编码工具
 # ============================================================================
-
-# 多模态模型白名单（按 model 名正则判断）
-_VISION_MODEL_PATTERNS = [
-    re.compile(r"^gpt-4o", re.IGNORECASE),
-    re.compile(r"^chatgpt-4o", re.IGNORECASE),
-    re.compile(r"^gpt-4-turbo", re.IGNORECASE),
-    re.compile(r"^gpt-4-vision", re.IGNORECASE),
-    re.compile(r"^gpt-5", re.IGNORECASE),
-    re.compile(r"^o1", re.IGNORECASE),
-    re.compile(r"^claude-.*(sonnet|opus|haiku)", re.IGNORECASE),
-    re.compile(r"^gemini-", re.IGNORECASE),
-    re.compile(r"^qwen.*vl", re.IGNORECASE),
-    re.compile(r"^qwen.*-omni", re.IGNORECASE),
-    re.compile(r"^glm-.*v", re.IGNORECASE),
-    re.compile(r"^step-.*v", re.IGNORECASE),
-    re.compile(r"^yi-vl", re.IGNORECASE),
-    re.compile(r"^internvl", re.IGNORECASE),
-    re.compile(r"^llama-3\.2-.*vision", re.IGNORECASE),
-    re.compile(r"^llama-4", re.IGNORECASE),
-    re.compile(r"^pixtral", re.IGNORECASE),
-    re.compile(r"^deepseek.*vl", re.IGNORECASE),
-    re.compile(r"^grok-.*vision", re.IGNORECASE),
-    re.compile(r"^kimi-k2\.", re.IGNORECASE),
-    re.compile(r"^doubao-seed-2", re.IGNORECASE),
-]
-
-
-def _is_vision_model(model: str) -> bool:
-    """判断模型名是否支持多模态视觉
-
-    兼容带 provider 前缀的模型名（OpenRouter 等网关常见）：
-    - ``openai/gpt-4o-mini`` → 取 ``gpt-4o-mini``
-    - ``openrouter/anthropic/claude-3-5-sonnet`` → 取 ``claude-3-5-sonnet``
-    判定忽略大小写。
-    """
-    if not model:
-        return False
-    # 只取最后一个 "/" 之后的模型名进行判定
-    base_name = model.rsplit("/", 1)[-1].strip()
-    if not base_name:
-        return False
-    return any(p.search(base_name) for p in _VISION_MODEL_PATTERNS)
 
 
 _VISION_MIME_MAP = {
@@ -181,13 +139,13 @@ class AIServiceError(Exception):
 
 
 class VisionUnsupportedError(Exception):
-    """没有启用且支持 Vision 的 provider（模型名判定不支持、或都未启用）"""
+    """Vision 未启用，或没有已启用且配置了 API key 的 provider"""
 
     pass
 
 
 class VisionAllFailedError(Exception):
-    """所有支持 Vision 的 provider 调用都失败"""
+    """所有可用的 Vision provider 调用都失败"""
 
     def __init__(self, primary_error: str = "", backup_error: str = ""):
         self.primary_error = primary_error
@@ -712,11 +670,6 @@ class AIServiceProvider(ABC):
     # Vision 直判图片（多模态）
     # ------------------------------------------------------------------
 
-    @property
-    def supports_vision(self) -> bool:
-        """该 provider 配置的模型是否支持多模态视觉"""
-        return _is_vision_model(self.config.model)
-
     async def detect_image(
         self,
         image_b64: str,
@@ -1072,18 +1025,22 @@ class VisionServiceProvider(AIServiceProvider):
 
     与文本 provider 彻底解耦：独立 model，key/base 由 config.py 的
     vision_*_effective computed property 完成留空回退后传入。
-    复用基类的 detect_image / _call_api_vision / _process_vision_result /
-    supports_vision 及 httpx 客户端生命周期管理。
+    复用基类的 detect_image / _call_api_vision / _process_vision_result
+    及 httpx 客户端生命周期管理。
+
+    不按模型名预校验多模态能力：模型是否支持图片输入交由运行时 API
+    反馈，失败走正常的重试/熔断/降级链路。配置者需自行确保所选模型
+    支持图片输入（见 config.py 中各 ai_spam_vision_*_model 的说明）。
     """
 
     @property
     def is_available(self) -> bool:
-        """Vision 服务商是否可用：已启用 + 有 key + 模型支持多模态
+        """Vision 服务商是否可用：已启用，且配置了 API key 与非空模型名
 
-        将多模态判定纳入可用性，使"启用了但配了纯文本 model"直接视为不可用，
-        在 candidates 选择阶段就被排除（而非等到调用才发现）。
+        仅做配置完整性检查（不判断具体模型是否支持多模态）；
+        空模型名视为不可用，避免带空 model 反复发起无效请求。
         """
-        return self.config.enabled and bool(self.config.api_key) and self.supports_vision
+        return self.config.enabled and bool(self.config.api_key) and bool(self.config.model.strip())
 
     async def detect(
         self,
@@ -1185,20 +1142,17 @@ class HybridAIDetector:
         else:
             logger.debug("备份 AI 服务商未启用或未配置")
 
-        # Vision 主/备初始化日志（含"启用但 model 非多模态"兜底告警）
+        # Vision 主/备初始化日志
         if self.vision_primary.is_available:
             logger.info(
                 f"✅ Vision 主服务商已启用 [api_base={self.vision_primary.config.api_base}] "
                 f"[model={self.vision_primary.config.model}] "
                 f"[threshold={self.vision_primary.config.threshold}]"
             )
-        elif settings.ai_spam_vision_enabled and not self.vision_primary.supports_vision:
-            logger.warning(
-                f"⚠️ Vision 已启用但主模型非多模态，Vision 将不可用 "
-                f"[model={self.vision_primary.config.model}]"
-            )
+        elif self.vision_primary.config.enabled:
+            logger.warning("⚠️ Vision 主服务商已启用但未配置可用 API key")
         else:
-            logger.debug("Vision 主服务商未启用或未配置 key")
+            logger.debug("Vision 主服务商未启用")
 
         if self.vision_backup.is_available:
             logger.info(
@@ -1206,8 +1160,10 @@ class HybridAIDetector:
                 f"[model={self.vision_backup.config.model}] "
                 f"[threshold={self.vision_backup.config.threshold}]"
             )
+        elif self.vision_backup.config.enabled:
+            logger.warning("⚠️ Vision 备份服务商已启用但未配置可用 API key")
         else:
-            logger.debug("Vision 备份服务商未启用或未配置")
+            logger.debug("Vision 备份服务商未启用")
 
     def _is_circuit_open(self, provider: AIServiceProvider) -> bool:
         """检查熔断器是否打开
@@ -1513,8 +1469,8 @@ class HybridAIDetector:
             检测结果 dict（字段对齐 detect_with_context）
 
         Raises:
-            VisionUnsupportedError: 所有启用的 provider 都不支持 vision
-            VisionAllFailedError: 所有支持 vision 的 provider 调用都失败
+            VisionUnsupportedError: 没有已启用且配置了 API key 的 provider
+            VisionAllFailedError: 所有可用的 Vision provider 调用都失败
         """
         candidates: list[AIServiceProvider] = []
         if self.vision_primary.is_available:
@@ -1525,7 +1481,7 @@ class HybridAIDetector:
         if not candidates:
             raise VisionUnsupportedError(
                 "没有可用的 Vision provider"
-                "（检查 AI_SPAM_VISION_ENABLED / ai_spam_vision_model 是否多模态 / key 是否配置或可回退）"
+                "（检查 AI_SPAM_VISION_ENABLED、Vision provider 开关及 API key 配置/回退）"
             )
 
         primary_error = ""
@@ -1586,7 +1542,7 @@ class HybridAIDetector:
                 else:
                     backup_error = formatted_error
 
-        # 所有支持 vision 的 provider 都失败或都熔断
+        # 所有可用的 Vision provider 都失败或都熔断
         raise VisionAllFailedError(primary_error, backup_error)
 
     async def close(self):
@@ -1773,8 +1729,8 @@ class AISpamDetector:
             locale: 群组 locale，控制 reason 输出语言
 
         Raises:
-            VisionUnsupportedError: AI 未启用或没有支持 vision 的 provider
-            VisionAllFailedError: 所有 vision provider 都失败
+            VisionUnsupportedError: Vision 未启用或没有可用 provider
+            VisionAllFailedError: 所有可用的 Vision provider 都失败
         """
         if not self.vision_enabled:
             raise VisionUnsupportedError("Vision 未启用或无可用 provider")

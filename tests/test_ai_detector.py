@@ -18,7 +18,7 @@ from src.ml.ai_detector import (
     BackupAIServiceProvider,
     HybridAIDetector,
     PrimaryAIServiceProvider,
-    _is_vision_model,
+    VisionServiceProvider,
     _read_image_as_base64,
 )
 
@@ -529,38 +529,7 @@ class TestBackupProvider:
 
 
 class TestVisionHelpers:
-    """测试 Vision 基础工具：模型判定、读图、支持性检查"""
-
-    def test_is_vision_model_openai(self):
-        assert _is_vision_model("gpt-4o-mini")
-        assert _is_vision_model("gpt-4o")
-        assert _is_vision_model("GPT-4o-mini")  # 大小写不敏感
-        assert _is_vision_model("gpt-4-turbo-2024-04-09")
-
-    def test_is_vision_model_other_providers(self):
-        assert _is_vision_model("gemini-1.5-pro")
-        assert _is_vision_model("claude-3-5-sonnet-latest")
-        assert _is_vision_model("qwen2-vl-72b-instruct")
-        assert _is_vision_model("pixtral-12b")
-
-    def test_is_vision_model_non_vision(self):
-        assert not _is_vision_model("gpt-3.5-turbo")
-        assert not _is_vision_model("deepseek-chat")
-        assert not _is_vision_model("")
-
-    def test_is_vision_model_strips_provider_prefix(self):
-        """兼容 OpenRouter 等网关的 provider 前缀"""
-        # 单级前缀（OpenRouter 标准格式）
-        assert _is_vision_model("openai/gpt-4o-mini")
-        assert _is_vision_model("anthropic/claude-3-5-sonnet-latest")
-        assert _is_vision_model("google/gemini-1.5-pro")
-        # 多级前缀
-        assert _is_vision_model("openrouter/openai/gpt-4o")
-        # 前缀带路径，模型本身不支持
-        assert not _is_vision_model("openai/gpt-3.5-turbo")
-        assert not _is_vision_model("deepseek/deepseek-chat")
-        # 边界：尾部斜杠
-        assert not _is_vision_model("openai/")
+    """测试 Vision 图片编码工具"""
 
     def test_read_image_as_base64_png(self, tmp_path):
         img_path = tmp_path / "test.png"
@@ -588,29 +557,61 @@ class TestVisionHelpers:
             _read_image_as_base64(str(tmp_path / "nope.jpg"))
 
 
-class TestAIServiceProviderVision:
-    """测试 AIServiceProvider 的 Vision 能力判定"""
+class TestVisionServiceProviderAvailability:
+    """Vision provider 可用性取决于开关、API key 与非空模型名（不按模型名预校验能力）"""
 
-    def test_supports_vision_gpt4o(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "deepseek-chat",  # 原白名单外的文本模型名
+            "some-future-vision-model",  # 任意未知名的新模型
+            "openai/gpt-4o-mini",  # 带 provider 前缀
+        ],
+    )
+    def test_is_available_does_not_filter_by_model_name(self, model):
+        """移除白名单后：任意模型名只要启用且配置了 key 即视为可用"""
         cfg = AIServiceConfig(
-            enabled=True, api_key="k", api_base="https://x.test/v1", model="gpt-4o-mini"
+            enabled=True,
+            api_key="k",
+            api_base="https://x.test/v1",
+            model=model,
         )
-        p = PrimaryAIServiceProvider.__new__(PrimaryAIServiceProvider)
-        # 复用父类初始化但绕过 settings 依赖
-        from src.ml.ai_detector import AIServiceProvider
+        provider = VisionServiceProvider("vision", cfg)
+        assert provider.is_available is True
 
-        AIServiceProvider.__init__(p, "primary", cfg)
-        assert p.supports_vision is True
-
-    def test_supports_vision_text_only_model(self):
+    @pytest.mark.parametrize(
+        ("enabled", "api_key", "expected"),
+        [
+            (False, "k", False),
+            (True, "", False),
+            (True, "k", True),
+        ],
+    )
+    def test_is_available_requires_enabled_and_api_key(self, enabled, api_key, expected):
         cfg = AIServiceConfig(
-            enabled=True, api_key="k", api_base="https://x.test/v1", model="deepseek-chat"
+            enabled=enabled,
+            api_key=api_key,
+            api_base="https://x.test/v1",
+            model="arbitrary-model",
         )
-        p = PrimaryAIServiceProvider.__new__(PrimaryAIServiceProvider)
-        from src.ml.ai_detector import AIServiceProvider
+        provider = VisionServiceProvider("vision", cfg)
+        assert provider.is_available is expected
 
-        AIServiceProvider.__init__(p, "primary", cfg)
-        assert p.supports_vision is False
+    @pytest.mark.parametrize("model", ["", "   "])
+    def test_is_available_rejects_empty_model_name(self, model):
+        """空模型名/纯空白视为不可用（避免带空 model 反复调用无效 API）"""
+        cfg = AIServiceConfig(
+            enabled=True,
+            api_key="k",
+            api_base="https://x.test/v1",
+            model=model,
+        )
+        provider = VisionServiceProvider("vision", cfg)
+        assert provider.is_available is False
+
+
+class TestAIServiceProviderVisionProcessing:
+    """测试 AIServiceProvider 的 Vision 响应处理"""
 
     def test_process_vision_result_parses_extracted_text(self):
         cfg = AIServiceConfig(
