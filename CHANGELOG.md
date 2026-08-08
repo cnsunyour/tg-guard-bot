@@ -5,6 +5,43 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.7.2] - 2026-08-08
+
+### 新增功能
+
+#### 四管理员命令支持带参直接设置 ⚡
+- **场景**：`/setverify`、`/activity`、`/antispam`、`/antichannel` 此前无参时仅弹 inline 面板，开关切换需点按钮；管理员常希望一行命令搞定
+- **新增**：四个命令均支持带参数直接设置（如 `/setverify on`、`/activity off`），无需走 inline button；无参时行为不变（仍弹面板）；非法参数友好提示用法
+
+#### /report 举报提示引用被举报消息并附内容预览 💬
+- **场景**：管理员收到举报提示时，需上滑翻找被举报的原消息才能判断，移动端尤其不便
+- **新增**：`/report` 举报提示改为 reply 到被举报消息，并附被举报消息内容预览（含非文本类型标注），管理员无需翻页即可看到上下文
+
+### 安全修复
+
+#### 全项目安全审查加固（Top 5 + 2 项边界）🔐
+- **M2 `/cleanup` TOCTOU 批量踢人**：入口改 strict 权限校验，各执行子命令（deleted/restricted/scam/fake）扫描后重新检查操作者权限，防止扫描缓存 TTL 期间权限被撤销仍批量操作
+- **M1 白名单中间件覆盖 `chat_join_request`**：此前加入请求模式未经白名单校验；`/whitelist remove` 成功后自动退群（不注册 `chat_member`，避免退群副作用放大）
+- **M3 proxy 日志脱敏**：`_redact_proxy_url` 统一剥离 userinfo，`_proxy_has_auth` 仅输出布尔值；覆盖无协议 `user@host:port` 与 urlparse 误识 `user:` 为 scheme 的边界
+- **M4 CAPTCHA 签名密钥条件校验**：配置 `CAPTCHA_WEBAPP_URL` 时 `CAPTCHA_SIGNATURE_KEY` 须 ≥32 字符（webapp_url 是所有 provider 回调的先决条件，含 `/setverify turnstile` 显式选择路径）
+- **L1 `/verifyconfig` 管理员权限**：缓存版权限校验，非管理员不可查看配置
+- codex review 额外发现 2 项 P1 边界：proxy 无协议 `user@host:port` 泄露 + `/setverify turnstile` 显式选择绕过 `webapp_captcha_enabled` 前提
+
+#### 安全审查剩余 7 项 Low / 可选加固 🔧
+- **L2 Telethon session 文件安全**：`lstat` + 拒绝符号链接 + group/others 可读告警
+- **L3 禁言时长解析严格化**：`parse_duration` 改用 `parse_time_to_seconds` 严格 `fullmatch`；非法时长（`30mxxx`/`0m`/`abc`）抛 `ValueError` 不再误判永久禁言；`cmd_mute` 捕获后提示用法
+- **L4 反垃圾反馈解析加固**：`spam_feedback` 精确 4 段解析 + `feedback_type∈{normal,spam}` 白名单 + 正整数 ID
+- **L5 Sentry `before_send` 清洗**：清洗整个 event + 字段名过滤（连字符归一化覆盖 `X-API-Key`/`private-key` HTTP header）+ depth 20 + markers 扩展
+- **L6 自定义规则配置上限**：文件 ≤1MB / 规则数 ≤200 / pattern ≤500 字符；编译失败/重复 ID 自动剔除，运行时不再抛 `re.error`
+- **L7 Redis 明文密码消除**：`-a` 明文 → `REDISCLI_AUTH` 环境变量（`backup.py` subprocess env 传 + `docker-compose.prod.yml` healthcheck 去 `-a`）
+- **M5 MTCaptcha token 日志删除**：移除 verify 函数 token 输出（保留 GET，官方未证实 POST 契约）
+- 全项目审查整体 **0 Critical / 0 High**；gitleaks 537 commits 零泄露、trivy 零漏洞；残余 L6 ReDoS 与 M5 URL query 为已接受风险
+
+### 代码质量
+
+#### aiogram 下限收紧至 3.25 📦
+- 项目所用 API（`DefaultBotProperties`/`ReplyParameters` 3.7、`InaccessibleMessage`/`MessageOrigin*` 3.6）在 3.25 齐备；3.25→3.30 的 breaking 均不命中项目用法（`hide_requester` 经 `extra="allow"` 透传，非正式字段）
+
 ## [1.7.1] - 2026-08-07
 
 ### 新增功能
