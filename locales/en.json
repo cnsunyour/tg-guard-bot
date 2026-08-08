@@ -490,7 +490,7 @@
   "moderation.spam.channel_message.message": "❌ Channel messages cannot be reported. Reply to a user's message",
   "moderation.spam.processed.message": "✅ Spam processed\n• User banned: {target_user_id}{deleted_all}\n• Message deleted\n• Added to the training set{reason_line}",
   "moderation.spam.reason.default.label": "Spam message",
-  "moderation.spam.report.submitted.message": "✅ Report submitted\n• Report ID: #{report_id}\n• Reason: {reason}\n• Pending reports: {pending_count}\n\n💡 Administrators can use the buttons below to process it",
+  "moderation.spam.report.submitted.message": "✅ Report submitted\n• Report ID: #{report_id}\n• Reason: {reason}\n• Content: {report_content}\n• Pending reports: {pending_count}\n\n💡 Administrators can use the buttons below to process it",
   "moderation.spam.report_limit.message": "❌ You have reached today's report limit (10 reports)\nContact an administrator if the situation is urgent",
   "moderation.spam.submit_failed.message": "❌ Failed to submit the report. Please try again later",
   "moderation.spam.usage.message": "❌ Reply to the message you want to mark as spam\n\n<b>Usage</b>:\n• /spam [reason] - Ban the user and delete the replied-to message\n• /spam -d [reason] - Ban the user and <b>delete all of their messages</b>\n\n<b>Examples</b>:\n• /spam Posting advertisements\n• /spam -d Sending large amounts of spam\n\n💡 <b>Details</b>:\n• Regular members: Submit a report\n• Administrators: Ban immediately and add the message to the training set",

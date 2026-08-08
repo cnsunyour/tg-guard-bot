@@ -12,6 +12,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    ReplyParameters,
 )
 from loguru import logger
 
@@ -93,6 +94,24 @@ def _render_report_reason(localizer: BoundLocalizer, reason: str | None) -> str:
     if reason in _LEGACY_DEFAULT_REPORT_REASONS:
         return localizer.t("moderation.spam.reason.default.label")
     return escape_html(reason)
+
+
+# 举报内容预览截断长度（Unicode 字符）；举报提示与 /reports 列表共用，保证规则一致
+_REPORT_CONTENT_PREVIEW_LIMIT = 50
+
+
+def _render_report_content_preview(text: str | None) -> str:
+    """截断并 HTML 转义举报内容文本，用于展示（提示消息 / 举报列表）。
+
+    先截断后转义，与既有列表渲染一致；空文本返回空串，占位文案由调用方决定。
+    """
+
+    if not text:
+        return ""
+    preview = text[:_REPORT_CONTENT_PREVIEW_LIMIT]
+    if len(text) > _REPORT_CONTENT_PREVIEW_LIMIT:
+        preview += "..."
+    return escape_html(preview)
 
 
 async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
@@ -1318,12 +1337,27 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 f"新举报记录 [ID:{report.id}] [举报者:{message.from_user.id}] "
                 f"[被举报:{target_user_id}] [原因:{reason}]"
             )
+        except Exception as e:
+            # 落库 / 统计失败：举报未记录，告知用户失败
+            logger.error(f"创建举报记录失败: {e}")
+            reply = await message.answer(localizer.t("moderation.spam.submit_failed.message"))
+            await auto_delete_message(reply)
+            return
 
-            # 获取管理员 mention
-            admin_mentions = await get_chat_administrators_mention(
-                bot=bot,
-                chat_id=message.chat.id,
-            )
+        # 举报已落库；通知发送失败不应让用户误以为未提交（避免重复举报），仅记录日志
+        try:
+            # 获取管理员 mention（Redis 等故障降级为空 mention，不阻断提示发送——
+            # 否则用户无反馈反而重试，制造本想避免的重复举报）
+            try:
+                admin_mentions = await get_chat_administrators_mention(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"获取管理员 mention 失败，降级为空 mention " f"[群组ID:{message.chat.id}]: {e}"
+                )
+                admin_mentions = ""
 
             # 创建管理员操作按钮（approve/reject 同行，ignore 独立一行——移动端三按钮同行过窄）
             keyboard = InlineKeyboardMarkup(
@@ -1350,25 +1384,34 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             # 构建消息 header（包含管理员 mention）
             report_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
 
+            # 提示消息回复被举报消息（管理员点开引用即可定位），并附内容预览；预览在原
+            # 消息被删 / approve 删除后仍可见。allow_sending_without_reply 保证被举报消息
+            # 已删除时仍能发出降级普通提示。预览可能含垃圾链接，关闭网页预览。
             reply = await message.answer(
                 report_header
                 + localizer.t(
                     "moderation.spam.report.submitted.message",
                     report_id=report.id,
                     reason=_render_report_reason(localizer, reason_value),
+                    report_content=_render_report_content_preview(spam_text),
                     pending_count=pending_count,
                 ),
+                reply_parameters=ReplyParameters(
+                    message_id=message.reply_to_message.message_id,
+                    allow_sending_without_reply=True,
+                ),
                 reply_markup=keyboard,
+                disable_web_page_preview=True,
             )
             await auto_delete_message(
                 reply,
                 delay=settings.spam_review_prompt_auto_delete_seconds,
             )
-
         except Exception as e:
-            logger.error(f"创建举报记录失败: {e}")
-            reply = await message.answer(localizer.t("moderation.spam.submit_failed.message"))
-            await auto_delete_message(reply)
+            logger.error(
+                f"发送举报提示消息失败 [举报ID:{report.id}] [群组ID:{message.chat.id}] "
+                f"[被举报消息ID:{message.reply_to_message.message_id}]: {e}"
+            )
 
 
 @router.message(Command("notspam", "nospam", "unspam"))
@@ -1751,12 +1794,8 @@ async def cmd_reports(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
             time_str = report.created_at.strftime("%m-%d %H:%M")
 
             # 截断消息文本；无文本用 no_content 占位（保留"无内容"语义）
-            if report.message_text:
-                text_preview = report.message_text[:50]
-                if len(report.message_text) > 50:
-                    text_preview += "..."
-                content_preview = escape_html(text_preview)
-            else:
+            content_preview = _render_report_content_preview(report.message_text)
+            if not content_preview:
                 content_preview = localizer.t("moderation.report.list.no_content.label")
 
             reason_display = _render_report_reason(localizer, report.reason)
