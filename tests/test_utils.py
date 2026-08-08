@@ -176,6 +176,11 @@ def test_parse_time_to_seconds():
     with pytest.raises((ValueError, AttributeError)):
         parse_time_to_seconds("invalid")
 
+    # L3: 尾部多余字符 / 0 时长 / 缺单位 → ValueError（不得误判永久或部分解析）
+    for bad in ("30mxxx", "0m", "0", "abc", ""):
+        with pytest.raises(ValueError):
+            parse_time_to_seconds(bad)
+
 
 @pytest.mark.unit
 def test_mask_text():

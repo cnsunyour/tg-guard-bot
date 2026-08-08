@@ -97,6 +97,11 @@ class RegexRuleEngine:
     - 置信度分级（根据风险等级）
     """
 
+    # 自定义规则配置安全上限（防 ReDoS / 资源耗尽；管理员可配，但仍设护栏）
+    MAX_CONFIG_SIZE = 1024 * 1024  # 配置文件最大 1MB
+    MAX_RULE_COUNT = 200  # 最多 200 条规则
+    MAX_PATTERN_LENGTH = 500  # 单条 pattern 最大 500 字符
+
     # 默认规则集（从用户提供的 10 条规则转换）
     DEFAULT_RULES: ClassVar[list[dict]] = [
         # 🔴 极高危险等级
@@ -247,6 +252,13 @@ class RegexRuleEngine:
         else:
             self.rules = self._load_default_rules()
 
+        # 防御：传入的自定义规则也受数量上限约束
+        if len(self.rules) > self.MAX_RULE_COUNT:
+            logger.warning(
+                f"规则数量 {len(self.rules)} 超过上限 {self.MAX_RULE_COUNT}，回退到默认规则"
+            )
+            self.rules = self._load_default_rules()
+
         # 预编译所有规则
         self._precompile_all()
 
@@ -307,14 +319,46 @@ class RegexRuleEngine:
                 logger.warning(f"规则配置文件不存在: {config_path}，使用默认规则")
                 return self._load_default_rules()
 
+            # ✅ 文件大小校验（json.load 前防大文件耗内存）
+            if path.stat().st_size > self.MAX_CONFIG_SIZE:
+                logger.warning(
+                    f"规则配置文件超过 {self.MAX_CONFIG_SIZE} 字节: {config_path}，使用默认规则"
+                )
+                return self._load_default_rules()
+
             with path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            rules = [self._dict_to_rule(rule_dict) for rule_dict in data.get("rules", [])]
+            # ✅ 根节点必须是 dict 且含 rules 数组
+            if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
+                logger.warning(f"规则配置必须包含 rules 数组: {config_path}，使用默认规则")
+                return self._load_default_rules()
+
+            raw_rules = data["rules"]
+            # ✅ 规则数量上限
+            if len(raw_rules) > self.MAX_RULE_COUNT:
+                logger.warning(
+                    f"自定义规则数量 {len(raw_rules)} 超过 {self.MAX_RULE_COUNT}，使用默认规则"
+                )
+                return self._load_default_rules()
+
+            # ✅ 单条 pattern 必须是字符串且不超长（防 ReDoS 载荷）
+            if any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("pattern"), str)
+                or len(item["pattern"]) > self.MAX_PATTERN_LENGTH
+                for item in raw_rules
+            ):
+                logger.warning(
+                    f"自定义规则包含无效或超过 {self.MAX_PATTERN_LENGTH} 字符的 pattern，使用默认规则"
+                )
+                return self._load_default_rules()
+
+            rules = [self._dict_to_rule(rule_dict) for rule_dict in raw_rules]
             logger.info(f"从 {config_path} 加载了 {len(rules)} 条规则")
             return rules
 
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             logger.error(f"加载规则配置文件失败: {e}，使用默认规则")
             return self._load_default_rules()
 
@@ -349,12 +393,24 @@ class RegexRuleEngine:
         return all(any(keyword in text_lower for keyword in group) for group in prefilter)
 
     def _precompile_all(self) -> None:
-        """预编译所有规则的正则表达式"""
+        """预编译所有规则；编译失败/重复 ID/pattern 超长的规则剔除，运行时不再抛错"""
+        valid_rules: list[SpamRule] = []
+        seen_ids: set[str] = set()
         for rule in self.rules:
+            if len(rule.pattern) > self.MAX_PATTERN_LENGTH:
+                logger.error(f"规则 {rule.id} pattern 超过 {self.MAX_PATTERN_LENGTH} 字符，已剔除")
+                continue
+            if rule.id in seen_ids:
+                logger.error(f"规则 ID 重复，已剔除: {rule.id}")
+                continue
             try:
                 self._get_compiled_pattern(rule)
             except re.error as e:
-                logger.error(f"规则 {rule.id} 编译失败: {e}")
+                logger.error(f"规则 {rule.id} 编译失败，已剔除: {e}")
+                continue
+            seen_ids.add(rule.id)
+            valid_rules.append(rule)
+        self.rules = valid_rules
 
     def _get_compiled_pattern(self, rule: SpamRule) -> re.Pattern:
         """获取编译后的正则表达式（带缓存）"""

@@ -1,5 +1,6 @@
 """Telethon 客户端管理模块"""
 
+import stat
 from pathlib import Path
 
 from loguru import logger
@@ -32,20 +33,37 @@ async def init_telethon_client() -> TelegramClient | None:
 
     # 检查 session 文件
     session_path = Path(settings.telethon_session_path)
-    if not session_path.exists():
+    try:
+        session_stat = session_path.lstat()
+    except FileNotFoundError:
         logger.warning(
             f"Telethon session 文件不存在: {session_path}\n"
             "请先运行 scripts/telethon_login.py 生成 session 文件"
         )
         return None
+    except OSError as e:
+        logger.error(f"无法检查 Telethon session 文件: {session_path}: {e}")
+        return None
 
-    # 检查是否是文件而不是目录（Docker 挂载不存在的文件会创建目录）
-    if not session_path.is_file():
+    # ✅ 拒绝符号链接，防路径劫持（session 含用户登录态，不可替换）
+    if stat.S_ISLNK(session_stat.st_mode):
+        logger.error(f"Telethon session 文件是符号链接，拒绝加载: {session_path}")
+        return None
+
+    if not stat.S_ISREG(session_stat.st_mode):
         logger.warning(
             f"Telethon session 路径不是文件: {session_path}\n"
             "可能是 Docker 挂载导致的目录，请确保在宿主机生成 session 文件后再启动容器"
         )
         return None
+
+    # ✅ session 含登录态，group/others 可读会泄露；告警提示收紧权限（不阻止加载）
+    mode = stat.S_IMODE(session_stat.st_mode)
+    if mode & (stat.S_IRGRP | stat.S_IROTH):
+        logger.warning(
+            f"⚠️  Telethon session 文件权限不安全，group/others 可读: {session_path} "
+            f"(mode={mode:03o})；建议 chmod 600 或更严格"
+        )
 
     try:
         # 创建客户端

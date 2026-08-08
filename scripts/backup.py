@@ -1,6 +1,7 @@
 """数据库备份脚本 - PostgreSQL + Redis 自动备份与 GFS 轮转"""
 
 import asyncio
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -153,18 +154,24 @@ class BackupManager:
         logger.info(f"开始备份 Redis 到: {backup_file}")
 
         try:
+            # 通过宿主 env 传 REDISCLI_AUTH（避免密码出现在宿主 argv / docker inspect）；
+            # `docker exec -e REDISCLI_AUTH`（无值）从当前 env 继承并注入容器
+            redis_cli_env = os.environ.copy()
+            redis_cli_env["REDISCLI_AUTH"] = settings.redis_password or ""
+
             # 1. 触发 BGSAVE
             logger.debug("触发 Redis BGSAVE...")
             result = run(
                 [
                     "docker",
                     "exec",
+                    "-e",
+                    "REDISCLI_AUTH",
                     "tg-guard-redis",
                     "redis-cli",
-                    "-a",
-                    settings.redis_password,
                     "BGSAVE",
                 ],
+                env=redis_cli_env,
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -185,12 +192,13 @@ class BackupManager:
                     [
                         "docker",
                         "exec",
+                        "-e",
+                        "REDISCLI_AUTH",
                         "tg-guard-redis",
                         "redis-cli",
-                        "-a",
-                        settings.redis_password,
                         "LASTSAVE",
                     ],
+                    env=redis_cli_env,
                     capture_output=True,
                     text=True,
                     timeout=5,

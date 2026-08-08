@@ -77,9 +77,12 @@ services:
         reservations:
           cpus: '0.1'
           memory: 128M
+    # healthcheck 经 REDISCLI_AUTH env 认证（避免密码出现在 healthcheck 命令 / docker inspect）
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Redis password is required}
     # 健康检查
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Redis password is required}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3

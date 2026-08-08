@@ -41,40 +41,53 @@ def before_send(event, hint):
         if isinstance(exc, NETWORK_ERROR_TYPES):
             return None
 
-    # 2. 定义敏感数据的正则模式
+    # 2. 敏感数据清洗：字段名命中敏感词（password/secret/token/key/hash 等）→ [FILTERED]；
+    #    字符串内嵌的 Bot Token 格式 → [FILTERED_BOT_TOKEN]。递归整个 event，
+    #    深度上限 20 防极端结构导致性能问题。
     token_pattern = re.compile(r"\d+:[A-Za-z0-9_-]{35}")  # Telegram Bot Token 格式
     url_token_pattern = re.compile(r"bot(\d+:[A-Za-z0-9_-]{35})")  # URL 中的 token
+    sensitive_markers = (
+        "password",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "hash",
+        "private_key",
+        "signature_key",
+        "hmac_key",
+        "authorization",
+        "cookie",
+        "dsn",
+    )
+    max_depth = 20
 
-    def scrub_sensitive_data(data):
-        """递归清理敏感数据"""
+    def scrub_sensitive_data(data, depth=0):
+        """递归清理敏感数据（按字段名 + 字符串内嵌 token）"""
+        if depth >= max_depth:
+            return "[FILTERED_MAX_DEPTH]"
         if isinstance(data, dict):
-            return {key: scrub_sensitive_data(value) for key, value in data.items()}
-        elif isinstance(data, list):
-            return [scrub_sensitive_data(item) for item in data]
-        elif isinstance(data, str):
-            # 替换 Bot Token
+            cleaned = {}
+            for key, value in data.items():
+                # 归一化连字符为下划线（HTTP header 常用 X-API-Key / private-key 形式）
+                key_name = str(key).lower().replace("-", "_")
+                if any(marker in key_name for marker in sensitive_markers):
+                    cleaned[key] = "[FILTERED]"
+                else:
+                    cleaned[key] = scrub_sensitive_data(value, depth + 1)
+            return cleaned
+        if isinstance(data, list):
+            return [scrub_sensitive_data(item, depth + 1) for item in data]
+        if isinstance(data, tuple):
+            return tuple(scrub_sensitive_data(item, depth + 1) for item in data)
+        if isinstance(data, str):
             data = token_pattern.sub("[FILTERED_BOT_TOKEN]", data)
-            data = url_token_pattern.sub("bot[FILTERED_BOT_TOKEN]", data)
-            return data
+            return url_token_pattern.sub("bot[FILTERED_BOT_TOKEN]", data)
         return data
 
-    # 3. 清理事件数据中的敏感信息
-    if "exception" in event:
-        event["exception"] = scrub_sensitive_data(event["exception"])
-
-    if "message" in event:
-        event["message"] = scrub_sensitive_data(event["message"])
-
-    if "breadcrumbs" in event:
-        event["breadcrumbs"] = scrub_sensitive_data(event["breadcrumbs"])
-
-    if "request" in event:
-        event["request"] = scrub_sensitive_data(event["request"])
-
-    if "extra" in event:
-        event["extra"] = scrub_sensitive_data(event["extra"])
-
-    return event
+    # 3. 清洗整个 event（覆盖 exception/message/breadcrumbs/request/extra/
+    #    contexts/user/tags 等所有区域，比逐字段白名单更彻底）
+    return scrub_sensitive_data(event)
 
 
 async def setup_bot() -> tuple[Bot, Dispatcher]:

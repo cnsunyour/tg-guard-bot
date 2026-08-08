@@ -404,31 +404,23 @@ def parse_time_to_seconds(time_str: str) -> int | None:
     if not time_str or not isinstance(time_str, str):
         raise ValueError("时间字符串不能为空")
 
-    time_str = time_str.strip().lower()
+    normalized = time_str.strip().lower()
 
     # 永久封禁
-    if time_str in ("forever", "permanent", "永久"):
+    if normalized in {"forever", "permanent", "永久"}:
         return None
 
-    # 解析数值和单位
-    if len(time_str) < 2:
+    # 严格整体匹配：数字 + 单位，拒绝尾部多余字符（如 "30mxxx"）与 0 时长
+    match = re.fullmatch(r"([0-9]+)([mhd])", normalized)
+    if match is None:
         raise ValueError(f"无效的时间格式: {time_str}")
 
-    try:
-        value = int(time_str[:-1])
-        unit = time_str[-1]
-    except ValueError:
-        raise ValueError(f"无效的时间格式: {time_str}")
+    value = int(match.group(1))
+    if value <= 0:
+        raise ValueError("时长必须大于 0")
 
-    # 转换为秒
-    if unit == "m":  # 分钟
-        return value * 60
-    elif unit == "h":  # 小时
-        return value * 3600
-    elif unit == "d":  # 天
-        return value * 86400
-    else:
-        raise ValueError(f"不支持的时间单位: {unit}")
+    multipliers = {"m": 60, "h": 3600, "d": 86400}
+    return value * multipliers[match.group(2)]
 
 
 def validate_user_id(user_id: int) -> bool:

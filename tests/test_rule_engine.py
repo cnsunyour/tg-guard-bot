@@ -295,3 +295,106 @@ def test_prefilter_disabled_by_default():
     engine = RegexRuleEngine([rule])
     is_match, _, _ = engine.check("这里有免费社工库")
     assert is_match
+
+
+# ===== L6: 自定义规则配置加固（文件大小 / pattern 长度 / 编译失败剔除）=====
+
+
+def _write_rules(tmp_path, rules_obj: dict) -> str:
+    import json
+
+    config = tmp_path / "rules.json"
+    config.write_text(json.dumps(rules_obj, ensure_ascii=False), encoding="utf-8")
+    return str(config)
+
+
+@pytest.mark.unit
+def test_regex_engine_rejects_oversized_config(tmp_path):
+    """L6：配置文件超过 1MB → 回退默认规则（json.load 前拦截，防内存耗尽）。"""
+    from src.ml.rule_engine import RegexRuleEngine
+
+    config = _write_rules(
+        tmp_path,
+        {
+            "rules": [
+                {
+                    "id": "r1",
+                    "pattern": "spam",
+                    "risk_level": "low",
+                    "category": "x",
+                    "description": "x" * 1_100_000,  # 文件 >1MB
+                }
+            ]
+        },
+    )
+
+    engine = RegexRuleEngine(config_path=config)
+    # 回退默认规则（含内置 social_engine_db）
+    assert any(r.id == "social_engine_db" for r in engine.rules)
+
+
+@pytest.mark.unit
+def test_regex_engine_rejects_oversized_pattern(tmp_path):
+    """L6：单条 pattern 超过 500 字符 → 回退默认规则（防 ReDoS 载荷）。"""
+    from src.ml.rule_engine import RegexRuleEngine
+
+    config = _write_rules(
+        tmp_path,
+        {
+            "rules": [
+                {
+                    "id": "r1",
+                    "pattern": "a" * 501,
+                    "risk_level": "low",
+                    "category": "x",
+                    "description": "x",
+                }
+            ]
+        },
+    )
+
+    engine = RegexRuleEngine(config_path=config)
+    assert any(r.id == "social_engine_db" for r in engine.rules)
+
+
+@pytest.mark.unit
+def test_regex_engine_drops_invalid_compiled_rule(tmp_path):
+    """L6：编译失败 / 重复 ID 的规则从 self.rules 剔除，运行时 check() 不再抛 re.error。"""
+    from src.ml.rule_engine import RegexRuleEngine
+
+    config = _write_rules(
+        tmp_path,
+        {
+            "rules": [
+                {
+                    "id": "good",
+                    "pattern": "spam",
+                    "risk_level": "low",
+                    "category": "x",
+                    "description": "good",
+                },
+                {
+                    "id": "bad",
+                    "pattern": "[unclosed",  # 非法正则
+                    "risk_level": "low",
+                    "category": "x",
+                    "description": "bad regex",
+                },
+                {
+                    "id": "good",  # 重复 ID
+                    "pattern": "dup",
+                    "risk_level": "low",
+                    "category": "x",
+                    "description": "dup",
+                },
+            ]
+        },
+    )
+
+    engine = RegexRuleEngine(config_path=config)
+    ids = {r.id for r in engine.rules}
+    assert "good" in ids
+    assert "bad" not in ids  # 编译失败已剔除
+    # check 不抛异常，命中保留的 good 规则
+    is_match, rule, _ = engine.check("spam content")
+    assert is_match and rule.id == "good"
