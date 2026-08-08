@@ -158,6 +158,11 @@ class ModerationService:
             ``ModerationResult``，成功表示已禁言。
         """
         try:
+            # 防御：parse_duration 已校验，此处兜底拒绝非正时长（防其他入口绕过）
+            if duration is not None and duration <= 0:
+                logger.warning(f"拒绝无效禁言时长: {duration}")
+                return ModerationResult(code=ModerationErrorCode.operation_failed)
+
             # ✅ M7: 先验证用户是否在群组中
             verification = await ModerationService.verify_user_in_chat(bot, chat_id, user_id)
             if not verification.success:

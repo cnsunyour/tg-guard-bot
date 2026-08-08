@@ -2706,8 +2706,23 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
 
         message: Message = callback.message
 
-        _, feedback_type, _user_id_str, message_id_str = callback.data.split(":", 3)
-        user_id = int(_user_id_str)
+        try:
+            prefix, feedback_type, user_id_raw, message_id_raw = callback.data.split(":")
+            user_id = int(user_id_raw)
+            message_id = int(message_id_raw)
+        except ValueError:
+            await _answer_toast(callback, "antispam.callback.invalid_data.toast")
+            return
+
+        # 严格校验：prefix + 合法 feedback_type + 正整数 ID（防伪造 callback_data）
+        if (
+            prefix != "spam_feedback"
+            or feedback_type not in {"normal", "spam"}
+            or user_id <= 0
+            or message_id <= 0
+        ):
+            await _answer_toast(callback, "antispam.callback.invalid_data.toast")
+            return
 
         # 检查是否是管理员
         if callback.from_user.id not in settings.admin_ids:
@@ -2725,7 +2740,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
 
         # ✅ P1-12: 从 Redis 获取缓存的原始消息文本
         redis = get_redis()
-        text_cache_key = RedisKeys.spam_message_text(message.chat.id, int(message_id_str))
+        text_cache_key = RedisKeys.spam_message_text(message.chat.id, message_id)
         cached_text = await redis.get(text_cache_key)
 
         if cached_text:
@@ -2766,9 +2781,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
                 is_spam=is_spam,
                 labeled_by=callback.from_user.id,
             )
-            logger.debug(
-                f"使用缓存文本添加反馈 [消息ID:{message_id_str}] [长度:{len(cached_text)}]"
-            )
+            logger.debug(f"使用缓存文本添加反馈 [消息ID:{message_id}] [长度:{len(cached_text)}]")
 
             # ✅ 误判反馈：自动恢复用户权限
             if not is_spam:
@@ -2797,7 +2810,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         else:
             # 缓存已过期或不存在，记录警告但仍然接受反馈
             logger.warning(
-                f"反馈文本缓存未命中 [消息ID:{message_id_str}]，可能是缓存过期或系统重启导致"
+                f"反馈文本缓存未命中 [消息ID:{message_id}]，可能是缓存过期或系统重启导致"
             )
             await _answer_toast(callback, "antispam.feedback.expired.toast")
             return

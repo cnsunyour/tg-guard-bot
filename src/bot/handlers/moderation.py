@@ -1,7 +1,6 @@
 """群管理命令处理器"""
 
 import contextlib
-import re
 from datetime import datetime
 
 from aiogram import Bot, F, Router
@@ -28,6 +27,7 @@ from src.core.utils import (
     get_chat_administrators_mention,
     parse_message_link,
     parse_message_link_with_chat,
+    parse_time_to_seconds,
 )
 from src.repositories.report_repo import ReportRepository
 from src.repositories.spam_repo import SpamRepository
@@ -198,41 +198,19 @@ async def parse_user_from_message(message: Message, bot: Bot) -> int | None:
 
 
 def parse_duration(text: str) -> int | None:
-    """解析时长（支持格式：30m, 2h, 1d）
+    """解析时长（支持格式：30m, 2h, 1d；forever/永久 表示永久）
 
     Returns:
         时长（分钟），None 表示永久
+
+    Raises:
+        ValueError: 时长格式非法（如 "30mxxx"、"abc"、"0m"）；调用方应捕获并提示用法
     """
-    if not text or text.lower() in ["forever", "永久", "0"]:
+    seconds = parse_time_to_seconds(text)
+    if seconds is None:
         return None
-
-    # 匹配格式：数字+单位
-    match = re.match(r"(\d+)([mhd])", text.lower())
-    if not match:
-        return None
-
-    value, unit = match.groups()
-    value = int(value)
-
-    # ✅ M6: 限制时长上限，防止极大值注入
-    # 最大禁言时间：366 天（Telegram API 限制约为 366 天）
-    MAX_DAYS = 366
-
-    if unit == "m":  # 分钟
-        minutes = value
-    elif unit == "h":  # 小时
-        minutes = value * 60
-    elif unit == "d":  # 天
-        minutes = value * 24 * 60
-    else:
-        return None
-
-    # 检查是否超过上限
-    if minutes > MAX_DAYS * 24 * 60:
-        # 超过上限，返回最大值
-        return MAX_DAYS * 24 * 60
-
-    return minutes
+    # ✅ M6: 限制时长上限，防止极大值注入（Telegram API 约束约 366 天）
+    return min(seconds // 60, 366 * 24 * 60)
 
 
 def parse_spam_args(text: str) -> tuple[bool, str | None]:
@@ -466,9 +444,15 @@ async def cmd_mute(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
     if not message.text:
         return
 
-    duration, reason = parse_mute_args(
-        text=message.text, is_reply=message.reply_to_message is not None
-    )
+    try:
+        duration, reason = parse_mute_args(
+            text=message.text, is_reply=message.reply_to_message is not None
+        )
+    except ValueError:
+        # 非法时长（如 "30mxxx"、"0m"）→ 提示用法，而非误判永久
+        reply = await message.answer(localizer.t("moderation.mute.usage.message"))
+        await auto_delete_message(reply)
+        return
 
     # 执行禁言
     result = await ModerationService.mute_user(

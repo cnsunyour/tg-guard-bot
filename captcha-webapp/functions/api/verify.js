@@ -190,8 +190,9 @@ async function verifyHCaptcha(token, secretKey) {
  */
 async function verifyMTCaptcha(token, privateKey) {
     try {
-        console.log('Verifying MTCaptcha with token:', token.substring(0, 50) + '...');
-
+        // ⚠️ MTCaptcha checktoken 官方仅提供 GET query 契约，未证实支持 POST body；
+        // privatekey 进入请求 URL 属可接受残余风险（HTTPS，仅 vendor/TLS 终止代理可见）。
+        // 不记录 token / privatekey 到日志（防凭证进 Cloudflare Functions 日志）。
         const url = `https://service.mtcaptcha.com/mtcv1/api/checktoken?privatekey=${encodeURIComponent(privateKey)}&token=${encodeURIComponent(token)}`;
         const response = await fetch(url, { method: 'GET' });
 
