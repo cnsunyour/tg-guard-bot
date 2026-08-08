@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     # Vision 直判：图片/贴纸直接送多模态 AI 判垃圾（独立于文本检测，可用不同模型）
     ai_spam_vision_enabled: bool = Field(
         default=False,
-        description="是否启用 AI Vision 直判图片/贴纸（独立于文本 AI_SPAM_ENABLED；model 须多模态）",
+        description="是否启用 AI Vision 直判图片/贴纸（独立于文本 AI_SPAM_ENABLED；模型需支持图片输入）",
     )
     ai_spam_vision_detail: str = Field(
         default="low",
@@ -153,7 +153,8 @@ class Settings(BaseSettings):
         default="", description="Vision 主服务商 API Base（留空回退 AI_SPAM_API_BASE）"
     )
     ai_spam_vision_model: str = Field(
-        default="gpt-4o-mini", description="Vision 主模型名称（必须支持多模态）"
+        default="gpt-4o-mini",
+        description="Vision 主模型名称（需支持图片输入；应用不按模型名预校验，请自行确认服务商能力）",
     )
     ai_spam_vision_threshold: float = Field(default=0.8, description="Vision 主置信度阈值")
     ai_spam_vision_max_retries: int = Field(default=2, description="Vision 主最大重试次数")
@@ -169,7 +170,8 @@ class Settings(BaseSettings):
         default="", description="Vision 备服务商 API Base（留空回退 AI_SPAM_BACKUP_API_BASE）"
     )
     ai_spam_vision_backup_model: str = Field(
-        default="gpt-4o-mini", description="Vision 备模型名称（必须支持多模态）"
+        default="gpt-4o-mini",
+        description="Vision 备模型名称（需支持图片输入；应用不按模型名预校验，请自行确认服务商能力）",
     )
     ai_spam_vision_backup_threshold: float = Field(default=0.8, description="Vision 备置信度阈值")
     ai_spam_vision_backup_max_retries: int = Field(default=2, description="Vision 备最大重试次数")
