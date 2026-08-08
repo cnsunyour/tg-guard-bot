@@ -1,7 +1,8 @@
-"""cmd_verify_config i18n 测试（3c2-2）。
+"""cmd_verify_config i18n + 权限校验测试。
 
 验证 /verifyconfig 报告走 catalog（report.message + 公共词项
 verification_type/status），未知验证类型回退到 code。
+含管理员权限校验（L1）：非管理员返回 admin_only key，私聊不查权限。
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -38,9 +39,10 @@ def _group(**overrides) -> MagicMock:
     return MagicMock(**defaults)
 
 
-def _patch(mocker, group: MagicMock) -> MagicMock:
+def _patch(mocker, group: MagicMock, *, is_admin: bool = True) -> MagicMock:
     mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
     mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock(return_value=group))
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=is_admin))
     # localizer.t 真实模拟：返回 key 本身（缺词项回退场景）或带占位符标记
     localizer = MagicMock()
 
@@ -54,13 +56,25 @@ def _patch(mocker, group: MagicMock) -> MagicMock:
 
 
 async def test_private_chat_rejected(mocker) -> None:
-    """私聊 → group_only key。"""
+    """私聊 → group_only key，且不查管理员权限（先私聊再权限）。"""
     localizer = _patch(mocker, _group())
     message = _message(chat_type="private")
 
-    await handler.cmd_verify_config(message, localizer)
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
 
     localizer.t.assert_called_once_with("admin.verifyconfig.error.group_only.message")
+    handler.check_admin_permission.assert_not_called()
+
+
+async def test_non_admin_rejected(mocker) -> None:
+    """非管理员 → admin_only key，不查询群组配置。"""
+    localizer = _patch(mocker, _group(), is_admin=False)
+    message = _message()
+
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
+
+    localizer.t.assert_called_once_with("admin.verifyconfig.error.admin_only.message")
+    handler.GroupRepository.get_or_create.assert_not_called()
 
 
 async def test_report_passes_all_placeholders(mocker) -> None:
@@ -75,7 +89,7 @@ async def test_report_passes_all_placeholders(mocker) -> None:
     localizer = _patch(mocker, group)
     message = _message()
 
-    await handler.cmd_verify_config(message, localizer)
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
 
     # 最后一次 t 调用应为 report.message 且 5 占位符齐全
     last_call = localizer.t.call_args
@@ -97,6 +111,7 @@ async def test_unknown_verify_type_falls_back_to_code(mocker) -> None:
     group = _group(verification_type="future_type")
     mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
     mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock(return_value=group))
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
     localizer = MagicMock()
     missing = "admin.common.verification_type.future_type.label"
 
@@ -110,7 +125,7 @@ async def test_unknown_verify_type_falls_back_to_code(mocker) -> None:
     localizer.t.side_effect = fake_t
     message = _message()
 
-    await handler.cmd_verify_config(message, localizer)
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
 
     last_call = localizer.t.call_args
     assert last_call.kwargs["verify_type"] == "future_type"
@@ -119,6 +134,7 @@ async def test_unknown_verify_type_falls_back_to_code(mocker) -> None:
 async def test_load_failure_returns_load_failed_key(mocker) -> None:
     """get_or_create 抛异常 → load_failed key。"""
     mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
     mocker.patch.object(
         handler.GroupRepository,
         "get_or_create",
@@ -128,9 +144,8 @@ async def test_load_failure_returns_load_failed_key(mocker) -> None:
     localizer.t.side_effect = lambda key, **kw: f"<{key}>"
     message = _message()
 
-    await handler.cmd_verify_config(message, localizer)
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
 
-    # 异常分支只调用 group_only 之后的 load_failed（第一次是 group_only 检查未触发，因 chat=group）
     localizer.t.assert_called_once_with("admin.verifyconfig.error.load_failed.message")
 
 
@@ -139,6 +154,7 @@ async def test_strict_translator_keyerror_falls_back(mocker) -> None:
     group = _group(verification_type="future_type")
     mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
     mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock(return_value=group))
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
     localizer = MagicMock()
 
     def fake_t(key, **kw):
@@ -151,7 +167,7 @@ async def test_strict_translator_keyerror_falls_back(mocker) -> None:
     localizer.t.side_effect = fake_t
     message = _message()
 
-    await handler.cmd_verify_config(message, localizer)
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
 
     # KeyError 被捕获 → 回退 code（escape_html("future_type") 无特殊字符，原样）
     assert localizer.t.call_args.kwargs["verify_type"] == "future_type"
@@ -164,6 +180,7 @@ async def test_unknown_code_html_chars_escaped(mocker) -> None:
     group = _group(verification_type="<x>")  # 假设 DB 被直接写入非法值
     mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
     mocker.patch.object(handler.GroupRepository, "get_or_create", new=AsyncMock(return_value=group))
+    mocker.patch.object(handler, "check_admin_permission", new=AsyncMock(return_value=True))
     localizer = MagicMock()
     missing = "admin.common.verification_type.<x>.label"
 
@@ -177,7 +194,7 @@ async def test_unknown_code_html_chars_escaped(mocker) -> None:
     localizer.t.side_effect = fake_t
     message = _message()
 
-    await handler.cmd_verify_config(message, localizer)
+    await handler.cmd_verify_config(message, MagicMock(), localizer)
 
     assert localizer.t.call_args.kwargs["verify_type"] == "&lt;x&gt;"
 

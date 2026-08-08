@@ -215,6 +215,7 @@
   "admin.stats.permission_denied.message": "❌ Only super administrators can use this command",
   "admin.stats.report.message": "📊 <b>System statistics</b>\n\n🛡️ <b>Anti-spam system</b>\n• Total samples: {total}\n• Spam samples: {spam}\n• Normal samples: {normal}\n• ML classifier: {classifier_status}\n• Embedding: {embedder_status}\n\n⏱️ <b>System info</b>\n• Uptime: {uptime}\n• Started at: {started_at}",
   "admin.verifyconfig.error.group_only.message": "❌ This command can only be used in a group",
+  "admin.verifyconfig.error.admin_only.message": "❌ Only group admins can view verification settings",
   "admin.verifyconfig.error.load_failed.message": "❌ Failed to load settings. Please try again",
   "admin.verifyconfig.report.message": "📋 <b>Current verification settings</b>\n\nVerification method: {verify_type}\nVerification timeout: {timeout} seconds\nAnti-spam: {antispam_status}\nAnti-spam level: {antispam_level}/3\nActivity system: {activity_status}",
   "admin.whitelist.add.already_in.message": "ℹ️ Group <b>{group}</b> is already in the whitelist",

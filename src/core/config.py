@@ -218,7 +218,7 @@ class Settings(BaseSettings):
     )
     captcha_signature_key: str = Field(
         default="",
-        description="与 CAPTCHA WebApp 共享的签名密钥（用于验证回调数据，至少 32 字符）",
+        description="与 CAPTCHA WebApp 共享的签名密钥（启用 WebApp CAPTCHA 时必填，至少 32 字符）",
     )
 
     # Friendly Captcha 验证配置（隐私友好，支持多 key 轮换）
@@ -417,6 +417,21 @@ class Settings(BaseSettings):
                     "请在 .env 文件中设置 REDIS_PASSWORD\n"
                     "建议：使用至少 16 位的随机密码"
                 )
+
+        # WebApp CAPTCHA 回调签名密钥条件校验（不论 debug 均强制）
+        # CAPTCHA_WEBAPP_URL 是所有 WebApp CAPTCHA provider（Turnstile/Friendly/
+        # hCaptcha/MTCaptcha/ALTCHA）回调的前提：challenge URL 均基于它拼接
+        # （verification.py 的 _prepare_*_challenge）。/setverify turnstile 可在
+        # TURNSTILE_ENABLED=false 时显式选 Turnstile（_prepare_turnstile_challenge
+        # 仅要求 webapp_url），故不能只看 *_enabled 标志；只要配了 webapp_url，
+        # 回调签名就依赖 CAPTCHA_SIGNATURE_KEY（见 verification.py 与 captcha-webapp
+        # verify.js / altcha verify.php）。
+        if self.captcha_webapp_url.strip() and len(self.captcha_signature_key.strip()) < 32:
+            raise ValueError(
+                "🔒 配置 CAPTCHA_WEBAPP_URL 时，CAPTCHA_SIGNATURE_KEY 必须配置且至少 32 个字符\n"
+                "请在 .env 文件中设置 CAPTCHA_SIGNATURE_KEY\n"
+                "生成方法：openssl rand -hex 32"
+            )
 
         # Vision 备份依赖 Vision 主开关；不一致则提示（不强制关闭）
         if self.ai_spam_vision_backup_enabled and not self.ai_spam_vision_enabled:

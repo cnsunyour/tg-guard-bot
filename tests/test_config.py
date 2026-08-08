@@ -90,3 +90,64 @@ def test_config_default_values(monkeypatch):
     assert settings.redis_host == "redis"
     assert settings.redis_port == 6379
     assert settings.verification_timeout == 60
+
+
+# ===== M4: CAPTCHA_SIGNATURE_KEY 条件校验（配 webapp_url 时强制）=====
+
+
+def _captcha_env(monkeypatch, *, webapp_url: str | None, signature_key: str) -> None:
+    """配置 captcha 相关环境变量（_env_file=None 隔离 .env 干扰）。"""
+    monkeypatch.setenv("BOT_TOKEN", "123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+    monkeypatch.setenv("MODEL_SIGNATURE_KEY", "a" * 64)
+    monkeypatch.setenv("DEBUG", "true")  # 跳过 db/redis 密码校验，聚焦 captcha
+    if webapp_url is None:
+        monkeypatch.delenv("CAPTCHA_WEBAPP_URL", raising=False)
+    else:
+        monkeypatch.setenv("CAPTCHA_WEBAPP_URL", webapp_url)
+    monkeypatch.setenv("CAPTCHA_SIGNATURE_KEY", signature_key)
+
+
+@pytest.mark.unit
+def test_config_captcha_signature_key_required_with_webapp(monkeypatch):
+    """M4：配了 CAPTCHA_WEBAPP_URL 时，空 CAPTCHA_SIGNATURE_KEY → 拒绝启动。"""
+    _captcha_env(monkeypatch, webapp_url="https://captcha.example.com", signature_key="")
+
+    from src.core.config import Settings
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)
+    assert "CAPTCHA_SIGNATURE_KEY" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_config_captcha_signature_key_short_with_webapp(monkeypatch):
+    """M4：CAPTCHA_SIGNATURE_KEY < 32 字符 + webapp_url → 拒绝。"""
+    _captcha_env(monkeypatch, webapp_url="https://captcha.example.com", signature_key="short")
+
+    from src.core.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.unit
+def test_config_captcha_signature_key_valid_with_webapp(monkeypatch):
+    """M4：webapp_url + 32 字符 signature_key → 通过（含 turnstile_enabled=false，P1-2）。"""
+    _captcha_env(monkeypatch, webapp_url="https://captcha.example.com", signature_key="s" * 32)
+
+    from src.core.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.captcha_webapp_url == "https://captcha.example.com"
+    assert settings.turnstile_enabled is False  # 显式选择 turnstile 仍受 signature_key 保护
+
+
+@pytest.mark.unit
+def test_config_no_webapp_allows_empty_captcha_signature_key(monkeypatch):
+    """M4：未配 webapp_url 时，空 CAPTCHA_SIGNATURE_KEY 可启动（默认场景）。"""
+    _captcha_env(monkeypatch, webapp_url=None, signature_key="")
+
+    from src.core.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.captcha_signature_key == ""

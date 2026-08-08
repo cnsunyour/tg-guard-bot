@@ -215,6 +215,7 @@
   "admin.stats.permission_denied.message": "❌ 只有超级管理员可以使用此命令",
   "admin.stats.report.message": "📊 <b>系统统计</b>\n\n🛡️ <b>反垃圾系统</b>\n• 总样本数: {total}\n• 垃圾样本: {spam}\n• 正常样本: {normal}\n• ML 分类器: {classifier_status}\n• Embedding: {embedder_status}\n\n⏱️ <b>系统信息</b>\n• 运行时间: {uptime}\n• 启动时间: {started_at}",
   "admin.verifyconfig.error.group_only.message": "❌ 此命令只能在群组中使用",
+  "admin.verifyconfig.error.admin_only.message": "❌ 只有管理员可以查看验证配置",
   "admin.verifyconfig.error.load_failed.message": "❌ 获取配置失败，请重试",
   "admin.verifyconfig.report.message": "📋 <b>当前验证配置</b>\n\n验证方式: {verify_type}\n验证超时: {timeout} 秒\n反垃圾: {antispam_status}\n反垃圾级别: {antispam_level}/3\n活跃度系统: {activity_status}",
   "admin.whitelist.add.already_in.message": "ℹ️ 群组 <b>{group}</b> 已在白名单中",

@@ -689,11 +689,16 @@ async def on_setverify_callback(callback: CallbackQuery, localizer: BoundLocaliz
 
 
 @router.message(Command("verifyconfig"))
-async def cmd_verify_config(message: Message, localizer: BoundLocalizer) -> None:
+async def cmd_verify_config(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """查看验证配置"""
     # 检查是否在群组中
     if message.chat.type == "private":
         await message.answer(localizer.t("admin.verifyconfig.error.group_only.message"))
+        return
+
+    # 检查管理员权限（verifyconfig 暴露群验证/反垃圾配置，仅管理员可读）
+    if not await check_admin_permission(message, bot):
+        await message.answer(localizer.t("admin.verifyconfig.error.admin_only.message"))
         return
 
     try:
@@ -1083,7 +1088,9 @@ async def _add_whitelist(message: Message, args: list[str], localizer: BoundLoca
         await message.answer(localizer.t("admin.whitelist.add.error.failed.message"))
 
 
-async def _remove_whitelist(message: Message, args: list[str], localizer: BoundLocalizer) -> None:
+async def _remove_whitelist(
+    message: Message, bot: Bot, args: list[str], localizer: BoundLocalizer
+) -> None:
     """从白名单移除群组"""
     try:
         # 检查参数
@@ -1116,9 +1123,20 @@ async def _remove_whitelist(message: Message, args: list[str], localizer: BoundL
             return
 
         logger.info(f"超级管理员 {message.from_user.id} 将群组 {chat_id} 从白名单移除")
-        await message.answer(
-            localizer.t("admin.whitelist.remove.saved.message", group=group_display)
-        )
+        try:
+            await message.answer(
+                localizer.t("admin.whitelist.remove.saved.message", group=group_display)
+            )
+        except Exception as e:
+            logger.warning(f"发送白名单移除确认失败 [群组:{chat_id}]: {e}")
+
+        # DB 状态已提交；退群失败不应把已成功的白名单变更报告为失败
+        # （Bot 可能已不在群、被踢或权限不足，视为幂等结果）
+        try:
+            await bot.leave_chat(chat_id)
+            logger.info(f"已离开移出白名单的群组 {chat_id}")
+        except Exception as e:
+            logger.warning(f"离开移出白名单群组失败 [群组:{chat_id}]: {e}")
 
     except ValueError:
         await message.answer(localizer.t("admin.whitelist.remove.error.invalid_id.message"))
@@ -1128,7 +1146,7 @@ async def _remove_whitelist(message: Message, args: list[str], localizer: BoundL
 
 
 @router.message(Command("whitelist"))
-async def cmd_whitelist(message: Message, localizer: BoundLocalizer) -> None:
+async def cmd_whitelist(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
     """白名单管理（仅超级管理员）
 
     用法：
@@ -1163,7 +1181,7 @@ async def cmd_whitelist(message: Message, localizer: BoundLocalizer) -> None:
 
     # remove 子命令
     if subcommand == "remove":
-        await _remove_whitelist(message, args, localizer)
+        await _remove_whitelist(message, bot, args, localizer)
         return
 
     # 未知子命令
