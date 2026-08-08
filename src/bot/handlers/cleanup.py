@@ -9,7 +9,7 @@ from loguru import logger
 
 from src.core.i18n import BoundLocalizer
 from src.core.telethon_client import get_telethon_client
-from src.core.utils import check_admin_permission, escape_html
+from src.core.utils import check_admin_permission_strict_message, escape_html
 from src.services.cleanup import (
     CleanupError,
     CleanupReason,
@@ -31,6 +31,24 @@ def _render_cleanup_exception(localizer: BoundLocalizer, error: Exception) -> st
     if isinstance(error, MemberQueryFloodWaitError):
         return localizer.t("cleanup.error.flood_wait.message", wait_seconds=error.seconds)
     return escape_html(str(error))
+
+
+async def _recheck_cleanup_operator(
+    message: Message,
+    bot: Bot,
+    status_msg: Message,
+    localizer: BoundLocalizer,
+) -> bool:
+    """扫描完成、执行踢人前重新确认操作者权限（收窄 TOCTOU 窗口）。
+
+    成员扫描可能耗时较长（Telethon FloodWait / 缓存读取），入口 strict 校验
+    与实际踢人之间存在窗口；在此再查一次，操作者已被撤权则中止执行。
+    失败时在 status_msg 上提示并返回 False。
+    """
+    if await check_admin_permission_strict_message(message, bot):
+        return True
+    await status_msg.edit_text(localizer.t("cleanup.error.admin_only.message"))
+    return False
 
 
 @router.message(Command("cleanup"))
@@ -55,8 +73,8 @@ async def cmd_cleanup(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
         await message.answer(localizer.t("cleanup.error.group_only.message"))
         return None
 
-    # 检查权限
-    if not await check_admin_permission(message, bot):
+    # 检查权限（strict：批量踢人高风险，不信任 Redis 缓存，实时查 Telegram API）
+    if not await check_admin_permission_strict_message(message, bot):
         await message.answer(localizer.t("cleanup.error.admin_only.message"))
         return None
 
@@ -250,6 +268,10 @@ async def _handle_run(
             await status_msg.edit_text(localizer.t("cleanup.preview.empty.message"))
             return status_msg
 
+        # 扫描完成、执行踢人前重新确认操作者权限（防 TOCTOU）
+        if not await _recheck_cleanup_operator(message, bot, status_msg, localizer):
+            return status_msg
+
         await status_msg.edit_text(
             localizer.t(
                 "cleanup.run.start.message",
@@ -351,6 +373,10 @@ async def _handle_deleted(
             await status_msg.edit_text(localizer.t("cleanup.deleted.empty.message"))
             return status_msg
 
+        # 扫描完成、执行踢人前重新确认操作者权限（防 TOCTOU）
+        if not await _recheck_cleanup_operator(message, bot, status_msg, localizer):
+            return status_msg
+
         await status_msg.edit_text(
             localizer.t("cleanup.deleted.start.message", count=len(deleted_users))
         )
@@ -395,6 +421,10 @@ async def _handle_restricted(
 
         if not restricted_users:
             await status_msg.edit_text(localizer.t("cleanup.restricted.empty.message"))
+            return status_msg
+
+        # 扫描完成、执行踢人前重新确认操作者权限（防 TOCTOU）
+        if not await _recheck_cleanup_operator(message, bot, status_msg, localizer):
             return status_msg
 
         await status_msg.edit_text(
@@ -443,6 +473,10 @@ async def _handle_scam(
             await status_msg.edit_text(localizer.t("cleanup.scam.empty.message"))
             return status_msg
 
+        # 扫描完成、执行踢人前重新确认操作者权限（防 TOCTOU）
+        if not await _recheck_cleanup_operator(message, bot, status_msg, localizer):
+            return status_msg
+
         await status_msg.edit_text(localizer.t("cleanup.scam.start.message", count=len(scam_users)))
 
         cleanup_result = await CleanupService.execute_cleanup(
@@ -485,6 +519,10 @@ async def _handle_fake(
 
         if not fake_users:
             await status_msg.edit_text(localizer.t("cleanup.fake.empty.message"))
+            return status_msg
+
+        # 扫描完成、执行踢人前重新确认操作者权限（防 TOCTOU）
+        if not await _recheck_cleanup_operator(message, bot, status_msg, localizer):
             return status_msg
 
         await status_msg.edit_text(localizer.t("cleanup.fake.start.message", count=len(fake_users)))

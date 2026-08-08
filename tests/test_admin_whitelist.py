@@ -1,7 +1,8 @@
-"""cmd_whitelist i18n 测试（3c5）。
+"""/whitelist i18n 测试（3c5）+ 移出白名单退群（M1）。
 
-验证 /whitelist 及 3 个子函数（list/add/remove）走 catalog，
-群组显示标识（title escape 或 chat_id）正确传入占位符。
+验证 /whitelist 及 3 个子函数（list/add/remove）走 catalog，群组显示标识
+（title escape 或 chat_id）正确传入占位符。含 M1：remove 成功后主动
+bot.leave_chat；DB 提交与退群失败隔离。
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -22,6 +23,13 @@ def _message(text: str = "/whitelist", user_id: int = SUPER_ADMIN) -> MagicMock:
     message.from_user = MagicMock(id=user_id)
     message.answer = AsyncMock()
     return message
+
+
+def _bot() -> MagicMock:
+    """mock Bot：leave_chat 为 AsyncMock（M1 remove 成功后调用）。"""
+    bot = MagicMock()
+    bot.leave_chat = AsyncMock(return_value=True)
+    return bot
 
 
 def _group(gid: int = -100, title: str | None = "Test", whitelisted: bool = True) -> MagicMock:
@@ -48,7 +56,7 @@ async def test_non_super_admin_denied(mocker) -> None:
     localizer = _localizer()
     message = _message(user_id=NON_ADMIN)
 
-    await handler.cmd_whitelist(message, localizer)
+    await handler.cmd_whitelist(message, _bot(), localizer)
 
     localizer.t.assert_called_once_with("admin.whitelist.error.permission_denied.message")
 
@@ -58,7 +66,7 @@ async def test_unknown_subcommand(mocker) -> None:
     localizer = _localizer()
     message = _message("/whitelist foobar")
 
-    await handler.cmd_whitelist(message, localizer)
+    await handler.cmd_whitelist(message, _bot(), localizer)
 
     localizer.t.assert_called_once_with("admin.whitelist.error.unknown_subcommand.message")
 
@@ -197,78 +205,108 @@ async def test_add_title_none_uses_chat_id(mocker) -> None:
     assert last.kwargs["group"] == -1001234567890
 
 
-# ===== _remove_whitelist =====
+# ===== _remove_whitelist（含 M1：成功后退群）=====
 async def test_remove_not_found(mocker) -> None:
     mocker.patch.object(handler.GroupRepository, "get_by_id", new=AsyncMock(return_value=None))
+    bot = _bot()
     localizer = _localizer()
     message = _message("/whitelist remove -999")
 
-    await handler._remove_whitelist(message, ["/whitelist", "remove", "-999"], localizer)
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove", "-999"], localizer)
 
     localizer.t.assert_called_once_with(
         "admin.whitelist.remove.error.not_found.message", chat_id=-999
     )
+    bot.leave_chat.assert_not_awaited()
 
 
 async def test_remove_not_in_whitelist(mocker) -> None:
     g = _group(gid=-100, title="Test", whitelisted=False)  # 不在白名单
     mocker.patch.object(handler.GroupRepository, "get_by_id", new=AsyncMock(return_value=g))
     update = mocker.patch.object(handler.GroupRepository, "update_whitelist", new=AsyncMock())
+    bot = _bot()
     localizer = _localizer()
     message = _message("/whitelist remove -100")
 
-    await handler._remove_whitelist(message, ["/whitelist", "remove", "-100"], localizer)
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove", "-100"], localizer)
 
     last = localizer.t.call_args
     assert last.args == ("admin.whitelist.remove.not_in.message",)
     assert last.kwargs["group"] == "Test"
     update.assert_not_awaited()
+    bot.leave_chat.assert_not_awaited()
 
 
-async def test_remove_success(mocker) -> None:
+async def test_remove_success_leaves_chat(mocker) -> None:
+    """M1：remove 成功 → update_whitelist(-100, False) 后主动 leave_chat(-100)。"""
     g = _group(gid=-100, title="Test", whitelisted=True)
     mocker.patch.object(handler.GroupRepository, "get_by_id", new=AsyncMock(return_value=g))
     mocker.patch.object(handler.GroupRepository, "update_whitelist", new=AsyncMock())
+    bot = _bot()
     localizer = _localizer()
     message = _message("/whitelist remove -100")
 
-    await handler._remove_whitelist(message, ["/whitelist", "remove", "-100"], localizer)
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove", "-100"], localizer)
 
     last = localizer.t.call_args
     assert last.args == ("admin.whitelist.remove.saved.message",)
     assert last.kwargs["group"] == "Test"
     handler.GroupRepository.update_whitelist.assert_awaited_once_with(-100, False)
+    bot.leave_chat.assert_awaited_once_with(-100)
+
+
+async def test_remove_success_leave_failure_does_not_fail(mocker) -> None:
+    """M1：leave_chat 抛异常不应把已提交的 DB 变更报告为失败（saved 文案仍发出）。"""
+    g = _group(gid=-100, title="Test", whitelisted=True)
+    mocker.patch.object(handler.GroupRepository, "get_by_id", new=AsyncMock(return_value=g))
+    mocker.patch.object(handler.GroupRepository, "update_whitelist", new=AsyncMock())
+    bot = MagicMock()
+    bot.leave_chat = AsyncMock(side_effect=RuntimeError("already left"))
+    localizer = _localizer()
+    message = _message("/whitelist remove -100")
+
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove", "-100"], localizer)
+
+    # DB 变更成功 + saved 文案照常发出，不进入 failed 分支
+    handler.GroupRepository.update_whitelist.assert_awaited_once_with(-100, False)
+    assert localizer.t.call_args.args == ("admin.whitelist.remove.saved.message",)
 
 
 async def test_remove_invalid_id_valueerror(mocker) -> None:
     # int(args[2]) 抛 ValueError
+    bot = _bot()
     localizer = _localizer()
     message = _message("/whitelist remove abc")
 
-    await handler._remove_whitelist(message, ["/whitelist", "remove", "abc"], localizer)
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove", "abc"], localizer)
 
     localizer.t.assert_called_once_with("admin.whitelist.remove.error.invalid_id.message")
+    bot.leave_chat.assert_not_awaited()
 
 
 async def test_remove_missing_arg(mocker) -> None:
     """参数不足（len != 3）→ missing_arg key。"""
+    bot = _bot()
     localizer = _localizer()
     message = _message("/whitelist remove")
 
-    await handler._remove_whitelist(message, ["/whitelist", "remove"], localizer)
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove"], localizer)
 
     localizer.t.assert_called_once_with("admin.whitelist.remove.error.missing_arg.message")
+    bot.leave_chat.assert_not_awaited()
 
 
 async def test_remove_html_title_escaped(mocker) -> None:
-    """remove 成功时 title HTML 字符 → escape 后传入 {group}。"""
+    """remove 成功时 title HTML 字符 → escape 后传入 {group}；退群 best-effort 不影响文案。"""
     g = _group(gid=-100, title="<x>&Co", whitelisted=True)
     mocker.patch.object(handler.GroupRepository, "get_by_id", new=AsyncMock(return_value=g))
     mocker.patch.object(handler.GroupRepository, "update_whitelist", new=AsyncMock())
+    bot = _bot()
     localizer = _localizer()
     message = _message("/whitelist remove -100")
 
-    await handler._remove_whitelist(message, ["/whitelist", "remove", "-100"], localizer)
+    await handler._remove_whitelist(message, bot, ["/whitelist", "remove", "-100"], localizer)
 
     last = localizer.t.call_args
     assert last.kwargs["group"] == "&lt;x&gt;&amp;Co"
+    bot.leave_chat.assert_awaited_once_with(-100)

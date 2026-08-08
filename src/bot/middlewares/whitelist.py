@@ -5,7 +5,13 @@ from typing import TYPE_CHECKING, Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.enums import ChatType
-from aiogram.types import CallbackQuery, ChatMemberUpdated, Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    ChatJoinRequest,
+    ChatMemberUpdated,
+    Message,
+    TelegramObject,
+)
 from loguru import logger
 
 from src.repositories.group_repo import GroupRepository
@@ -45,7 +51,7 @@ class WhitelistMiddleware(BaseMiddleware):
             if event.message and event.message.chat:
                 chat_id = event.message.chat.id
                 chat_type = event.message.chat.type
-        elif isinstance(event, ChatMemberUpdated):
+        elif isinstance(event, (ChatMemberUpdated, ChatJoinRequest)):
             if event.chat:
                 chat_id = event.chat.id
                 chat_type = event.chat.type
@@ -70,7 +76,7 @@ class WhitelistMiddleware(BaseMiddleware):
             group_name = event.chat.title or str(chat_id)
         elif isinstance(event, CallbackQuery) and event.message:
             group_name = event.message.chat.title or str(chat_id)
-        elif isinstance(event, ChatMemberUpdated):
+        elif isinstance(event, (ChatMemberUpdated, ChatJoinRequest)):
             group_name = event.chat.title or str(chat_id)
 
         logger.warning(f"群组不在白名单中，准备退出: {group_name} (ID: {chat_id})")
