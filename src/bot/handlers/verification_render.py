@@ -43,7 +43,7 @@ from src.services.verification import (
 type VerificationFlow = Literal["join", "join_request"]
 type VerificationKeyboard = InlineKeyboardMarkup | ReplyKeyboardMarkup
 
-# QA 选项 token（a/b/c/d 对应按钮位置 0-3，与题库 correct_index 对齐）
+# QA 原始选项 index 0-3 对应 catalog token a-d（option_order 映射用）
 _QA_OPTION_TOKENS: tuple[str, ...] = ("a", "b", "c", "d")
 
 
@@ -194,9 +194,19 @@ def render_verification_challenge(
         )
 
     if isinstance(challenge, QAChallenge):
+        # option_order 必须是 0-3 的完整排列，否则映射无意义（防御性校验）
+        if len(challenge.option_order) != len(_QA_OPTION_TOKENS) or set(
+            challenge.option_order
+        ) != set(range(len(_QA_OPTION_TOKENS))):
+            raise ValueError("QA 验证 option_order 必须是 0-3 的完整排列")
+
         base = f"verification.qa.bank.{challenge.question_id}"
         question = localizer.t(f"{base}.question")
-        options = tuple(localizer.t(f"{base}.option_{token}") for token in _QA_OPTION_TOKENS)
+        # 按打乱顺序取选项：第 i 个按钮显示原始 option_order[i] 对应的文案
+        options = tuple(
+            localizer.t(f"{base}.option_{_QA_OPTION_TOKENS[origin]}")
+            for origin in challenge.option_order
+        )
         body = localizer.t(
             "verification.qa.challenge.body.message",
             username=safe_username,

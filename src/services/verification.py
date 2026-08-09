@@ -133,9 +133,14 @@ class SliderChallenge:
 
 @dataclass(frozen=True, slots=True)
 class QAChallenge:
-    """问答验证：题面 + 选项文案走 catalog（verification.qa.bank.<id>.*）"""
+    """问答验证：题面与选项文案走 catalog（verification.qa.bank.<id>.*）。
+
+    option_order[i] 表示第 i 个按钮显示的原始选项 index（0=a,1=b,2=c,3=d）；
+    打乱后的正确答案位置由 prepare 写入 state_value，render 按此映射取 catalog 文案。
+    """
 
     question_id: str
+    option_order: tuple[int, ...] = (0, 1, 2, 3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,12 +364,20 @@ class VerificationService:
     @staticmethod
     def _prepare_qa_challenge() -> PreparedChallenge:
         """纯生成问答验证挑战。"""
-        # 从题库随机选择一题；题面/选项文案由 render 层用 question_id 按 locale 从 catalog 取
-        # （a/b/c/d 对应按钮 0-3）
         qa = secrets.choice(QA_QUESTIONS)
+
+        # 按钮位置 → 题库原始选项 index，Fisher-Yates 均匀打乱（与 emoji 验证一致），
+        # 避免正确答案固定在某个按钮位置被摸规律
+        option_order = list(range(4))
+        for i in range(len(option_order) - 1, 0, -1):
+            j = secrets.randbelow(i + 1)
+            option_order[i], option_order[j] = option_order[j], option_order[i]
+
+        # 正确答案在打乱后的新按钮位置
+        correct_index = option_order.index(qa.correct_index)
         return PreparedChallenge(
-            challenge=QAChallenge(question_id=qa.id),
-            state_value=f"qa:{qa.correct_index}",
+            challenge=QAChallenge(question_id=qa.id, option_order=tuple(option_order)),
+            state_value=f"qa:{correct_index}",
         )
 
     @staticmethod
