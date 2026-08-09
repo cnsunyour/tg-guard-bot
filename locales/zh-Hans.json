@@ -531,7 +531,7 @@
   "verification.callback.success.toast": "✅ 验证成功！",
   "verification.callback.wrong_answer.toast": "❌ 答案错误",
   "verification.callback.wrong_selection.toast": "❌ 选择错误",
-  "verification.captcha.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内输入图片中的验证码（不区分大小写）：",
+  "verification.captcha.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内点击下方的「✏️ 输入验证码」按钮，然后发送图片中的验证码（不区分大小写）：",
   "verification.captcha.challenge.input.button": "✏️ 输入验证码",
   "verification.captcha.challenge.refresh.button": "🔄 换一张",
   "verification.captcha.generate_failed.toast": "❌ 生成验证码失败",

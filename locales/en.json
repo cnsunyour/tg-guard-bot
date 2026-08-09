@@ -531,7 +531,7 @@
   "verification.callback.success.toast": "✅ Verification successful!",
   "verification.callback.wrong_answer.toast": "❌ Incorrect answer",
   "verification.callback.wrong_selection.toast": "❌ Wrong selection",
-  "verification.captcha.challenge.body.message": "👋 Welcome, {username}!\n\nWithin {timeout} seconds, enter the code from the image (case-insensitive):",
+  "verification.captcha.challenge.body.message": "👋 Welcome, {username}!\n\nWithin {timeout} seconds, tap the \"✏️ Enter code\" button below, then send the code shown in the image (case-insensitive):",
   "verification.captcha.challenge.input.button": "✏️ Enter code",
   "verification.captcha.challenge.refresh.button": "🔄 Refresh",
   "verification.captcha.generate_failed.toast": "❌ Failed to generate captcha",
