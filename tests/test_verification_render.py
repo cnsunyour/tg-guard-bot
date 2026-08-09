@@ -123,7 +123,7 @@ def test_qa_render_shows_question_and_options_from_catalog() -> None:
     rendered = _render(QAChallenge(question_id="months_in_year"))
     assert "一年有多少个月？" in rendered.text
     # option_a/b/c/d 对应按钮 0-3
-    assert [b.text for b in _buttons(rendered)] == ["10个月", "11个月", "12个月", "13个月"]
+    assert [b.text for b in _buttons(rendered)] == ["10个月", "11个月", "13个月", "12个月"]
 
 
 def test_emoji_render_shows_description_from_catalog() -> None:
@@ -231,14 +231,28 @@ def _zh_hans_catalog() -> dict:
     return json.loads(Path("locales/zh-Hans.json").read_text(encoding="utf-8"))
 
 
-def test_qa_bank_keys_complete_in_catalog() -> None:
-    catalog = _zh_hans_catalog()
+@pytest.mark.parametrize("locale", ["zh-Hans", "zh-Hant", "en"])
+def test_qa_bank_keys_complete_in_catalog(locale: str) -> None:
+    catalog = json.loads(Path(f"locales/{locale}.json").read_text(encoding="utf-8"))
     for qa in QA_QUESTIONS:
-        assert f"verification.qa.bank.{qa.id}.question" in catalog, f"QA 缺 question: {qa.id}"
+        assert (
+            f"verification.qa.bank.{qa.id}.question" in catalog
+        ), f"[{locale}] QA 缺 question: {qa.id}"
         for token in ("a", "b", "c", "d"):
             key = f"verification.qa.bank.{qa.id}.option_{token}"
-            assert key in catalog, f"QA 缺 option_{token}: {qa.id}"
-        assert 0 <= qa.correct_index <= 3, f"QA correct_index 越界: {qa.id}"
+            assert key in catalog, f"[{locale}] QA 缺 option_{token}: {qa.id}"
+        assert 0 <= qa.correct_index <= 3, f"[{locale}] QA correct_index 越界: {qa.id}"
+
+
+def test_qa_questions_count_and_distribution() -> None:
+    """QA 题库总数 40、id 唯一、correct_index 四位均衡（各 10，避免答案位置被摸规律）"""
+    assert len(QA_QUESTIONS) == 40
+    ids = [qa.id for qa in QA_QUESTIONS]
+    assert len(ids) == len(set(ids)), f"QA id 重复: {ids}"
+    dist = {0: 0, 1: 0, 2: 0, 3: 0}
+    for qa in QA_QUESTIONS:
+        dist[qa.correct_index] += 1
+    assert dist == {0: 10, 1: 10, 2: 10, 3: 10}, f"correct_index 分布不均: {dist}"
 
 
 def test_emoji_bank_keys_complete_in_catalog() -> None:
@@ -250,15 +264,16 @@ def test_emoji_bank_keys_complete_in_catalog() -> None:
         assert len({mapping.correct, *mapping.decoys}) == 4, f"Emoji 选项重复: {mapping.id}"
 
 
-def test_no_orphan_bank_keys_in_catalog() -> None:
-    """catalog 不应残留题库已删除的 bank key"""
-    catalog = _zh_hans_catalog()
+@pytest.mark.parametrize("locale", ["zh-Hans", "zh-Hant", "en"])
+def test_no_orphan_bank_keys_in_catalog(locale: str) -> None:
+    """catalog 不应残留题库已删除的 bank key（三语同步检查）"""
+    catalog = json.loads(Path(f"locales/{locale}.json").read_text(encoding="utf-8"))
     qa_ids = {qa.id for qa in QA_QUESTIONS}
     emoji_ids = {m.id for m in EMOJI_MAPPINGS}
     for key in catalog:
         if key.startswith("verification.qa.bank."):
             qid = key.split(".")[3]
-            assert qid in qa_ids, f"孤立 QA bank key: {key}"
+            assert qid in qa_ids, f"[{locale}] 孤立 QA bank key: {key}"
         elif key.startswith("verification.emoji.bank."):
             eid = key.split(".")[3]
-            assert eid in emoji_ids, f"孤立 Emoji bank key: {key}"
+            assert eid in emoji_ids, f"[{locale}] 孤立 Emoji bank key: {key}"
