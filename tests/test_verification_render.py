@@ -2,7 +2,7 @@
 
 覆盖 3a-1/3a-2a 核心契约：
 - 8 种 challenge 类型渲染（math 完整 message，其余 body + 共享信封）
-- 题库文案走 catalog（QA option_a/b/c/d 对应按钮 0-3；Emoji description）
+- 题库文案走 catalog（QA option_order 映射原始选项；Emoji description）
 - callback_data 格式与原实现一致
 - escape_html 正确（无双重转义、无遗漏）
 - captcha refresh 独立 body（不含信封）
@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from aiogram.types import BufferedInputFile, ReplyKeyboardMarkup
 
+import src.services.verification as verification_module
 from src.bot.handlers.verification_render import (
     render_captcha_for_refresh,
     render_verification_challenge,
@@ -30,6 +31,7 @@ from src.services.verification import (
     PuzzleChallenge,
     QAChallenge,
     SliderChallenge,
+    VerificationService,
     WebAppChallenge,
 )
 
@@ -120,10 +122,48 @@ def test_slider_render_join_request_envelope() -> None:
 
 
 def test_qa_render_shows_question_and_options_from_catalog() -> None:
-    rendered = _render(QAChallenge(question_id="months_in_year"))
+    """option_order[i]=origin：第 i 个按钮显示原始选项 origin 的文案"""
+    rendered = _render(QAChallenge(question_id="months_in_year", option_order=(3, 0, 2, 1)))
     assert "一年有多少个月？" in rendered.text
-    # option_a/b/c/d 对应按钮 0-3
-    assert [b.text for b in _buttons(rendered)] == ["10个月", "11个月", "13个月", "12个月"]
+    buttons = _buttons(rendered)
+    # origin: a=10个月 b=11个月 c=13个月 d=12个月；option_order (3,0,2,1)
+    assert [b.text for b in buttons] == ["12个月", "10个月", "13个月", "11个月"]
+    assert [b.callback_data for b in buttons] == [
+        f"verify_qa:{_CHAT_ID}:{_USER_ID}:{i}" for i in range(4)
+    ]
+
+
+def test_qa_prepare_shuffles_and_remaps_correct_index(mocker) -> None:
+    """prepare 用 Fisher-Yates 打乱选项，并把原始正确位置重映射到新按钮位置"""
+    qa = QA_QUESTIONS[0]  # months_in_year，原始正确选项 index=3
+    mocker.patch.object(verification_module.secrets, "choice", return_value=qa)
+    randbelow = mocker.patch.object(verification_module.secrets, "randbelow", side_effect=[0, 0, 0])
+
+    prepared = VerificationService._prepare_qa_challenge()
+
+    assert isinstance(prepared.challenge, QAChallenge)
+    assert prepared.challenge.option_order == (1, 2, 3, 0)
+    assert sorted(prepared.challenge.option_order) == [0, 1, 2, 3]
+    assert prepared.state_value == "qa:2"
+    # 新正确位置指向的原始选项 == 题库正确答案
+    correct_position = int(prepared.state_value.partition(":")[2])
+    assert prepared.challenge.option_order[correct_position] == qa.correct_index
+    # Fisher-Yates 从 i=3,2,1 调用 randbelow(4)/(3)/(2)
+    assert [call.args for call in randbelow.call_args_list] == [(4,), (3,), (2,)]
+
+
+@pytest.mark.parametrize(
+    "bad_order",
+    [
+        (0, 1, 2),  # 长度不足
+        (0, 1, 2, 2),  # 重复
+        (0, 1, 2, 4),  # 越界
+    ],
+)
+def test_qa_render_rejects_invalid_option_order(bad_order: tuple[int, ...]) -> None:
+    """option_order 非 0-3 完整排列时 render 应抛 ValueError"""
+    with pytest.raises(ValueError, match="完整排列"):
+        _render(QAChallenge(question_id="months_in_year", option_order=bad_order))
 
 
 def test_emoji_render_shows_description_from_catalog() -> None:
@@ -244,15 +284,13 @@ def test_qa_bank_keys_complete_in_catalog(locale: str) -> None:
         assert 0 <= qa.correct_index <= 3, f"[{locale}] QA correct_index 越界: {qa.id}"
 
 
-def test_qa_questions_count_and_distribution() -> None:
-    """QA 题库总数 40、id 唯一、correct_index 四位均衡（各 10，避免答案位置被摸规律）"""
+def test_qa_questions_integrity() -> None:
+    """QA 题库总数 40、id 唯一、原始 correct_index 覆盖 0-3（运行时打乱后分布不再影响安全）"""
     assert len(QA_QUESTIONS) == 40
     ids = [qa.id for qa in QA_QUESTIONS]
     assert len(ids) == len(set(ids)), f"QA id 重复: {ids}"
-    dist = {0: 0, 1: 0, 2: 0, 3: 0}
-    for qa in QA_QUESTIONS:
-        dist[qa.correct_index] += 1
-    assert dist == {0: 10, 1: 10, 2: 10, 3: 10}, f"correct_index 分布不均: {dist}"
+    indices = {qa.correct_index for qa in QA_QUESTIONS}
+    assert indices == {0, 1, 2, 3}, f"correct_index 未覆盖 0-3: {indices}"
 
 
 def test_emoji_bank_keys_complete_in_catalog() -> None:
