@@ -441,11 +441,18 @@ class VerificationService:
             if wrong != correct_answer and wrong not in wrong_answers:
                 wrong_answers.append(wrong)
 
+        # Fisher-Yates 打乱三个真实选项，避免正确答案固定在中间位置被摸规律
+        # （对标 emoji/math 验证；callback 带值、verify 比较值，打乱不影响校验）
+        choices = [wrong_answers[0], correct_answer, wrong_answers[1]]
+        for i in range(len(choices) - 1, 0, -1):
+            j = secrets.randbelow(i + 1)
+            choices[i], choices[j] = choices[j], choices[i]
+
         # 选项顺序即按钮顺序（第二行三个真实选项）
         return PreparedChallenge(
             challenge=HoneypotChallenge(
                 expression=f"{num1} + {num2}",
-                choices=(wrong_answers[0], correct_answer, wrong_answers[1]),
+                choices=tuple(choices),
                 decoy=decoy,
             ),
             state_value=f"honeypot:{correct_answer}",

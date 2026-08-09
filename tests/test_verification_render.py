@@ -205,6 +205,29 @@ def test_captcha_refresh_render_body_only_without_envelope() -> None:
 # ===== honeypot =====
 
 
+def test_honeypot_prepare_shuffles_answer_choices(mocker) -> None:
+    """prepare 用 Fisher-Yates 打乱真实答案选项，正确值与诱饵协议保持不变"""
+    mocker.patch.object(verification_module.secrets, "choice", return_value="skip")
+    randbelow = mocker.patch.object(
+        verification_module.secrets, "randbelow", side_effect=[2, 4, 1, 3, 0, 0]
+    )
+
+    prepared = VerificationService._prepare_honeypot_challenge()
+
+    assert isinstance(prepared.challenge, HoneypotChallenge)
+    assert prepared.challenge.expression == "3 + 5"
+    assert prepared.challenge.decoy == "skip"
+    # [2,8,4] 经 j=0/0 的 Fisher-Yates 打乱成 (8,4,2)
+    assert prepared.challenge.choices == (8, 4, 2)
+    assert set(prepared.challenge.choices) == {2, 4, 8}
+    assert prepared.state_value == "honeypot:8"
+    # 正确答案在打乱后的选项中唯一存在
+    correct_answer = int(prepared.state_value.partition(":")[2])
+    assert prepared.challenge.choices.count(correct_answer) == 1
+    # 最后两次是 Fisher-Yates 的 randbelow(3)/(2)
+    assert [call.args for call in randbelow.call_args_list[-2:]] == [(3,), (2,)]
+
+
 @pytest.mark.parametrize(
     ("decoy", "expected_text"),
     [
