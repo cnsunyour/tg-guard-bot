@@ -69,10 +69,10 @@
   - **Unicode 混淆检测**：识别繁简体、同义词等变体
   - **置信度分级**：CRITICAL(0.95) / HIGH(0.88) / MEDIUM(0.80) / LOW(0.70)
   - **自定义规则**：支持 JSON 配置文件扩展规则
-  - 关键词黑名单（置信度 0.9）
-  - URL/链接检测（置信度 0.85）
-  - 联系方式检测（置信度 0.8）
-  - 重复字符/Emoji刷屏（置信度 0.65-0.7）
+  - **补充特征检测**（规则匹配之外的特征；各项独立赋分，最终置信度需达到 `SPAM_THRESHOLD_RULE` 才判垃圾）：
+    - 可疑 URL/链接检测（Telegram 邀请链接、可疑域名、短链接；置信度 0.8）
+    - 联系方式检测（微信/QQ/电话，置信度 0.8）
+    - 重复字符（置信度 0.7）/ Emoji 刷屏（置信度 0.65）/ @username 提及（近似检测，置信度 0.6）
 - **Stage 2: ML 分类器** - TF-IDF + SVM 捕获变体（~50-100ms）
   - 中文分词（jieba）
   - TF-IDF特征提取（5000维）
@@ -92,13 +92,13 @@
   - 禁用时：新用户也可自由发送非文本消息
 - **活跃度规则**：
   - 普通文本消息：+1 活跃度
-  - 非文本消息（图片/贴纸等）：不扣分
-  - 外部转发/带链接消息：按”特殊非文本”处理
-  - 每日无消息自动衰减 -1（活跃度 < 10 时）
+  - 非文本消息（图片/贴纸等）：不扣分（扣减值为 0）
+  - 来自外部群组/频道的转发、带链接消息：按"特殊非文本"处理（受非文本门槛约束，同样不扣分）
+  - 每日无消息懒惰衰减 -1（读取活跃度时按最后发言日期计算，非后台定时；仅当 `ACTIVITY_DECAY_FLOOR` < 活跃度 < 10 时；活跃度 ≥ 10 不衰减，≤ 衰减下限保持原值）
 - **辅助功能**（始终生效）：
-  - **置信度修正**：活跃度越高，垃圾检测误判率越低
-    - 对数公式：reduction = 0.05 × log2(activity / 10)
-    - 最大降低 15% 置信度
+  - **置信度修正**：活跃度 ≥ 10 时降低垃圾检测置信度（活跃度越高，误判率越低）
+    - activity = 10 → 降低 0.01；activity > 10 → 0.05 × log2(activity / 10)
+    - 默认最多降低 0.15 个置信度点（由 `ACTIVITY_MAX_CONFIDENCE_REDUCTION` 控制）
   - **检测豁免**：高活跃度用户可跳过垃圾检测（阈值支持全局/群组配置）
   - **宵禁门槛**：宵禁期间根据活跃度控制发言权限
 
@@ -122,6 +122,7 @@
   - 结果缓存（默认 1h），与 CAS 共用统一拦截中间件
 
 #### 其他功能
+- **管理员确认模式**（`/antispam` 配置，默认启用）- 检测到垃圾后不立即处罚，而是发送确认提示（封禁/非垃圾/忽略），管理员确认后执行；未处理到期自动清理不处罚
 - **编辑消息检测** - 应对先发普通消息后编辑成垃圾的手段
 - **AI Vision 多模态检测** - 图片/贴纸直接送 AI 判垃圾（独立配置，主备双服务商）
   - 文本和图片可使用不同模型（成本优化）
@@ -153,7 +154,7 @@
 | 组件 | 版本 | 说明 |
 |------|------|------|
 | Python | 3.12+ | 异步编程 |
-| aiogram | 3.6+ | Telegram Bot 框架 |
+| aiogram | 3.25+ | Telegram Bot 框架 |
 | Telethon | 1.42+ | Telegram Client API（用于大群成员管理） |
 | PostgreSQL | 16 | 主数据库 |
 | Redis | 7 | 缓存和队列 |
@@ -503,7 +504,8 @@ tg-guard-bot/
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `ACTIVITY_MAX_CONFIDENCE_REDUCTION` | 活跃度最大置信度减少值 | 0.15 | ❌ |
-| `ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD` | 活跃度跳过垃圾检测阈值（0=使用群组配置） | 0 | ❌ |
+| `ACTIVITY_SKIP_SPAM_CHECK_THRESHOLD` | 活跃度跳过垃圾检测全局阈值（>0=全局统一，=0=使用群组配置，<0=全局禁用） | 0 | ❌ |
+| `ACTIVITY_DECAY_FLOOR` | 活跃度衰减下限（推荐 1-9；曾经发过言的用户最多衰减到此值，使其免受非文本拦截误伤；设为 0 可衰减到 0，≥10 则等效永不衰减） | 1 | ❌ |
 
 > 说明：群组可通过 `/activity` 命令控制是否限制非文本消息，活跃度记录、置信度修正、检测豁免功能始终工作。
 
@@ -595,23 +597,21 @@ AI_SPAM_VISION_ENABLED=true
 AI_SPAM_VISION_MODEL=gpt-4o-mini
 ```
 
-**完整配置**（主备双服务商）：
+**常用配置示例**（主备双服务商；完整配置见 [.env.example](.env.example)）：
 ```env
 # Vision 主服务商
 AI_SPAM_VISION_ENABLED=true
 AI_SPAM_VISION_API_KEY=sk-vision-main-xxx  # 留空回退 AI_SPAM_API_KEY
 AI_SPAM_VISION_API_BASE=https://api.openai.com/v1  # 留空回退 AI_SPAM_API_BASE
 AI_SPAM_VISION_MODEL=gpt-4o-mini
-AI_SPAM_VISION_DETAIL=low  # OpenAI image_url.detail: low/high/auto
-AI_SPAM_VISION_TIMEOUT=30
+AI_SPAM_VISION_DETAIL=low  # OpenAI image_url.detail: low/high/auto（主备共用）
+AI_SPAM_VISION_TIMEOUT=30  # 主备共用
 
-# Vision 备服务商
+# Vision 备服务商（detail/timeout/threshold 等共用主服务商的 Vision 全局配置）
 AI_SPAM_VISION_BACKUP_ENABLED=true
 AI_SPAM_VISION_BACKUP_API_KEY=  # 留空回退 AI_SPAM_BACKUP_API_KEY
 AI_SPAM_VISION_BACKUP_API_BASE=  # 留空回退 AI_SPAM_BACKUP_API_BASE
 AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
-AI_SPAM_VISION_BACKUP_DETAIL=low
-AI_SPAM_VISION_BACKUP_TIMEOUT=30
 ```
 
 > **成本优化提示**：文本消息占比 >95%，将文本检测配置为便宜模型（如 deepseek-chat），图片检测使用多模态模型，可节省 90%+ API 成本。
@@ -655,7 +655,9 @@ AI_SPAM_VISION_BACKUP_TIMEOUT=30
 - [x] **v1.1.0**: 上下文一致性检测（降低误判率）
 - [x] **v1.2.0**: 高级正则规则引擎 + @username 解析
 - [x] **v1.5.0**: 删除 OCR，重构 Vision 为独立配置（主备双服务商）
+- [x] **v1.6.x**: 入群短窗口消息防护中间件、入群 in-flight 互斥锁（AI 慢请求去重）、举报按钮权限加固、群消息管理员名称完整显示、验证流程网络重试
 - [x] **多语言 i18n**: zh-Hans/zh-Hant/en 全链路本地化（catalog + 稳定 code 持久化 + 命令菜单 locale + WebApp 页面）
+- [x] **v1.7.x**: 四管理员命令支持带参直接设置、`/report` 举报引用预览、`/lang` 参数直接切换、全项目安全审查加固（0 Critical/0 High）
 
 ## 🤝 贡献
 
