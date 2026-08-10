@@ -102,7 +102,7 @@ class RegexRuleEngine:
     MAX_RULE_COUNT = 200  # 最多 200 条规则
     MAX_PATTERN_LENGTH = 500  # 单条 pattern 最大 500 字符
 
-    # 默认规则集（从用户提供的 10 条规则转换）
+    # 默认规则集（与 config/spam_rules.json 保持同步；文件不存在/无效时回退到此）
     DEFAULT_RULES: ClassVar[list[dict]] = [
         # 🔴 极高危险等级
         {
@@ -171,6 +171,16 @@ class RegexRuleEngine:
             "description": "财富密码诈骗",
             "enabled": True,
         },
+        {
+            "id": "recruit_quick_money",
+            "pattern": r"(?=.*[带帶])(?=.*缺[钱錢])(?=.*兄弟)(?=.*(打底|[进進]群)).{1,120}",
+            "prefilter": (("带", "帶"), ("缺钱", "缺錢"), ("兄弟",), ("打底", "进群", "進群")),
+            "risk_level": "high",
+            "category": "scam",
+            "description": "拉人头暴富招募诈骗",
+            "enabled": True,
+            "max_match_length": 120,
+        },
         # 🟡 中危险等级
         {
             "id": "private_chat_service",
@@ -229,19 +239,33 @@ class RegexRuleEngine:
             "description": "Telegram 垃圾推广",
             "enabled": True,
         },
+        {
+            "id": "wechat_spam",
+            "pattern": r"加.{0,5}[我莪]?.{0,5}[Vv微薇].[0,5]信?.[0,5][a-zA-Z_][a-zA-Z0-9_-]{5,19}+",
+            "risk_level": "low",
+            "category": "spam",
+            "description": "微信垃圾推广",
+            "enabled": True,
+        },
     ]
 
     def __init__(
         self,
         rules: list[SpamRule] | None = None,
         config_path: str | None = None,
+        max_text_length: int = 500,
     ):
         """初始化正则规则引擎
 
         Args:
             rules: 自定义规则列表（优先级高于配置文件）
             config_path: 规则配置文件路径（JSON 格式）
+            max_text_length: 单次检测截断的文本长度上限（防超长文本拖慢正则匹配）
         """
+        if max_text_length < 1:
+            raise ValueError("max_text_length 必须大于等于 1")
+        self.max_text_length = max_text_length
+
         self._compile_cache: dict[str, re.Pattern] = {}
 
         # 加载规则（优先使用传入的规则）
@@ -271,8 +295,8 @@ class RegexRuleEngine:
         Returns:
             (是否命中, 命中的规则, 匹配到的文本片段)
         """
-        # 性能优化：先截断文本
-        text = text[:500]
+        # 性能优化：先截断文本（仅限高级正则规则集；基础检测仍用完整文本）
+        text = text[: self.max_text_length]
         # 预筛使用小写文本，兼容英文关键词（如 BTC/USDT）的大小写无关比对
         text_lower = text.lower()
 
@@ -449,6 +473,8 @@ class RuleEngine:
         whitelist_domains: list[str] | None = None,
         custom_rules: list[SpamRule] | None = None,
         regex_rules_config_path: str | None = None,
+        regex_rules_enabled: bool = True,
+        regex_rules_max_text_length: int = 500,
     ):
         """初始化规则引擎
 
@@ -456,13 +482,18 @@ class RuleEngine:
             whitelist_domains: 白名单域名列表
             custom_rules: 自定义正则规则（从配置文件加载）
             regex_rules_config_path: 正则规则配置文件路径
+            regex_rules_enabled: 是否启用高级正则规则集（关闭后仅跳过 RegexRuleEngine，
+                URL/联系方式等基础特征检测仍运行）
+            regex_rules_max_text_length: 高级正则规则检测的文本截断上限
         """
         self.whitelist_domains = whitelist_domains or []
+        self.regex_rules_enabled = regex_rules_enabled
 
         # 正则规则引擎（替代原有的简单关键词匹配）
         self.regex_engine = RegexRuleEngine(
             rules=custom_rules,
             config_path=regex_rules_config_path,
+            max_text_length=regex_rules_max_text_length,
         )
 
     def analyze(self, text: str) -> AnalysisResult:
@@ -478,8 +509,11 @@ class RuleEngine:
         if not text:
             return result
 
-        # 正则规则检测（替代原有的 check_keywords）
-        is_match, rule, matched_text = self.regex_engine.check(text)
+        # 高级正则规则检测（可通过 regex_rules_enabled 关闭；关闭后基础特征检测仍运行）
+        if self.regex_rules_enabled:
+            is_match, rule, matched_text = self.regex_engine.check(text)
+        else:
+            is_match, rule, matched_text = False, None, None
         if is_match and rule:
             result["confidence"] = rule.confidence
             result["reasons"].append(f"{ReasonCode.rule_match}:rule_id={rule.id}")
@@ -705,8 +739,12 @@ _rule_engine: RuleEngine | None = None
 
 
 def get_rule_engine() -> RuleEngine:
-    """获取全局规则引擎实例"""
+    """获取全局规则引擎实例（首次创建时从 settings 注入正则规则配置）"""
     global _rule_engine
     if _rule_engine is None:
-        _rule_engine = RuleEngine()
+        _rule_engine = RuleEngine(
+            regex_rules_config_path=settings.regex_rules_config_path,
+            regex_rules_enabled=settings.regex_rules_enabled,
+            regex_rules_max_text_length=settings.regex_rules_max_text_length,
+        )
     return _rule_engine

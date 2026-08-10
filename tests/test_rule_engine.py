@@ -43,6 +43,120 @@ def test_regex_rule_engine():
 
 
 @pytest.mark.unit
+def test_rule_engine_can_disable_advanced_regex_rules(mocker):
+    """regex_rules_enabled=False 时跳过 RegexRuleEngine，但保留 URL/联系方式等基础检测"""
+    from src.ml.rule_engine import ReasonCode, RuleEngine, SpamRiskLevel, SpamRule
+
+    rule = SpamRule(
+        id="disabled_rule",
+        pattern=r"blocked",
+        risk_level=SpamRiskLevel.CRITICAL,
+        category="test",
+        description="禁用开关测试",
+    )
+    engine = RuleEngine(custom_rules=[rule], regex_rules_enabled=False)
+    regex_check = mocker.spy(engine.regex_engine, "check")
+
+    # 同时含正则规则目标（blocked）和基础检测目标（短链接），验证只有后者命中
+    result = engine.analyze("blocked http://bit.ly/promo")
+
+    regex_check.assert_not_called()
+    assert ReasonCode.short_link in result["reasons"]
+    assert not any(r.startswith(f"{ReasonCode.rule_match}:") for r in result["reasons"])
+
+
+@pytest.mark.unit
+def test_regex_rule_engine_respects_max_text_length():
+    """max_text_length 截断正则输入；非法值（<1）构造时抛 ValueError"""
+    from src.ml.rule_engine import RegexRuleEngine, SpamRiskLevel, SpamRule
+
+    rule = SpamRule(
+        id="length_rule",
+        pattern=r"marker",
+        risk_level=SpamRiskLevel.HIGH,
+        category="test",
+        description="长度限制测试",
+    )
+    engine = RegexRuleEngine([rule], max_text_length=6)
+
+    assert engine.check("marker")[0]  # 在截断范围内
+    assert not engine.check("123456marker")[0]  # marker 被截断掉
+
+    with pytest.raises(ValueError, match="max_text_length"):
+        RegexRuleEngine([rule], max_text_length=0)
+
+
+@pytest.mark.unit
+def test_get_rule_engine_wires_regex_settings(monkeypatch, mocker):
+    """get_rule_engine 从 settings 注入三个正则规则配置，且保持单例"""
+    from src.ml import rule_engine
+
+    configured_engine = mocker.Mock()
+    constructor = mocker.patch.object(rule_engine, "RuleEngine", return_value=configured_engine)
+    # 重置全局单例，使下次 get_rule_engine 触发构造
+    monkeypatch.setattr(rule_engine, "_rule_engine", None)
+    monkeypatch.setattr(rule_engine.settings, "regex_rules_enabled", False)
+    monkeypatch.setattr(rule_engine.settings, "regex_rules_config_path", "config/custom.json")
+    monkeypatch.setattr(rule_engine.settings, "regex_rules_max_text_length", 321)
+
+    first = rule_engine.get_rule_engine()
+    second = rule_engine.get_rule_engine()
+
+    assert first is configured_engine
+    assert second is configured_engine  # 单例：第二次不重新构造
+    constructor.assert_called_once_with(
+        regex_rules_config_path="config/custom.json",
+        regex_rules_enabled=False,
+        regex_rules_max_text_length=321,
+    )
+
+
+@pytest.mark.unit
+def test_regex_truncation_keeps_basic_detection_on_full_text():
+    """max_text_length 只截断高级正则输入；URL/联系方式等基础检测仍扫描完整文本"""
+    from src.ml.rule_engine import ReasonCode, RuleEngine, SpamRiskLevel, SpamRule
+
+    # 正则规则目标 marker 放在截断点之后；短链接也在截断点之后
+    rule = SpamRule(
+        id="marker_rule",
+        pattern=r"marker",
+        risk_level=SpamRiskLevel.CRITICAL,
+        category="test",
+        description="截断边界测试",
+    )
+    engine = RuleEngine(custom_rules=[rule], regex_rules_max_text_length=10)
+    # 前 10 字符为填充，marker 和短链接都在截断点之后
+    text = "0123456789marker http://bit.ly/promo"
+    result = engine.analyze(text)
+
+    # 正则规则被截断，不命中（reasons 中无 rule_match）
+    assert not any(r.startswith(f"{ReasonCode.rule_match}:") for r in result["reasons"])
+    # 基础检测仍扫描完整文本，截断点之后的短链接被捕获
+    assert ReasonCode.short_link in result["reasons"]
+
+
+@pytest.mark.unit
+def test_rule_engine_disabled_regex_not_spam():
+    """regex_rules_enabled=False 时，仅含正则规则目标的文本判为非垃圾"""
+    from src.ml.rule_engine import RuleEngine, SpamRiskLevel, SpamRule
+
+    rule = SpamRule(
+        id="only_regex_target",
+        pattern=r"独家致富密码",
+        risk_level=SpamRiskLevel.CRITICAL,
+        category="test",
+        description="纯正则目标",
+    )
+    engine = RuleEngine(custom_rules=[rule], regex_rules_enabled=False)
+
+    # 文本只含正则规则目标，无任何基础检测特征（无 URL/联系方式/重复字符等）
+    result = engine.analyze("独家致富密码")
+    assert not result["is_spam"]
+    assert result["confidence"] == 0.0
+    assert result["reasons"] == []
+
+
+@pytest.mark.unit
 def test_rule_engine_with_regex_rules():
     """测试规则引擎集成正则规则"""
     from src.ml.rule_engine import RuleEngine

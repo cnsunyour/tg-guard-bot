@@ -523,9 +523,9 @@ tg-guard-bot/
 | `SPAM_THRESHOLD_ML` | ML 分类器阈值 | 0.7 | ❌ |
 | `SPAM_THRESHOLD_EMBEDDING` | Embedding 阈值 | 0.75 | ❌ |
 | `SPAM_MIN_TEXT_LENGTH` | 最小标准化文本长度（低于此长度跳过检测，1个汉字/全角字符=1标准长度，2个英文字符=1标准长度） | 10 | ❌ |
-| `REGEX_RULES_ENABLED` | 启用高级正则规则引擎 | true | ❌ |
-| `REGEX_RULES_CONFIG_PATH` | 自定义规则配置文件路径 | config/spam_rules.json | ❌ |
-| `REGEX_RULES_MAX_TEXT_LENGTH` | 正则规则检测的最大文本长度 | 500 | ❌ |
+| `REGEX_RULES_ENABLED` | 是否启用高级正则规则集（关闭后仅跳过 RegexRuleEngine，URL/联系方式等基础检测仍运行） | true | ❌ |
+| `REGEX_RULES_CONFIG_PATH` | 自定义规则 JSON 文件路径（不存在/无效时回退内置默认规则） | config/spam_rules.json | ❌ |
+| `REGEX_RULES_MAX_TEXT_LENGTH` | 高级正则规则检测的文本截断长度（基础检测仍用完整文本） | 500 | ❌ |
 
 > 说明：CAS 检查采用”失败放行”降级策略；Redis 不可用时会直连 API（仍失败放行），避免误伤正常用户。
 

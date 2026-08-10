@@ -80,7 +80,11 @@ class Settings(BaseSettings):
     regex_rules_config_path: str = Field(
         default="config/spam_rules.json", description="自定义规则配置文件路径"
     )
-    regex_rules_max_text_length: int = Field(default=500, description="正则规则检测的最大文本长度")
+    regex_rules_max_text_length: int = Field(
+        default=500,
+        ge=1,
+        description="高级正则规则检测的最大文本长度（仅截断 RegexRuleEngine 输入；URL/联系方式等基础检测仍用完整文本）",
+    )
 
     # AI 垃圾检测配置（OpenAI 兼容 API）
     ai_spam_enabled: bool = Field(default=False, description="是否启用 AI API 垃圾检测")

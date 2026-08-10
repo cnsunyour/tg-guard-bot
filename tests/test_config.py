@@ -92,6 +92,30 @@ def test_config_default_values(monkeypatch):
     assert settings.verification_timeout == 60
 
 
+@pytest.mark.unit
+def test_config_regex_rule_settings_from_env(monkeypatch):
+    """REGEX_RULES_* 环境变量正确解析；MAX_TEXT_LENGTH 拒绝 <1 的非法值"""
+    monkeypatch.setenv("BOT_TOKEN", "123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+    monkeypatch.setenv("MODEL_SIGNATURE_KEY", "a" * 64)
+    monkeypatch.setenv("DEBUG", "true")  # 跳过 db/redis 密码校验
+    monkeypatch.setenv("REGEX_RULES_ENABLED", "false")
+    monkeypatch.setenv("REGEX_RULES_CONFIG_PATH", "config/custom_rules.json")
+    monkeypatch.setenv("REGEX_RULES_MAX_TEXT_LENGTH", "750")
+
+    from src.core.config import Settings
+
+    settings = Settings()
+
+    assert settings.regex_rules_enabled is False
+    assert settings.regex_rules_config_path == "config/custom_rules.json"
+    assert settings.regex_rules_max_text_length == 750
+
+    # ge=1 校验：0 应被拒绝
+    monkeypatch.setenv("REGEX_RULES_MAX_TEXT_LENGTH", "0")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 # ===== M4: CAPTCHA_SIGNATURE_KEY 条件校验（配 webapp_url 时强制）=====
 
 
