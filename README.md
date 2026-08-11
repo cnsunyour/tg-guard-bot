@@ -82,7 +82,7 @@
   - 与垃圾原型余弦相似度匹配
 
 #### AI上下文检测（可选）
-- **OpenAI兼容API** - 支持 GPT-4o-mini、DeepSeek、Moonshot 等
+- **多协议 AI API** - 支持 OpenAI Chat/Responses 与 Anthropic Messages 协议（GPT-4o-mini、DeepSeek、Moonshot、Claude 等），主备可异构
 - **上下文理解** - 结合群组对话上下文判断语境
 - **自动训练** - AI检测结果自动入库作为训练样本
 
@@ -591,6 +591,9 @@ AI_SPAM_ENABLED=true
 AI_SPAM_API_KEY=sk-xxx
 AI_SPAM_API_BASE=https://api.openai.com/v1
 AI_SPAM_MODEL=deepseek-chat
+# 协议：openai_chat（默认）/ openai_responses / anthropic_messages（主备可异构）
+# 结构化输出策略与 Anthropic 承载模式详见 .env.example（默认 auto，向后兼容）
+# AI_SPAM_PROTOCOL=openai_chat
 
 # 图片检测：多模态模型（key/base 留空自动回退上面的配置）
 AI_SPAM_VISION_ENABLED=true
