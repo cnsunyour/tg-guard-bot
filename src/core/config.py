@@ -94,9 +94,26 @@ class Settings(BaseSettings):
         description="API Base URL（支持 OpenRouter、DeepSeek、Moonshot 等）",
     )
     ai_spam_model: str = Field(default="gpt-4o-mini", description="模型名称")
+    ai_spam_protocol: str = Field(
+        default="openai_chat",
+        description="文本主服务商 HTTP 协议：openai_chat / openai_responses / anthropic_messages",
+    )
+    ai_spam_structured_output_mode: str = Field(
+        default="auto",
+        description="文本主结构化输出策略：auto（官方 OpenAI→strict，未知兼容接口→legacy）/ strict / legacy",
+    )
+    ai_spam_anthropic_output_mode: str = Field(
+        default="auto",
+        description="文本主 Anthropic 结构化承载：auto（已知 4.5+→native，未知→tool）/ native / tool",
+    )
     ai_spam_threshold: float = Field(default=0.8, description="置信度阈值")
     ai_spam_timeout: int = Field(default=10, description="超时时间（秒）")
     ai_spam_max_retries: int = Field(default=2, description="最大重试次数")
+    ai_spam_max_output_tokens: int = Field(
+        default=512,
+        ge=1,
+        description="文本模型最大输出 token 数（Anthropic max_tokens 必填；Responses max_output_tokens）",
+    )
     ai_spam_client_idle_rebuild_minutes: int = Field(
         default=60, ge=1, description="AI HTTP 客户端空闲重建阈值（分钟）"
     )
@@ -124,6 +141,16 @@ class Settings(BaseSettings):
         description="备份 API Base URL（支持不同提供商）",
     )
     ai_spam_backup_model: str = Field(default="gpt-4o-mini", description="备份模型名称")
+    ai_spam_backup_protocol: str = Field(
+        default="openai_chat",
+        description="文本备服务商 HTTP 协议：openai_chat / openai_responses / anthropic_messages",
+    )
+    ai_spam_backup_structured_output_mode: str = Field(
+        default="auto", description="文本备结构化输出策略：auto / strict / legacy"
+    )
+    ai_spam_backup_anthropic_output_mode: str = Field(
+        default="auto", description="文本备 Anthropic 结构化承载：auto / native / tool"
+    )
     ai_spam_backup_threshold: float = Field(default=0.8, description="备份置信度阈值")
     ai_spam_backup_timeout: int = Field(default=10, description="备份超时时间（秒）")
     ai_spam_backup_max_retries: int = Field(default=2, description="备份最大重试次数")
@@ -148,13 +175,28 @@ class Settings(BaseSettings):
         ge=1,
         description="Vision 请求超时时间（秒），通常比文本检测更长",
     )
+    ai_spam_vision_max_output_tokens: int = Field(
+        default=1024,
+        ge=1,
+        description="Vision 模型最大输出 token 数（为 OCR extracted_text 预留空间）",
+    )
 
-    # ---- Vision 主服务商（key/base 留空回退文本主配置 ai_spam_*；model 始终独立）----
+    # ---- Vision 主服务商（key/base/protocol/mode 留空回退文本主配置；model 始终独立）----
     ai_spam_vision_api_key: str = Field(
         default="", description="Vision 主服务商 API Key（留空回退 AI_SPAM_API_KEY）"
     )
     ai_spam_vision_api_base: str = Field(
         default="", description="Vision 主服务商 API Base（留空回退 AI_SPAM_API_BASE）"
+    )
+    ai_spam_vision_protocol: str = Field(
+        default="", description="Vision 主协议（留空回退 AI_SPAM_PROTOCOL）"
+    )
+    ai_spam_vision_structured_output_mode: str = Field(
+        default="", description="Vision 主结构化输出策略（留空回退 AI_SPAM_STRUCTURED_OUTPUT_MODE）"
+    )
+    ai_spam_vision_anthropic_output_mode: str = Field(
+        default="",
+        description="Vision 主 Anthropic 承载方式（留空回退 AI_SPAM_ANTHROPIC_OUTPUT_MODE）",
     )
     ai_spam_vision_model: str = Field(
         default="gpt-4o-mini",
@@ -172,6 +214,17 @@ class Settings(BaseSettings):
     )
     ai_spam_vision_backup_api_base: str = Field(
         default="", description="Vision 备服务商 API Base（留空回退 AI_SPAM_BACKUP_API_BASE）"
+    )
+    ai_spam_vision_backup_protocol: str = Field(
+        default="", description="Vision 备协议（留空回退 AI_SPAM_BACKUP_PROTOCOL）"
+    )
+    ai_spam_vision_backup_structured_output_mode: str = Field(
+        default="",
+        description="Vision 备结构化输出策略（留空回退 AI_SPAM_BACKUP_STRUCTURED_OUTPUT_MODE）",
+    )
+    ai_spam_vision_backup_anthropic_output_mode: str = Field(
+        default="",
+        description="Vision 备 Anthropic 承载方式（留空回退 AI_SPAM_BACKUP_ANTHROPIC_OUTPUT_MODE）",
     )
     ai_spam_vision_backup_model: str = Field(
         default="gpt-4o-mini",
@@ -373,6 +426,88 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return v
 
+    @field_validator("ai_spam_protocol", "ai_spam_backup_protocol", mode="after")
+    @classmethod
+    def validate_ai_protocol(cls, v: str) -> str:
+        """校验文本 provider 的 HTTP 协议。"""
+        normalized = v.strip().lower()
+        allowed = {"openai_chat", "openai_responses", "anthropic_messages"}
+        if normalized not in allowed:
+            raise ValueError(f"AI protocol 必须是 {sorted(allowed)} 之一，当前: {v}")
+        return normalized
+
+    @field_validator("ai_spam_vision_protocol", "ai_spam_vision_backup_protocol", mode="after")
+    @classmethod
+    def validate_optional_ai_protocol(cls, v: str) -> str:
+        """校验可继承的 Vision provider 协议（允许留空回退）。"""
+        normalized = v.strip().lower()
+        if not normalized:
+            return ""
+        allowed = {"openai_chat", "openai_responses", "anthropic_messages"}
+        if normalized not in allowed:
+            raise ValueError(f"Vision AI protocol 必须是 {sorted(allowed)} 之一，当前: {v}")
+        return normalized
+
+    @field_validator(
+        "ai_spam_structured_output_mode", "ai_spam_backup_structured_output_mode", mode="after"
+    )
+    @classmethod
+    def validate_structured_output_mode(cls, v: str) -> str:
+        """校验文本 provider 的结构化输出策略。"""
+        normalized = v.strip().lower()
+        allowed = {"auto", "strict", "legacy"}
+        if normalized not in allowed:
+            raise ValueError(f"structured_output_mode 必须是 {sorted(allowed)} 之一，当前: {v}")
+        return normalized
+
+    @field_validator(
+        "ai_spam_vision_structured_output_mode",
+        "ai_spam_vision_backup_structured_output_mode",
+        mode="after",
+    )
+    @classmethod
+    def validate_optional_structured_output_mode(cls, v: str) -> str:
+        """校验可继承的 Vision 结构化输出策略（允许留空回退）。"""
+        normalized = v.strip().lower()
+        if not normalized:
+            return ""
+        allowed = {"auto", "strict", "legacy"}
+        if normalized not in allowed:
+            raise ValueError(
+                f"Vision structured_output_mode 必须是 {sorted(allowed)} 之一，当前: {v}"
+            )
+        return normalized
+
+    @field_validator(
+        "ai_spam_anthropic_output_mode", "ai_spam_backup_anthropic_output_mode", mode="after"
+    )
+    @classmethod
+    def validate_anthropic_output_mode(cls, v: str) -> str:
+        """校验文本 provider 的 Anthropic 结构化承载方式。"""
+        normalized = v.strip().lower()
+        allowed = {"auto", "native", "tool"}
+        if normalized not in allowed:
+            raise ValueError(f"anthropic_output_mode 必须是 {sorted(allowed)} 之一，当前: {v}")
+        return normalized
+
+    @field_validator(
+        "ai_spam_vision_anthropic_output_mode",
+        "ai_spam_vision_backup_anthropic_output_mode",
+        mode="after",
+    )
+    @classmethod
+    def validate_optional_anthropic_output_mode(cls, v: str) -> str:
+        """校验可继承的 Vision Anthropic 承载方式（允许留空回退）。"""
+        normalized = v.strip().lower()
+        if not normalized:
+            return ""
+        allowed = {"auto", "native", "tool"}
+        if normalized not in allowed:
+            raise ValueError(
+                f"Vision anthropic_output_mode 必须是 {sorted(allowed)} 之一，当前: {v}"
+            )
+        return normalized
+
     @field_validator("ai_spam_vision_detail", mode="after")
     @classmethod
     def validate_vision_detail(cls, v: str) -> str:
@@ -407,9 +542,7 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if (
-                self.db_password == "postgres"
-            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
+            if self.db_password == "postgres":  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"
@@ -460,6 +593,42 @@ class Settings(BaseSettings):
         if self.redis_password:
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def vision_protocol_effective(self) -> str:
+        """Vision 主协议：留空回退文本主协议"""
+        return self.ai_spam_vision_protocol or self.ai_spam_protocol
+
+    @property
+    def vision_backup_protocol_effective(self) -> str:
+        """Vision 备协议：留空回退文本备协议"""
+        return self.ai_spam_vision_backup_protocol or self.ai_spam_backup_protocol
+
+    @property
+    def vision_structured_output_mode_effective(self) -> str:
+        """Vision 主结构化输出策略：留空回退文本主策略"""
+        return self.ai_spam_vision_structured_output_mode or self.ai_spam_structured_output_mode
+
+    @property
+    def vision_backup_structured_output_mode_effective(self) -> str:
+        """Vision 备结构化输出策略：留空回退文本备策略"""
+        return (
+            self.ai_spam_vision_backup_structured_output_mode
+            or self.ai_spam_backup_structured_output_mode
+        )
+
+    @property
+    def vision_anthropic_output_mode_effective(self) -> str:
+        """Vision 主 Anthropic 承载方式：留空回退文本主模式"""
+        return self.ai_spam_vision_anthropic_output_mode or self.ai_spam_anthropic_output_mode
+
+    @property
+    def vision_backup_anthropic_output_mode_effective(self) -> str:
+        """Vision 备 Anthropic 承载方式：留空回退文本备模式"""
+        return (
+            self.ai_spam_vision_backup_anthropic_output_mode
+            or self.ai_spam_backup_anthropic_output_mode
+        )
 
     @property
     def vision_api_key_effective(self) -> str:

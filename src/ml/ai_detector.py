@@ -11,7 +11,6 @@
 
 import asyncio
 import base64
-import json
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -25,6 +24,13 @@ from loguru import logger
 
 from src.core.config import settings
 from src.core.http_errors import format_httpx_error
+from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA
+from src.ml.ai_protocols import (
+    ProtocolResponse,
+    ResponseTerminatedError,
+    ResponseTermination,
+    create_protocol_adapter,
+)
 
 # ============================================================================
 # Vision 图片编码工具
@@ -75,10 +81,14 @@ class AIServiceConfig:
     api_key: str = ""
     api_base: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
+    protocol: str = "openai_chat"
+    structured_output_mode: str = "auto"
+    anthropic_output_mode: str = "auto"
     threshold: float = 0.8
     timeout: int = 10
     max_retries: int = 2
     max_length: int = 500
+    max_output_tokens: int = 512
     client_idle_rebuild_minutes: int = 60
     client_max_lifetime_hours: int = 24
 
@@ -356,6 +366,13 @@ class AIServiceProvider(ABC):
         """
         self.name = name
         self.config = config
+        # 协议适配器在构造时按配置一次性解析（AUTO 解析为具体值），后续长期复用
+        self.adapter = create_protocol_adapter(
+            protocol=config.protocol,
+            model=config.model,
+            structured_output_mode=config.structured_output_mode,
+            anthropic_output_mode=config.anthropic_output_mode,
+        )
         self.client: httpx.AsyncClient | None = None
         self._client_rebuild_pending = False
         self._client_rebuild_reason = ""
@@ -514,7 +531,7 @@ class AIServiceProvider(ABC):
         if isinstance(e, AIServiceError):
             message = _truncate(e.message)
             if message:
-                return f"{e.__class__.__name__} [provider={e.provider}] " f"[message={message}]"
+                return f"{e.__class__.__name__} [provider={e.provider}] [message={message}]"
             return f"{e.__class__.__name__} [provider={e.provider}]"
 
         # httpx 异常委托公共工具：raw 截断响应原文、name 保持类名前缀，
@@ -528,44 +545,44 @@ class AIServiceProvider(ABC):
             return f"{error_type} [message={message}]"
         return error_type
 
+    @staticmethod
+    def _unwrap_protocol_response(response: ProtocolResponse) -> dict[str, Any]:
+        """将协议层响应转换为 provider 控制流信号。
+
+        COMPLETED → 返回结构化结果字典；其余终止状态 → 抛 ResponseTerminatedError
+        （由 detect 重试循环上抛、协调器捕获后走备份，不重试、不计熔断）。
+        """
+        if response.termination is not ResponseTermination.COMPLETED:
+            raise ResponseTerminatedError(response.termination, response.detail)
+        if response.result is None:
+            raise ValueError("协议响应标记 completed 但缺少结构化结果")
+        return response.result
+
     async def _call_api(
         self,
         text: str,
         use_context_prompt: bool = False,
         locale: str | None = None,
     ) -> dict[str, Any]:
-        """调用 OpenAI 兼容 API
+        """调用当前 provider 配置的 AI 协议，返回结构化检测结果。
 
-        Args:
-            text: 待检测文本
-            use_context_prompt: 是否使用上下文 Prompt
-            locale: 群组 locale，控制 reason 输出语言（None → 简体中文）
-
-        Returns:
-            API 响应 JSON
-
-        Raises:
-            AIServiceError: HTTP 请求错误或响应解析错误
+        协议差异（端点/认证/请求体/响应结构）由 ``self.adapter`` 处理；本方法只
+        负责 HTTP 传输、超时、客户端生命周期和结果解包。终止类响应（refusal /
+        token 截断等）经 ``_unwrap_protocol_response`` 抛 ``ResponseTerminatedError``。
         """
-        # 选择 Prompt 并按 locale 追加 reason 语言约束
         base_prompt = SYSTEM_PROMPT_WITH_CONTEXT if use_context_prompt else SYSTEM_PROMPT
         system_prompt = _build_system_prompt(base_prompt, locale)
 
-        # 构建请求
-        url = f"{self.config.api_base.rstrip('/')}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text},
-            ],
-        }
+        url = self.adapter.build_url(self.config.api_base)
+        headers = self.adapter.build_headers(self.config.api_key)
+        payload = self.adapter.build_text_payload(
+            self.config.model,
+            system_prompt,
+            text,
+            TEXT_RESULT_SCHEMA,
+            self.config.max_output_tokens,
+        )
 
-        # 发送请求
         client = await self._ensure_client()
         try:
             response = await client.post(url, json=payload, headers=headers)
@@ -580,32 +597,12 @@ class AIServiceProvider(ABC):
         finally:
             self._client_last_used_at = datetime.now()
 
-        # 解析响应
         data = response.json()
-        if "choices" not in data or len(data["choices"]) == 0:
-            raise ValueError("API 响应格式错误：缺少 choices")
-
-        content = data["choices"][0].get("message", {}).get("content", "")
-        if not content:
-            raise ValueError("API 响应内容为空")
-
-        # 解析 JSON 响应
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError:
-            # 尝试非贪婪正则提取 JSON
-            json_match = re.search(r"\{.*?\}", content, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                raise ValueError(f"无法解析 AI 响应为 JSON: {content[:100]}")
-
-        # 验证必需字段
-        if not isinstance(result, dict):
-            raise ValueError(f"AI 响应不是字典: {type(result)}")
+        if not isinstance(data, dict):
+            raise ValueError(f"API 响应不是 JSON object: {type(data).__name__}")
+        result = self._unwrap_protocol_response(self.adapter.parse_response(data))
         if "is_spam" not in result or "confidence" not in result:
             raise ValueError(f"AI 响应缺少必需字段: {result}")
-
         return result
 
     def _process_result(
@@ -705,34 +702,23 @@ class AIServiceProvider(ABC):
             text_parts.append(f"【图片说明 / caption】\n{caption}")
         text_parts.append("请按约定的 JSON 格式返回对该图片的垃圾判定结果。")
 
-        user_content = [
-            {"type": "text", "text": "\n\n".join(text_parts)},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{mime};base64,{image_b64}",
-                    "detail": settings.ai_spam_vision_detail,
-                },
-            },
-        ]
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
+        user_text = "\n\n".join(text_parts)
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                raw = await self._call_api_vision(messages)
+                raw = await self._call_api_vision(system_prompt, user_text, image_b64, mime)
                 detection = self._process_vision_result(raw, locale)
                 detection.attempt_count = attempt + 1
                 return detection
+            except ResponseTerminatedError:
+                raise
             except Exception as e:
                 formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🖼️ {self.name} Vision 检测失败，重试中... "
-                        f"[attempt={attempt+1}/{self.config.max_retries+1}] "
+                        f"[attempt={attempt + 1}/{self.config.max_retries + 1}] "
                         f"[wait={wait_time}s] [error={formatted_error}]"
                     )
                     await asyncio.sleep(wait_time)
@@ -747,18 +733,30 @@ class AIServiceProvider(ABC):
 
         raise AIServiceError(self.name, "Vision 所有重试已耗尽")
 
-    async def _call_api_vision(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        """发起 Vision HTTP 请求，返回解析后的 JSON dict"""
-        url = f"{self.config.api_base.rstrip('/')}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload: dict[str, Any] = {
-            "model": self.config.model,
-            "messages": messages,
-            "response_format": {"type": "json_object"},
-        }
+    async def _call_api_vision(
+        self,
+        system_prompt: str,
+        user_text: str,
+        image_b64: str,
+        mime: str,
+    ) -> dict[str, Any]:
+        """发起 Vision HTTP 请求，返回协议无关的结构化结果。
+
+        Vision 的 content blocks 构造（OpenAI ``image_url`` / Responses
+        ``input_image`` / Anthropic ``source.base64``）由 adapter 处理。
+        """
+        url = self.adapter.build_url(self.config.api_base)
+        headers = self.adapter.build_headers(self.config.api_key)
+        payload = self.adapter.build_vision_payload(
+            self.config.model,
+            system_prompt,
+            user_text,
+            image_b64,
+            mime,
+            settings.ai_spam_vision_detail,
+            VISION_RESULT_SCHEMA,
+            self.config.max_output_tokens,
+        )
 
         # Vision 请求超时独立配置（图片 payload 大，通常比文本检测长）
         vision_timeout = max(settings.ai_spam_vision_timeout, self.config.timeout)
@@ -778,27 +776,11 @@ class AIServiceProvider(ABC):
             self._client_last_used_at = datetime.now()
 
         data = response.json()
-        if "choices" not in data or len(data["choices"]) == 0:
-            raise ValueError("Vision API 响应格式错误：缺少 choices")
-
-        content = data["choices"][0].get("message", {}).get("content", "")
-        if not content:
-            raise ValueError("Vision API 响应内容为空")
-
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError:
-            json_match = re.search(r"\{.*\}", content, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                raise ValueError(f"无法解析 Vision 响应为 JSON: {content[:200]}")
-
-        if not isinstance(result, dict):
-            raise ValueError(f"Vision 响应不是字典: {type(result)}")
+        if not isinstance(data, dict):
+            raise ValueError(f"Vision API 响应不是 JSON object: {type(data).__name__}")
+        result = self._unwrap_protocol_response(self.adapter.parse_response(data))
         if "is_spam" not in result or "confidence" not in result:
             raise ValueError(f"Vision 响应缺少必需字段: {result}")
-
         return result
 
     def _process_vision_result(
@@ -879,10 +861,14 @@ class PrimaryAIServiceProvider(AIServiceProvider):
             api_key=settings.ai_spam_api_key,
             api_base=settings.ai_spam_api_base,
             model=settings.ai_spam_model,
+            protocol=settings.ai_spam_protocol,
+            structured_output_mode=settings.ai_spam_structured_output_mode,
+            anthropic_output_mode=settings.ai_spam_anthropic_output_mode,
             threshold=settings.ai_spam_threshold,
             timeout=settings.ai_spam_timeout,
             max_retries=settings.ai_spam_max_retries,
             max_length=settings.ai_spam_max_length,
+            max_output_tokens=settings.ai_spam_max_output_tokens,
             client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
             client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
         )
@@ -914,6 +900,8 @@ class PrimaryAIServiceProvider(AIServiceProvider):
                 detection_result = self._process_result(result, locale)
                 detection_result.attempt_count = attempt + 1
                 return detection_result
+            except ResponseTerminatedError:
+                raise
             except Exception as e:
                 formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
@@ -921,7 +909,7 @@ class PrimaryAIServiceProvider(AIServiceProvider):
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🔍 {self.name} 检测失败，重试中... "
-                        f"[attempt={attempt+1}/{self.config.max_retries+1}] "
+                        f"[attempt={attempt + 1}/{self.config.max_retries + 1}] "
                         f"[wait={wait_time}s] [timeout_seconds={self.config.timeout}] "
                         f"[error={formatted_error}]"
                     )
@@ -952,10 +940,14 @@ class BackupAIServiceProvider(AIServiceProvider):
             api_key=settings.ai_spam_backup_api_key,
             api_base=settings.ai_spam_backup_api_base,
             model=settings.ai_spam_backup_model,
+            protocol=settings.ai_spam_backup_protocol,
+            structured_output_mode=settings.ai_spam_backup_structured_output_mode,
+            anthropic_output_mode=settings.ai_spam_backup_anthropic_output_mode,
             threshold=settings.ai_spam_backup_threshold,
             timeout=settings.ai_spam_backup_timeout,
             max_retries=settings.ai_spam_backup_max_retries,
             max_length=settings.ai_spam_max_length,  # 共享最大长度配置
+            max_output_tokens=settings.ai_spam_max_output_tokens,
             client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
             client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
         )
@@ -991,6 +983,8 @@ class BackupAIServiceProvider(AIServiceProvider):
                 detection_result = self._process_result(result, locale)
                 detection_result.attempt_count = attempt + 1
                 return detection_result
+            except ResponseTerminatedError:
+                raise
             except Exception as e:
                 formatted_error = self._format_error(e)
                 if attempt < self.config.max_retries:
@@ -998,7 +992,7 @@ class BackupAIServiceProvider(AIServiceProvider):
                     wait_time = 0.5 * (2**attempt)
                     logger.warning(
                         f"🔍 {self.name} 检测失败，重试中... "
-                        f"[attempt={attempt+1}/{self.config.max_retries+1}] "
+                        f"[attempt={attempt + 1}/{self.config.max_retries + 1}] "
                         f"[wait={wait_time}s] [timeout_seconds={self.config.timeout}] "
                         f"[error={formatted_error}]"
                     )
@@ -1089,10 +1083,14 @@ class HybridAIDetector:
                 api_key=settings.vision_api_key_effective,
                 api_base=settings.vision_api_base_effective,
                 model=settings.ai_spam_vision_model,
+                protocol=settings.vision_protocol_effective,
+                structured_output_mode=settings.vision_structured_output_mode_effective,
+                anthropic_output_mode=settings.vision_anthropic_output_mode_effective,
                 threshold=settings.ai_spam_vision_threshold,
                 timeout=settings.ai_spam_vision_timeout,
                 max_retries=settings.ai_spam_vision_max_retries,
                 max_length=settings.ai_spam_max_length,
+                max_output_tokens=settings.ai_spam_vision_max_output_tokens,
                 client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
                 client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
             ),
@@ -1105,10 +1103,14 @@ class HybridAIDetector:
                 api_key=settings.vision_backup_api_key_effective,
                 api_base=settings.vision_backup_api_base_effective,
                 model=settings.ai_spam_vision_backup_model,
+                protocol=settings.vision_backup_protocol_effective,
+                structured_output_mode=settings.vision_backup_structured_output_mode_effective,
+                anthropic_output_mode=settings.vision_backup_anthropic_output_mode_effective,
                 threshold=settings.ai_spam_vision_backup_threshold,
                 timeout=settings.ai_spam_vision_timeout,
                 max_retries=settings.ai_spam_vision_backup_max_retries,
                 max_length=settings.ai_spam_max_length,
+                max_output_tokens=settings.ai_spam_vision_max_output_tokens,
                 client_idle_rebuild_minutes=settings.ai_spam_client_idle_rebuild_minutes,
                 client_max_lifetime_hours=settings.ai_spam_client_max_lifetime_hours,
             ),
@@ -1221,7 +1223,7 @@ class HybridAIDetector:
         if stats.consecutive_failures >= self.circuit_breaker_threshold:
             provider.request_client_rebuild("circuit_breaker_tripped")
             logger.warning(
-                f"⚠️ {provider.name} 触发熔断器 " f"（连续失败 {stats.consecutive_failures} 次）"
+                f"⚠️ {provider.name} 触发熔断器 （连续失败 {stats.consecutive_failures} 次）"
             )
 
     def _get_success_rate(self, provider_name: str) -> float:
@@ -1249,6 +1251,9 @@ class HybridAIDetector:
         Returns:
             检测结果字典
         """
+        # 终止类错误（refusal/token 截断等）不重试、不计熔断，仅用于最终报错信息
+        terminal_errors: dict[str, str] = {}
+
         # 尝试主服务商
         if self.primary.is_available and not self._is_circuit_open(self.primary):
             try:
@@ -1259,7 +1264,7 @@ class HybridAIDetector:
                     f"✅ {self.primary.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
                     f"[成功率:{self._get_success_rate(self.primary.name):.1%}] "
-                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
+                    f"[{result.reasons[0] if result.reasons else '无原因'}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -1272,6 +1277,12 @@ class HybridAIDetector:
                         "attempt_count": result.attempt_count,
                     },
                 }
+            except ResponseTerminatedError as e:
+                formatted_error = self.primary._format_error(e)
+                terminal_errors[self.primary.name] = formatted_error
+                logger.warning(
+                    f"⏹️ {self.primary.name} 检测无可用结果，直接尝试备份: {formatted_error}"
+                )
             except AIServiceError as e:
                 formatted_error = self.primary._format_error(e)
                 self._record_failure(self.primary, formatted_error)
@@ -1295,7 +1306,7 @@ class HybridAIDetector:
                     f"✅ {self.backup.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
                     f"[成功率:{self._get_success_rate(self.backup.name):.1%}] "
-                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
+                    f"[{result.reasons[0] if result.reasons else '无原因'}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -1308,6 +1319,10 @@ class HybridAIDetector:
                         "attempt_count": result.attempt_count,
                     },
                 }
+            except ResponseTerminatedError as e:
+                formatted_error = self.backup._format_error(e)
+                terminal_errors[self.backup.name] = formatted_error
+                logger.warning(f"⏹️ {self.backup.name} 检测无可用结果: {formatted_error}")
             except AIServiceError as e:
                 formatted_error = self.backup._format_error(e)
                 self._record_failure(self.backup, formatted_error)
@@ -1317,16 +1332,18 @@ class HybridAIDetector:
                 self._record_failure(self.backup, formatted_error)
                 logger.error(f"💥 {self.backup.name} 发生意外错误: {formatted_error}")
 
-        # 所有服务商都失败
+        # 所有服务商都失败（终止类错误优先于熔断统计错误展示）
         primary_error = (
-            self._stats[self.primary.name].last_error if self.primary.is_available else "未配置"
+            terminal_errors.get(self.primary.name) or self._stats[self.primary.name].last_error
+            if self.primary.is_available
+            else "未配置"
         )
         backup_error = (
-            self._stats[self.backup.name].last_error if self.backup.is_available else "未配置"
+            terminal_errors.get(self.backup.name) or self._stats[self.backup.name].last_error
+            if self.backup.is_available
+            else "未配置"
         )
-        logger.error(
-            f"🚨 所有 AI 服务商都失败 " f"[primary: {primary_error}] [backup: {backup_error}]"
-        )
+        logger.error(f"🚨 所有 AI 服务商都失败 [primary: {primary_error}] [backup: {backup_error}]")
         raise RuntimeError(f"AI 检测失败: primary={primary_error}, backup={backup_error}")
 
     async def detect_with_context(
@@ -1363,6 +1380,9 @@ class HybridAIDetector:
                 logger.warning(f"上下文过长，使用普通检测 [total_length={total_length}]")
                 return await self.detect(text, locale)
 
+        # 终止类错误（refusal/token 截断等）不重试、不计熔断，仅用于最终报错信息
+        terminal_errors: dict[str, str] = {}
+
         # 尝试主服务商
         if self.primary.is_available and not self._is_circuit_open(self.primary):
             try:
@@ -1375,7 +1395,7 @@ class HybridAIDetector:
                     f"✅ {self.primary.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
                     f"[成功率:{self._get_success_rate(self.primary.name):.1%}] "
-                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
+                    f"[{result.reasons[0] if result.reasons else '无原因'}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -1388,6 +1408,12 @@ class HybridAIDetector:
                         "attempt_count": result.attempt_count,
                     },
                 }
+            except ResponseTerminatedError as e:
+                formatted_error = self.primary._format_error(e)
+                terminal_errors[self.primary.name] = formatted_error
+                logger.warning(
+                    f"⏹️ {self.primary.name} 检测无可用结果，直接尝试备份: {formatted_error}"
+                )
             except AIServiceError as e:
                 formatted_error = self.primary._format_error(e)
                 self._record_failure(self.primary, formatted_error)
@@ -1413,7 +1439,7 @@ class HybridAIDetector:
                     f"✅ {self.backup.name} 检测成功 [is_spam={result.is_spam}] "
                     f"[confidence={result.confidence:.2f}] "
                     f"[成功率:{self._get_success_rate(self.backup.name):.1%}] "
-                    f"[{result.reasons[0] if result.reasons else "无原因"}]"
+                    f"[{result.reasons[0] if result.reasons else '无原因'}]"
                 )
                 return {
                     "is_spam": result.is_spam,
@@ -1426,6 +1452,10 @@ class HybridAIDetector:
                         "attempt_count": result.attempt_count,
                     },
                 }
+            except ResponseTerminatedError as e:
+                formatted_error = self.backup._format_error(e)
+                terminal_errors[self.backup.name] = formatted_error
+                logger.warning(f"⏹️ {self.backup.name} 检测无可用结果: {formatted_error}")
             except AIServiceError as e:
                 formatted_error = self.backup._format_error(e)
                 self._record_failure(self.backup, formatted_error)
@@ -1435,16 +1465,18 @@ class HybridAIDetector:
                 self._record_failure(self.backup, formatted_error)
                 logger.error(f"💥 {self.backup.name} 发生意外错误: {formatted_error}")
 
-        # 所有服务商都失败
+        # 所有服务商都失败（终止类错误优先于熔断统计错误展示）
         primary_error = (
-            self._stats[self.primary.name].last_error if self.primary.is_available else "未配置"
+            terminal_errors.get(self.primary.name) or self._stats[self.primary.name].last_error
+            if self.primary.is_available
+            else "未配置"
         )
         backup_error = (
-            self._stats[self.backup.name].last_error if self.backup.is_available else "未配置"
+            terminal_errors.get(self.backup.name) or self._stats[self.backup.name].last_error
+            if self.backup.is_available
+            else "未配置"
         )
-        logger.error(
-            f"🚨 所有 AI 服务商都失败 " f"[primary: {primary_error}] [backup: {backup_error}]"
-        )
+        logger.error(f"🚨 所有 AI 服务商都失败 [primary: {primary_error}] [backup: {backup_error}]")
         raise RuntimeError(f"AI 上下文检测失败: primary={primary_error}, backup={backup_error}")
 
     async def detect_image_with_context(
@@ -1525,6 +1557,15 @@ class HybridAIDetector:
                         "attempt_count": result.attempt_count,
                     },
                 }
+            except ResponseTerminatedError as e:
+                formatted_error = provider._format_error(e)
+                logger.warning(
+                    f"⏹️ {provider.name} Vision 无可用结果，直接尝试备份: {formatted_error}"
+                )
+                if provider is self.vision_primary:
+                    primary_error = formatted_error
+                else:
+                    backup_error = formatted_error
             except AIServiceError as e:
                 formatted_error = provider._format_error(e)
                 self._record_failure(provider, formatted_error)

@@ -376,6 +376,8 @@ src/
 │   ├── classifier.py         # ⭐ TF-IDF + SVM (Stage 2)
 │   ├── embedder.py           # ⭐ bge-small-zh (Stage 3 + 上下文一致性)
 │   ├── ai_detector.py        # ⭐ AI检测器 (文本 + Vision)
+│   ├── ai_protocols.py       # ⭐ 多协议适配 (OpenAI Chat/Responses/Anthropic)
+│   ├── ai_contracts.py       # 结构化输出 JSON Schema 契约
 │   └── trainer.py            # 模型训练脚本
 │
 ├── models/                   # SQLAlchemy ORM
@@ -409,6 +411,7 @@ src/
 | `src/main.py` | 应用入口 + 中间件注册 | ⭐⭐ |
 | `src/ml/rule_engine.py` | 第一阶段快速过滤 | ⭐⭐ |
 | `src/ml/ai_detector.py` | AI上下文检测 | ⭐⭐ |
+| `src/ml/ai_protocols.py` | 多协议适配 (Chat/Responses/Anthropic) | ⭐⭐ |
 
 ---
 
@@ -695,5 +698,5 @@ grep "Stage [1-3] 检测到垃圾" logs/bot_*.log | wc -l
 
 ---
 
-**最后更新**: 2026-08-07
+**最后更新**: 2026-08-11
 **适用于**: tg-guard-bot 多层反垃圾检测 + i18n 多语言版本
