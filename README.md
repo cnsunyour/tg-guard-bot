@@ -423,7 +423,9 @@ tg-guard-bot/
 │   │   ├── rule_engine.py      # 规则引擎
 │   │   ├── classifier.py       # ML 分类器
 │   │   ├── embedder.py         # 语义嵌入
-│   │   └── ai_detector.py      # AI 检测器（文本 + Vision）
+│   │   ├── ai_detector.py      # AI 检测器（文本 + Vision）
+│   │   ├── ai_protocols.py     # AI 三协议适配
+│   │   └── ai_contracts.py     # AI 结构化输出契约
 │   ├── models/                 # 数据模型
 │   │   ├── group.py            # 群组配置
 │   │   ├── user.py             # 用户/警告
@@ -592,8 +594,9 @@ AI_SPAM_API_KEY=sk-xxx
 AI_SPAM_API_BASE=https://api.openai.com/v1
 AI_SPAM_MODEL=deepseek-chat
 # 协议：openai_chat（默认）/ openai_responses / anthropic_messages（主备可异构）
-# 结构化输出策略与 Anthropic 承载模式详见 .env.example（默认 auto，向后兼容）
+# Anthropic 输出：native（Claude 4.5+ 原生 output_config）/ tool（全模型兼容）/ auto（默认）
 # AI_SPAM_PROTOCOL=openai_chat
+# AI_SPAM_ANTHROPIC_OUTPUT_MODE=auto
 
 # 图片检测：多模态模型（key/base 留空自动回退上面的配置）
 AI_SPAM_VISION_ENABLED=true
@@ -661,6 +664,7 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [x] **v1.6.x**: 入群短窗口消息防护中间件、入群 in-flight 互斥锁（AI 慢请求去重）、举报按钮权限加固、群消息管理员名称完整显示、验证流程网络重试
 - [x] **多语言 i18n**: zh-Hans/zh-Hant/en 全链路本地化（catalog + 稳定 code 持久化 + 命令菜单 locale + WebApp 页面）
 - [x] **v1.7.x**: 四管理员命令支持带参直接设置、`/report` 举报引用预览、`/lang` 参数直接切换、全项目安全审查加固（0 Critical/0 High）
+- [x] **v1.8.0**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退
 
 ## 🤝 贡献
 
