@@ -3,7 +3,7 @@
     "description": "ALTCHA PHP 后端 for Telegram Guard Bot",
     "type": "project",
     "require": {
-        "php": ">=7.4",
+        "php": ">=8.2",
         "altcha-org/altcha": "^1.0"
     },
     "config": {
