@@ -5,6 +5,44 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.8.1] - 2026-08-12
+
+### Bug 修复
+
+#### 入群限制权限收紧，堵住 react/编辑头衔漏洞 🔒
+- **问题**：新成员入群限制发言时，`ChatPermissions` 仅设 `can_send_messages=False`，未显式禁用 `can_react_to_messages`（消息表态）、`can_add_web_page_previews`、`can_manage_topics` 等字段；Telegram 对未显式声明为 False 的权限字段默认放行，未验证用户可对群消息表态或发起话题，绕过验证门槛
+- **修复**：限制期 `ChatPermissions` 仅保留必要字段，显式禁用 react / 编辑群头衔 / 发起话题 / 链接预览等全部发言相关权限；`moderation.py` 禁言路径同步对齐
+- **影响**：未通过验证的用户在限制期不再能表态、编辑群头衔或发起话题
+
+#### datetime.utcnow() 弃用替换与时区脆弱性消除 ⏱️
+- **问题**：代码大量使用 Python 3.12 已弃用的 `datetime.utcnow()`（返回 naive datetime）；aiogram 的 `until_date` 序列化在非 UTC 服务器上对 naive datetime 调用 `timestamp()` 时按本地时区计算，导致禁言/限制时长偏差 8 小时（生产 Docker 默认 UTC 偶然正确，开发机 +08:00 可复现 8 小时偏移）
+- **修复**：新增双函数架构 `src/core/utils.py`——感知时区的 `utcnow()`（对应 Telegram API / timestamp 计算的外部世界）+ naive 的 `utcnow_naive()`（对应 asyncpg + TIMESTAMP WITHOUT TIME ZONE 的数据库世界）；全量替换 ORM 模型默认值、Repository 查询、Handler `until_date` 调用、AI 检测器进程内计时
+- **影响**：所有时区下禁言 / 限制 / 超时计算一致；ORM 向 PostgreSQL 写入不再有 aware/naive `TypeError` 隐患
+
+#### altcha PHP 版本约束对齐依赖实际要求 📦
+- **问题**：captcha-webapp 的 altcha PHP 依赖下限声明 `>=7.4`，但 altcha 实际运行时要求 `>=8.2`，低版本 PHP 部署报错
+- **修复**：版本约束对齐至 `>=8.2`
+
+### 代码质量
+
+#### README v1.8.0 文档对齐 📝
+- 路线图追加 v1.8.0 条目、代码结构导航更新（`ai_protocols` / `ai_contracts`）、AI 多协议配置说明补充
+
+## [1.8.0] - 2026-08-11
+
+### 新增功能
+
+#### AI 检测支持多协议（OpenAI Responses + Anthropic Messages）🧠
+- **背景**：原 AI 反垃圾检测仅支持 OpenAI Chat Completions 协议，无法接入 Anthropic Claude 与 OpenAI Responses API
+- **新增**：引入 `ProtocolAdapter` 模式收敛三协议差异（端点 / 认证 / 请求体 / 响应解析 / 结构化输出），保留 OpenAI Chat Completions 向后兼容
+  - **Anthropic 双模式**：native `output_config.format`（Claude 4.5+ GA）/ Tool Use（全模型，`strict:True` 保证 schema）
+  - **结构化输出配置**：`structured_output_mode`（auto/strict/legacy）+ `anthropic_output_mode`（auto/native/tool），保护 DeepSeek / Moonshot / OpenRouter 等第三方兼容接口
+  - `openai_chat` + `auto` 默认 `legacy`，确保默认配置与改造前行为一致
+  - 终止类响应（refusal / max_tokens / content_filter）不重试同 provider、不计熔断、直接走备份
+  - JSON 兜底降级：Markdown fence 剥离 + `JSONDecoder.raw_decode`（替代脆弱正则）
+- **影响**：AI 反垃圾支持主备服务商异构配置与自动回退（如主 OpenAI Responses + 备 Anthropic Messages）
+- 新增 `src/ml/ai_protocols.py`、`src/ml/ai_contracts.py`、`tests/test_ai_protocols.py`（23 个协议测试）
+
 ## [1.7.2] - 2026-08-08
 
 ### 新增功能
