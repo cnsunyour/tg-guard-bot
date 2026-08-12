@@ -6,6 +6,7 @@ from sqlalchemy import BigInteger, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
+from src.core.utils import utcnow_naive
 
 
 class Report(Base):
@@ -25,7 +26,7 @@ class Report(Base):
     )  # pending, approved, rejected, ignored
     handled_by: Mapped[int] = mapped_column(BigInteger, nullable=True)
     handled_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, nullable=False)
 
     def __repr__(self):
         return (

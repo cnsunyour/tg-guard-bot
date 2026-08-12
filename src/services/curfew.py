@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 
 from src.core.redis import RedisKeys, get_redis
+from src.core.utils import utcnow
 from src.models.group import Group
 
 
@@ -19,7 +20,7 @@ class CurfewService:
         Returns:
             本地时间
         """
-        utc_now = datetime.utcnow()
+        utc_now = utcnow()
         return utc_now + timedelta(hours=timezone_offset)
 
     @staticmethod

@@ -1,7 +1,6 @@
 """群管理命令处理器"""
 
 import contextlib
-from datetime import datetime
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -28,6 +27,7 @@ from src.core.utils import (
     parse_message_link,
     parse_message_link_with_chat,
     parse_time_to_seconds,
+    utcnow_naive,
 )
 from src.repositories.report_repo import ReportRepository
 from src.repositories.spam_repo import SpamRepository
@@ -822,8 +822,8 @@ async def cmd_warnings(message: Message, bot: Bot, localizer: BoundLocalizer) ->
         date = warning.created_at.strftime("%Y-%m-%d %H:%M")
         reason = _render_warning_reason(localizer, warning.reason)
 
-        # 判断警告是否在有效期内
-        days_ago = (datetime.utcnow() - warning.created_at).days
+        # 判断警告是否在有效期内（数据库列存 naive UTC，用 utcnow_naive 对齐）
+        days_ago = (utcnow_naive() - warning.created_at).days
         if days_ago < settings.warning_expiration_days:
             # 有效警告标记为 ✅
             response += localizer.t(

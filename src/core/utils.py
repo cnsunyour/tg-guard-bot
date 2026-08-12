@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import re
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,45 @@ from loguru import logger
 
 from src.core.redis import RedisKeys, get_redis
 from src.core.retry import retry_on_network_error
+
+
+def utcnow() -> datetime:
+    """获取当前 UTC 时间（timezone-aware）
+
+    替代已弃用的 datetime.utcnow()。返回带时区信息的 datetime 对象，
+    避免 naive datetime 在不同时区下产生的时间戳计算错误。
+
+    Python 3.12+ 中 datetime.utcnow() 已被弃用，推荐使用 datetime.now(UTC)。
+
+    Returns:
+        带 UTC 时区信息的 datetime 对象
+
+    Example:
+        >>> now = utcnow()
+        >>> print(now)
+        2026-08-12 06:15:00+00:00
+        >>> print(now.tzinfo)
+        UTC
+    """
+    return datetime.now(UTC)
+
+
+def utcnow_naive() -> datetime:
+    """获取当前 UTC 时间（naive，无时区信息）
+
+    专供 SQLAlchemy ORM 模型 ``default=`` 使用。数据库的时间戳列声明为
+    ``TIMESTAMP WITHOUT TIME ZONE``（asyncpg 驱动），写入 timezone-aware
+    datetime 会抛 ``TypeError: can't subtract offset-naive and offset-aware
+    datetimes``。本函数先取 aware UTC 再剥离 tzinfo，既避免了弃用的
+    ``datetime.utcnow()``，又与现有数据库列类型和历史数据（naive UTC）兼容。
+
+    业务代码中需要时间戳计算或传给 Telegram API 时，应使用 :func:`utcnow`
+    （aware）；只有 ORM 列默认值用本函数（naive）。
+
+    Returns:
+        不带时区信息的 UTC datetime 对象（wall clock 为 UTC）
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _read_version_from_pyproject(pyproject_path: Path) -> str | None:

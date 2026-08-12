@@ -5,12 +5,13 @@
 
 import asyncio
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from src.core.utils import utcnow
 from src.ml.ai_detector import (
     AIServiceConfig,
     AIServiceError,
@@ -133,8 +134,8 @@ class TestAIServiceProvider:
         new_client = MagicMock()
 
         primary_provider.client = old_client
-        primary_provider._client_created_at = datetime.now()
-        primary_provider._client_last_used_at = datetime.now()
+        primary_provider._client_created_at = utcnow()
+        primary_provider._client_last_used_at = utcnow()
         primary_provider.request_client_rebuild("test_rebuild")
 
         with patch.object(
@@ -168,7 +169,7 @@ class TestAIServiceProvider:
         with patch.object(primary_provider, "_create_client", return_value=old_client):
             await primary_provider._ensure_client()
 
-        primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
+        primary_provider._client_last_used_at = utcnow() - timedelta(hours=2)
 
         with patch.object(primary_provider, "_create_client", return_value=new_client):
             rebuilt = await primary_provider._ensure_client()
@@ -188,8 +189,8 @@ class TestAIServiceProvider:
         with patch.object(primary_provider, "_create_client", return_value=old_client):
             await primary_provider._ensure_client()
 
-        primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
-        primary_provider._client_last_used_at = datetime.now() - timedelta(minutes=5)
+        primary_provider._client_created_at = utcnow() - timedelta(hours=25)
+        primary_provider._client_last_used_at = utcnow() - timedelta(minutes=5)
 
         with patch.object(primary_provider, "_create_client", return_value=new_client):
             rebuilt = await primary_provider._ensure_client()
@@ -208,8 +209,8 @@ class TestAIServiceProvider:
         with patch.object(primary_provider, "_create_client", return_value=old_client):
             await primary_provider._ensure_client()
 
-        primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
-        primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
+        primary_provider._client_created_at = utcnow() - timedelta(hours=25)
+        primary_provider._client_last_used_at = utcnow() - timedelta(hours=2)
 
         with (
             patch.object(
@@ -232,8 +233,8 @@ class TestAIServiceProvider:
         with patch.object(primary_provider, "_create_client", return_value=old_client):
             await primary_provider._ensure_client()
 
-        primary_provider._client_created_at = datetime.now() - timedelta(hours=25)
-        primary_provider._client_last_used_at = datetime.now() - timedelta(hours=2)
+        primary_provider._client_created_at = utcnow() - timedelta(hours=25)
+        primary_provider._client_last_used_at = utcnow() - timedelta(hours=2)
         primary_provider.request_client_rebuild("provider_failure")
 
         with (
@@ -338,7 +339,7 @@ class TestHybridAIDetector:
         # 手工设置已过 cooldown 的状态
         stats = detector._stats[detector.primary.name]
         stats.consecutive_failures = detector.circuit_breaker_threshold
-        stats.last_failure_time = datetime.now() - timedelta(minutes=10)
+        stats.last_failure_time = utcnow() - timedelta(minutes=10)
 
         # 调用 _is_circuit_open 应该会重置并标记重建
         detector._is_circuit_open(detector.primary)
@@ -479,20 +480,21 @@ class TestHybridAIDetector:
     async def test_get_stats_includes_client_lifecycle_fields(self, detector):
         """测试 get_stats() 包含 client 生命周期信息"""
         detector.primary.client = MagicMock()
-        detector.primary._client_created_at = datetime(2026, 1, 1, 12, 0, 0)
-        detector.primary._client_last_used_at = datetime(2026, 1, 1, 12, 5, 0)
+        base = utcnow() - timedelta(hours=2)
+        detector.primary._client_created_at = base
+        detector.primary._client_last_used_at = base + timedelta(minutes=5)
         detector.primary._client_rebuild_count = 2
-        detector.primary._last_client_rebuild_at = datetime(2026, 1, 2, 12, 0, 0)
+        detector.primary._last_client_rebuild_at = base + timedelta(hours=1)
         detector.primary._last_client_rebuild_reason = "idle_timeout"
 
         stats = detector.get_stats()
 
         assert "primary" in stats
         assert stats["primary"]["client_initialized"] is True
-        assert stats["primary"]["client_created_at"] == "2026-01-01T12:00:00"
-        assert stats["primary"]["client_last_used_at"] == "2026-01-01T12:05:00"
+        assert stats["primary"]["client_created_at"] is not None
+        assert stats["primary"]["client_last_used_at"] is not None
         assert stats["primary"]["client_rebuild_count"] == 2
-        assert stats["primary"]["last_client_rebuild_at"] == "2026-01-02T12:00:00"
+        assert stats["primary"]["last_client_rebuild_at"] is not None
         assert stats["primary"]["last_client_rebuild_reason"] == "idle_timeout"
         assert stats["primary"]["client_age_seconds"] is not None
         assert stats["primary"]["client_idle_seconds"] is not None

@@ -1,7 +1,7 @@
 """健康检查和性能监控模块"""
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import psutil
@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from src.core.database import engine
 from src.core.redis import get_redis
+from src.core.utils import utcnow
 
 
 class HealthChecker:
@@ -137,7 +138,7 @@ class HealthChecker:
             "seconds_component": seconds,
             # formatted 保留向后兼容（固定中文）；调用方需本地化时应使用上面的组件字段
             "formatted": f"{days}天 {hours}小时 {minutes}分钟 {seconds}秒",
-            "started_at": datetime.fromtimestamp(self.start_time).isoformat(),
+            "started_at": datetime.fromtimestamp(self.start_time, tz=UTC).isoformat(),
         }
 
     async def full_check(self) -> dict[str, Any]:
@@ -157,7 +158,7 @@ class HealthChecker:
 
         return {
             "healthy": overall_healthy,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
             "check_count": self.check_count,
             "uptime": uptime,
             "database": db_check,

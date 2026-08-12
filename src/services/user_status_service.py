@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from loguru import logger
 from telethon import TelegramClient
@@ -18,6 +17,7 @@ from telethon.tl.types import ChannelParticipant, ChannelParticipantBanned
 
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
+from src.core.utils import utcnow
 
 
 @dataclass
@@ -131,7 +131,7 @@ class UserStatusService:
                 cache_data = {
                     "is_problematic": result.is_problematic,
                     "reason": result.reason,
-                    "checked_at": datetime.now(UTC).isoformat(),
+                    "checked_at": utcnow().isoformat(),
                 }
                 await redis.setex(cache_key, settings.user_status_cache_ttl, json.dumps(cache_data))
             except Exception as e:

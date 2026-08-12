@@ -1,11 +1,12 @@
 """审计日志数据仓库"""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import and_, select
 
 from src.core.database import get_db_session
+from src.core.utils import utcnow_naive
 from src.models.audit_log import AuditLog
 
 
@@ -65,7 +66,7 @@ class AuditRepository:
     async def get_recent_logs(group_id: int, hours: int = 24, limit: int = 50) -> list[AuditLog]:
         """获取最近的操作日志"""
         async with get_db_session() as session:
-            since = datetime.utcnow() - timedelta(hours=hours)
+            since = utcnow_naive() - timedelta(hours=hours)
             result = await session.execute(
                 select(AuditLog)
                 .where(and_(AuditLog.group_id == group_id, AuditLog.created_at >= since))

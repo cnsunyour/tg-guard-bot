@@ -1,7 +1,7 @@
 """群管理服务模块"""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import StrEnum
 
 from aiogram import Bot
@@ -9,6 +9,7 @@ from aiogram.types import ChatPermissions
 from loguru import logger
 
 from src.core.config import settings
+from src.core.utils import utcnow
 from src.repositories.audit_repo import AuditRepository
 from src.repositories.user_repo import UserRepository
 
@@ -176,7 +177,7 @@ class ModerationService:
             # 计算禁言到期时间
             until_date = None
             if duration is not None:
-                until_date = datetime.utcnow() + timedelta(minutes=duration)
+                until_date = utcnow() + timedelta(minutes=duration)
 
             # 限制用户权限（禁用所有权限）
             await bot.restrict_chat_member(
@@ -256,11 +257,11 @@ class ModerationService:
 
             elif member.status == "restricted":
                 # 用户被禁言，恢复权限 + 31秒后自动移出 restricted 列表
-                from datetime import datetime, timedelta
+                from datetime import timedelta
 
                 from aiogram.types import ChatPermissions
 
-                until_date = datetime.utcnow() + timedelta(seconds=31)
+                until_date = utcnow() + timedelta(seconds=31)
 
                 # 只需设置 can_send_messages=True 即可恢复权限。
                 # 在默认模式下（use_independent_chat_permissions=False），
@@ -409,7 +410,7 @@ class ModerationService:
                 return admin_check
 
             # 计算封禁到期时间
-            until_date = datetime.utcnow() + timedelta(minutes=duration)
+            until_date = utcnow() + timedelta(minutes=duration)
 
             # 踢出用户并临时封禁
             await bot.ban_chat_member(chat_id=chat_id, user_id=user_id, until_date=until_date)

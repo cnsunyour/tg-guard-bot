@@ -7,12 +7,12 @@
 """
 
 import json
-from datetime import datetime
 from typing import Any, cast
 
 import httpx
 import pytest
 
+from src.core.utils import utcnow
 from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA
 from src.ml.ai_detector import (
     AIServiceConfig,
@@ -80,7 +80,7 @@ def _provider(name: str, config: AIServiceConfig) -> PrimaryAIServiceProvider:
 def _attach_mock_transport(provider: PrimaryAIServiceProvider, handler) -> None:
     """给 provider 挂载 MockTransport 驱动的真实 AsyncClient，跳过生命周期重建检查。"""
     provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    now = datetime.now()
+    now = utcnow()
     provider._client_created_at = now
     provider._client_last_used_at = now
 

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from datetime import datetime
 
 from loguru import logger
 from telethon import TelegramClient
@@ -18,6 +17,7 @@ from telethon.tl.types import (
 
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
+from src.core.utils import utcnow
 
 
 class MemberQueryFloodWaitError(Exception):
@@ -107,7 +107,7 @@ class MemberQueryService:
             # 写入缓存
             cache_data = {
                 "chat_id": chat_id,
-                "cached_at": datetime.utcnow().isoformat(),
+                "cached_at": utcnow().isoformat(),
                 "members": members,
             }
             await redis.setex(cache_key, settings.cleanup_cache_ttl, json.dumps(cache_data))

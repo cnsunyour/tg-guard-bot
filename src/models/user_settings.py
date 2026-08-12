@@ -6,6 +6,7 @@ from sqlalchemy import BigInteger, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
+from src.core.utils import utcnow_naive
 
 
 class UserSettings(Base):
@@ -31,8 +32,8 @@ class UserSettings(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
         nullable=False,
         comment="最后更新时间",
     )

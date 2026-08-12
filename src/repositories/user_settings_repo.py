@@ -1,11 +1,10 @@
 """用户设置数据仓库"""
 
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from src.core.database import get_db_session
+from src.core.utils import utcnow_naive
 from src.models.user_settings import UserSettings
 
 
@@ -27,7 +26,7 @@ class UserSettingsRepository:
     @staticmethod
     async def upsert_locale(user_id: int, locale: str) -> None:
         """新增或更新用户语言偏好（PostgreSQL ON CONFLICT upsert）"""
-        now = datetime.utcnow()
+        now = utcnow_naive()
         async with get_db_session() as session:
             statement = (
                 insert(UserSettings)

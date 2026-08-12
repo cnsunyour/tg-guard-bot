@@ -1,10 +1,11 @@
 """举报记录数据仓库"""
 
-from datetime import datetime
+from datetime import timedelta
 
 from sqlalchemy import and_, func, select
 
 from src.core.database import get_db_session
+from src.core.utils import utcnow_naive
 from src.models.report import Report
 
 
@@ -103,7 +104,7 @@ class ReportRepository:
 
             report.status = status
             report.handled_by = handled_by
-            report.handled_at = datetime.utcnow()
+            report.handled_at = utcnow_naive()
 
             await session.commit()
             return True
@@ -138,10 +139,8 @@ class ReportRepository:
             reporter_id: 举报者ID
             days: 天数
         """
-        from datetime import timedelta
-
         async with get_db_session() as session:
-            cutoff_time = datetime.utcnow() - timedelta(days=days)
+            cutoff_time = utcnow_naive() - timedelta(days=days)
             query = select(func.count(Report.id)).where(
                 and_(
                     Report.group_id == group_id,

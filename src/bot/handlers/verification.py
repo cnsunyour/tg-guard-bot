@@ -5,7 +5,7 @@ import contextlib
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Literal
 
 from aiogram import Bot, F, Router
@@ -42,6 +42,7 @@ from src.core.utils import (
     format_trusted_user_mention,
     format_user_mention,
     masked_mention_html,
+    utcnow,
 )
 from src.repositories.audit_repo import AuditRepository
 from src.repositories.group_repo import GroupRepository
@@ -253,7 +254,7 @@ async def _restore_user_permissions_once(bot: Bot, chat_id: int, user_id: int) -
         )
     elif member.status == "restricted":
         # 恢复权限 + 31 秒后自动移出 restricted 列表
-        until_date = datetime.utcnow() + timedelta(seconds=31)
+        until_date = utcnow() + timedelta(seconds=31)
 
         # 只需设置 can_send_messages=True 即可恢复权限。
         # 在默认模式下（use_independent_chat_permissions=False），
@@ -453,7 +454,7 @@ async def check_user_spam_info(
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=1),
+                    until_date=utcnow() + timedelta(hours=1),
                 )
                 logger.info(f"已封禁垃圾用户 {user_id} 1 小时")
             except Exception as ban_error:
@@ -1127,7 +1128,7 @@ async def _process_user_join(
             await bot.ban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                until_date=datetime.now() + timedelta(hours=1),
+                until_date=utcnow() + timedelta(hours=1),
             )
 
     except Exception as e:
@@ -1266,14 +1267,14 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=1),
+                    until_date=utcnow() + timedelta(hours=1),
                 )
             else:
                 # 踢出并封禁 1 小时
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=1),
+                    until_date=utcnow() + timedelta(hours=1),
                 )
 
             # 删除私聊中的验证消息
@@ -1631,7 +1632,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 await bot.ban_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    until_date=datetime.now() + timedelta(hours=1),
+                    until_date=utcnow() + timedelta(hours=1),
                 )
 
                 # 删除验证消息
@@ -1695,7 +1696,7 @@ async def on_verify_cancel(callback: CallbackQuery, bot: Bot) -> None:
         await bot.ban_chat_member(
             chat_id=chat_id,
             user_id=user_id,
-            until_date=datetime.now() + timedelta(hours=1),
+            until_date=utcnow() + timedelta(hours=1),
         )
 
         # 删除私聊中的验证消息
@@ -2141,7 +2142,7 @@ async def handle_verification_timeout(
             await bot.ban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                until_date=datetime.now() + timedelta(hours=1),
+                until_date=utcnow() + timedelta(hours=1),
             )
             logger.info(f"已踢出并封禁用户 {user_id} 1小时（验证超时）")
         except Exception as e:
@@ -2345,7 +2346,7 @@ async def handle_join_request_timeout(
             await bot.ban_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                until_date=datetime.now() + timedelta(hours=1),
+                until_date=utcnow() + timedelta(hours=1),
             )
             logger.info(f"已封禁用户 {user_id} 1小时（验证超时）")
         except Exception as e:

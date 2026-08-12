@@ -24,6 +24,7 @@ from loguru import logger
 
 from src.core.config import settings
 from src.core.http_errors import format_httpx_error
+from src.core.utils import utcnow
 from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA
 from src.ml.ai_protocols import (
     ProtocolResponse,
@@ -112,7 +113,7 @@ class AIServiceStats:
         """记录失败"""
         self.failure_count += 1
         self.consecutive_failures += 1
-        self.last_failure_time = datetime.now()
+        self.last_failure_time = utcnow()
         self.last_error = error
 
     def reset_circuit(self) -> None:
@@ -458,7 +459,7 @@ class AIServiceProvider(ABC):
             HTTP 客户端实例
         """
         async with self._client_lock:
-            now = datetime.now()
+            now = utcnow()
 
             # 没有待重建标记且 client 已存在，先检查生命周期是否超时
             if self.client is not None and not self._client_rebuild_pending:
@@ -595,7 +596,7 @@ class AIServiceProvider(ABC):
             )
             raise
         finally:
-            self._client_last_used_at = datetime.now()
+            self._client_last_used_at = utcnow()
 
         data = response.json()
         if not isinstance(data, dict):
@@ -773,7 +774,7 @@ class AIServiceProvider(ABC):
             )
             raise
         finally:
-            self._client_last_used_at = datetime.now()
+            self._client_last_used_at = utcnow()
 
         data = response.json()
         if not isinstance(data, dict):
@@ -1182,7 +1183,7 @@ class HybridAIDetector:
         if stats.consecutive_failures >= self.circuit_breaker_threshold:
             # 检查冷却时间
             if stats.last_failure_time:
-                elapsed = datetime.now() - stats.last_failure_time
+                elapsed = utcnow() - stats.last_failure_time
                 if elapsed < self.circuit_breaker_cooldown:
                     logger.debug(
                         f"🔌 {provider.name} 熔断器打开，跳过 "
@@ -1619,7 +1620,7 @@ class HybridAIDetector:
             else:
                 stats = self._stats[name]
 
-            now = datetime.now()
+            now = utcnow()
             client_age_seconds = None
             client_idle_seconds = None
             if provider._client_created_at is not None:

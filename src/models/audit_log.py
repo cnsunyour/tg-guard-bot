@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
+from src.core.utils import utcnow_naive
 
 
 class AuditLog(Base):
@@ -20,9 +21,7 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(50), nullable=False, comment="操作类型")
     target_user_id: Mapped[int] = mapped_column(BigInteger, nullable=True, comment="目标用户 ID")
     details: Mapped[dict] = mapped_column(JSONB, nullable=True, comment="操作详情")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, comment="创建时间"
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, comment="创建时间")
 
     def __repr__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action}, operator_id={self.operator_id})>"

@@ -6,6 +6,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
+from src.core.utils import utcnow_naive
 
 
 class Group(Base):
@@ -77,11 +78,12 @@ class Group(Base):
     is_whitelisted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否在白名单中")
 
     # 时间戳
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, comment="创建时间"
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, comment="更新时间"
+        DateTime,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
+        comment="更新时间",
     )
 
     def __repr__(self) -> str:

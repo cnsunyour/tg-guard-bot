@@ -1,10 +1,11 @@
 """用户/警告数据仓库"""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import and_, func, select
 
 from src.core.database import get_db_session
+from src.core.utils import utcnow_naive
 from src.models.user import Warning
 
 
@@ -54,7 +55,7 @@ class UserRepository:
     async def count_recent_warnings(group_id: int, user_id: int, days: int = 30) -> int:
         """统计用户最近N天内的警告次数"""
         async with get_db_session() as session:
-            since = datetime.utcnow() - timedelta(days=days)
+            since = utcnow_naive() - timedelta(days=days)
             result = await session.execute(
                 select(func.count(Warning.id)).where(
                     and_(
