@@ -193,6 +193,8 @@ class ModerationService:
                     can_send_polls=False,
                     can_send_other_messages=False,
                     can_add_web_page_previews=False,
+                    can_react_to_messages=False,
+                    can_edit_tag=False,
                     can_change_info=False,
                     can_invite_users=False,
                     can_pin_messages=False,
@@ -260,24 +262,16 @@ class ModerationService:
 
                 until_date = datetime.utcnow() + timedelta(seconds=31)
 
+                # 只需设置 can_send_messages=True 即可恢复权限。
+                # 在默认模式下（use_independent_chat_permissions=False），
+                # can_send_messages=True 会通过群组默认权限隐式继承其他媒体权限
+                # （can_send_photos, can_send_videos 等），用户在 31 秒后会从
+                # restricted 列表移除，成为普通成员，拥有群组默认的所有权限。
                 await bot.restrict_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
                     permissions=ChatPermissions(
                         can_send_messages=True,
-                        can_send_audios=True,
-                        can_send_documents=True,
-                        can_send_photos=True,
-                        can_send_videos=True,
-                        can_send_video_notes=True,
-                        can_send_voice_notes=True,
-                        can_send_polls=True,
-                        can_send_other_messages=True,
-                        can_add_web_page_previews=True,
-                        can_change_info=False,
-                        can_invite_users=False,
-                        can_pin_messages=False,
-                        can_manage_topics=False,
                     ),
                     until_date=until_date,  # 30秒后自动从 restricted 列表移除
                 )
