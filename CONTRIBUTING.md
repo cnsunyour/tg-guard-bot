@@ -51,20 +51,20 @@ make test
 # 仅安装生产依赖
 make install
 
-# 安装开发依赖（推荐）
+# 安装开发依赖（推荐，含测试/lint/安全扫描工具）
 make install-dev
 
-# 安装所有依赖（包括 OCR）
+# 安装所有依赖（[all] 当前聚合 [dev]）
 make install-all
 ```
 
 **手动安装方式**：
 
 ```bash
-# 开发环境
+# 开发环境（含测试/lint/安全扫描工具）
 pip install -e ".[dev]"
 
-# 包含 OCR
+# 等同 [dev]（[all] 当前聚合 dev 依赖）
 pip install -e ".[all]"
 ```
 
@@ -165,18 +165,20 @@ mypy src
 - `UP`: pyupgrade（现代 Python 语法）
 - `ARG`: 未使用参数检查
 - `SIM`: 代码简化建议
+- `TCH`: flake8-type-checking（类型检查导入优化）
 - `PTH`: pathlib 使用建议
+- `RUF`: Ruff 特定规则
 
 ### 类型注解
 
-项目强制要求类型注解（`disallow_untyped_defs = true`）。
+项目鼓励类型注解，但当前 `disallow_untyped_defs = false`（非强制）。新代码应添加类型注解以利 mypy 检查与可读性。
 
 ```python
-# ✅ 正确
+# ✅ 推荐
 def greet(name: str) -> str:
     return f"Hello, {name}!"
 
-# ❌ 错误（缺少类型注解）
+# ⚠️ 不推荐（缺少类型注解，mypy 不报错但不利于维护）
 def greet(name):
     return f"Hello, {name}!"
 ```
@@ -188,6 +190,23 @@ def greet(name):
 ```bash
 make check
 ```
+
+---
+
+## 🌐 i18n 多语言贡献
+
+项目支持 zh-Hans（源/默认）/ zh-Hant / en 三语。所有出站文案（bot 发给用户的消息、按钮文本、异步/延迟/定时任务发的消息）必须走 catalog，**不硬编码中文**。
+
+- **catalog 文件**：`locales/{locale}.json`（扁平点分 key + `{var}` 占位符，不支持 format spec）
+- **新增文案**：三个 catalog 同步加 key，zh-Hans 为源语言
+- **翻译完整性自检**：
+  - en value 不含 CJK 字符
+  - zh-Hant 用 `opencc -c s2tw` 校验（**必须 s2tw 台湾正体，非 s2t**——s2t 有群→羣、吃→喫假阳性）
+  - 批量翻译做三语语义并排核对（语言检测抓不到「博弈≠博彩」用词错）
+- **持久化业务字段用稳定 code**（如 `system:spam`、`system:channel_impersonation`），展示层渲染——不存本地化文案（群切语言后旧记录会显示旧语言）
+- **库枚举/标识符不嵌入文案**（避免「[photo消息]」中英混排）
+
+详细规范见 `CLAUDE.md` 的「🌐 i18n 多语言」章节。
 
 ---
 
@@ -263,15 +282,20 @@ pytest -m unit
 
 ### 代码安全扫描
 
-使用 **Bandit** 检查安全漏洞：
+本地安全扫描：
 
 ```bash
-make security
+make security          # 非阻塞扫描
+make security-strict   # 严格模式（发现问题则退出）
+make security-report   # 生成报告到 reports/
 ```
 
-这会运行：
+`make security` 运行：
 1. **Bandit**: Python 代码安全扫描
 2. **Safety**: 依赖包漏洞检查
+3. **pip-audit**: Python 官方依赖漏洞扫描
+
+**CI 自动扫描**（`.github/workflows/security.yml`）：每次推送/PR 到 main/dev 及每周一凌晨自动运行，额外包含 Semgrep（静态分析）、Trivy（Docker 镜像，SARIF 上传 GitHub Security）、Gitleaks（密钥泄露）、dependency-review（PR 依赖审查门禁）。
 
 **配置位置**: `[tool.bandit]` in `pyproject.toml`
 
@@ -317,7 +341,7 @@ make check
 **示例**:
 
 ```bash
-git commit -m "feat(antispam): 添加图片 OCR 垃圾检测功能"
+git commit -m "feat(antispam): 图片垃圾检测接入 AI Vision 多模态判定"
 git commit -m "fix(database): 修复跨会话删除警告的问题"
 git commit -m "docs: 更新部署文档"
 ```
@@ -328,28 +352,29 @@ git commit -m "docs: 更新部署文档"
 
 ### 本地 CI 检查
 
-在推送代码前，可以运行完整的 CI 流水线：
+在推送代码前，运行完整的本地 CI 流水线：
 
 ```bash
 make ci
 ```
 
 这会运行：
-1. ✅ 代码格式检查
-2. ✅ 代码质量检查
-3. ✅ 安全扫描
-4. ✅ 完整测试套件
+1. ✅ 代码格式检查（format-check）
+2. ✅ 代码质量检查（lint）
+3. ✅ 安全扫描（security）
+4. ✅ 完整测试套件（test）
 
 ### GitHub Actions
 
-项目使用 GitHub Actions 进行 CI/CD。每次推送都会自动运行：
+项目使用 GitHub Actions 做安全扫描。**注意：当前无独立 CI 测试工作流，测试由本地 `make ci` 覆盖。** 每次推送/PR 到 main/dev、以及每周一凌晨自动运行：
 
-- 代码格式和质量检查
-- 测试和覆盖率
-- 安全扫描
-- Docker 镜像构建
+- Bandit + Safety + pip-audit（代码与依赖漏洞）
+- Semgrep（静态分析）
+- Trivy（Docker 镜像扫描，SARIF 上传 GitHub Security）
+- Gitleaks（历史提交密钥泄露）
+- dependency-review（PR 依赖审查，moderate+ 失败、拒绝 GPL-3.0/AGPL-3.0）
 
-**配置文件**: `.github/workflows/ci.yml`
+**配置文件**: `.github/workflows/security.yml`
 
 ---
 
@@ -389,17 +414,18 @@ make db-shell
 ```bash
 make install           # 安装生产依赖
 make install-dev       # 安装开发依赖
+make install-all       # 安装所有依赖（[all]=[dev]）
 make deps-update       # 更新所有依赖
-make deps-lock         # 锁定依赖版本
 ```
 
 ### 代码质量
 ```bash
 make format            # 格式化代码
 make lint              # 代码检查
-make check             # 完整检查
-make security          # 安全扫描
-make ci                # CI 流水线
+make check             # 完整检查（格式 + lint + 测试）
+make security          # 安全扫描（非阻塞）
+make security-strict   # 严格安全扫描
+make ci                # CI 流水线（格式 + lint + 安全 + 测试）
 ```
 
 ### 测试
@@ -422,9 +448,10 @@ make prod-up           # 启动生产环境
 ### 数据库
 ```bash
 make db-migrate        # 数据库迁移
-make db-backup         # 备份数据库
-make db-restore        # 恢复数据库
 make db-shell          # 数据库 Shell
+make backup            # 备份（PostgreSQL + Redis）
+make backup-restore-postgres FILE=<文件>  # 恢复 PostgreSQL
+make backup-restore-redis FILE=<文件>     # 恢复 Redis
 ```
 
 ### 维护
@@ -488,6 +515,23 @@ line-length = 120  # 同步修改
 2. **清晰的消息** - 使用 Conventional Commits
 3. **提交前检查** - 运行 `make check`
 4. **定期同步** - 及时 pull 和 push
+
+#### 分支模型（双分支）
+
+- `main`：生产稳定版本，只接受 `dev` 合并，**禁止直接开发**
+- `dev`：开发主线，所有功能分支从此创建并合并回此
+- 功能分支：`feature/xxx`、`fix/xxx`、`refactor/xxx`，完成后删除
+
+```bash
+# 开始
+git checkout dev && git pull origin dev
+git checkout -b feature/新功能
+
+# 完成
+git add . && git commit -m "feat: 描述"
+git checkout dev && git merge feature/新功能 --no-ff
+git branch -d feature/新功能
+```
 
 ---
 
