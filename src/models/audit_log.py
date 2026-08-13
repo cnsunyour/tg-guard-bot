@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String
+from sqlalchemy import BigInteger, DateTime, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,12 @@ class AuditLog(Base):
     """操作日志表"""
 
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("idx_audit_logs_group_id", "group_id"),
+        Index("idx_audit_logs_action", "action"),
+        Index("idx_audit_logs_created_at", "created_at"),
+        Index("idx_audit_logs_target_user", "target_user_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     group_id: Mapped[int] = mapped_column(BigInteger, nullable=True, comment="群组 ID")

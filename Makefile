@@ -4,7 +4,7 @@
 	security security-strict security-report ci \
 	dev-up dev-down dev-restart dev-logs \
 	prod-build prod-up prod-down prod-restart prod-logs \
-	db-migrate db-shell \
+	db-migrate db-revision db-down db-shell \
 	backup backup-postgres backup-redis backup-list backup-cleanup \
 	backup-restore-postgres backup-restore-redis backup-setup-cron \
 	train-samples train-model \
@@ -38,7 +38,7 @@ help:
 	@echo "  make security-strict - 严格安全扫描（失败则退出）"
 	@echo "  make security-report - 生成安全扫描报告到 reports/"
 	@echo ""
-	@echo "🐳 开发环境（支持热更新）:"
+	@echo "🐳 开发环境:"
 	@echo "  make dev-up          - 启动开发环境（自动监控文件变化）"
 	@echo "  make dev-down        - 停止开发环境"
 	@echo "  make dev-logs        - 查看开发环境日志"
@@ -52,7 +52,9 @@ help:
 	@echo "  make prod-logs       - 查看生产环境日志"
 	@echo ""
 	@echo "🗄️  数据库:"
-	@echo "  make db-migrate      - 运行数据库迁移"
+	@echo "  make db-migrate      - 运行数据库迁移（alembic upgrade head）"
+	@echo "  make db-revision M=\"描述\" - 生成新迁移（alembic revision --autogenerate）"
+	@echo "  make db-down         - 回滚一个迁移（alembic downgrade -1）"
 	@echo "  make db-shell        - 进入数据库 Shell"
 	@echo ""
 	@echo "💾 备份与恢复（GFS 轮转策略）:"
@@ -175,11 +177,10 @@ security-report:
 ci: format-check lint security test
 	@echo "✅ CI 检查通过"
 
-# 开发环境（支持热更新）
+# 开发环境
 dev-up:
 	docker-compose up -d
-	@echo "✅ 开发环境已启动（支持热更新）"
-	@echo "📝 修改 src/ 目录下的代码会自动重启 bot"
+	@echo "✅ 开发环境已启动"
 	@echo "🔍 查看日志: make dev-logs"
 	@echo "🔗 数据库: localhost:5432 (postgres/postgres)"
 	@echo "🔗 Redis:   localhost:6379"
@@ -219,8 +220,15 @@ prod-logs:
 
 # 数据库操作
 db-migrate:
-	docker-compose exec bot python scripts/migrate.py
+	docker-compose run --rm bot alembic upgrade head
 	@echo "✅ 数据库迁移完成"
+
+db-revision:
+	@if [ -z "$(M)" ]; then echo "用法: make db-revision M=\"描述\""; exit 1; fi
+	docker-compose run --rm bot alembic revision --autogenerate -m "$(M)"
+
+db-down:
+	docker-compose run --rm bot alembic downgrade -1
 
 db-shell:
 	docker-compose exec postgres psql -U postgres -d tg_guard

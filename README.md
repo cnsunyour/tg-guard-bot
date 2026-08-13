@@ -258,8 +258,10 @@ make prod-logs       # 查看日志
 
 ### 数据库
 ```bash
-make db-migrate      # 运行数据库迁移
-make db-shell        # 进入数据库 Shell
+make db-migrate              # 应用数据库迁移（alembic upgrade head）
+make db-revision M="描述"    # 生成新迁移（改完模型后，autogenerate）
+make db-down                 # 回滚一个迁移
+make db-shell                # 进入数据库 Shell
 ```
 
 ### 模型训练
@@ -459,7 +461,6 @@ tg-guard-bot/
 │   ├── composer.json           # Composer 依赖
 │   └── README.md               # Serv00 部署指南
 ├── scripts/                    # 工具脚本
-│   ├── migrate.py              # 数据库迁移
 │   ├── backup.py               # 数据库备份
 │   └── train_model.py          # 模型训练
 ├── data/models/                # 预训练模型

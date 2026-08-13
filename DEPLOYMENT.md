@@ -127,11 +127,17 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 ### 步骤 4: 初始化数据库
 
+容器启动时 `docker-entrypoint.sh` 自动执行数据库迁移（带 PG advisory lock 防并发）：
+
+- **全新库**：`alembic upgrade head` 执行 baseline 建表
+- **旧库**（已有业务表但无 `alembic_version`）：自动 `alembic stamp c3d35c9d5221` 标记已有 schema 到位，再 `upgrade head`
+- **已有 Alembic 库**：`upgrade head` 应用增量迁移
+
+> ⚠️ 旧库首次升级前**务必先备份**（`make backup-postgres`）。stamp 假定旧 schema 与 baseline 一致；若库状态不确定，先用 `alembic check` 比对差异。
+
+如需手动应用而不启动 Bot：
 ```bash
-# 运行数据库迁移
 make db-migrate
-# 或
-docker-compose exec bot python scripts/migrate.py
 ```
 
 ### 步骤 5: 验证部署
@@ -467,7 +473,7 @@ make prod-restart
 # 进入数据库
 make db-shell
 
-# 创建索引（如果 migrate.py 未自动创建）
+# 索引已由 Alembic baseline 迁移创建，此处仅供手动补建参考
 CREATE INDEX IF NOT EXISTS idx_warnings_group_user ON warnings(group_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_spam_samples_is_spam ON spam_samples(is_spam);
 

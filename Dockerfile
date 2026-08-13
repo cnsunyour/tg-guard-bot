@@ -38,10 +38,15 @@ RUN pip install --upgrade pip setuptools wheel && \
 
 # 复制项目代码
 COPY src/ ./src/
+COPY alembic.ini ./
+COPY docker-entrypoint.sh ./
 COPY scripts/ ./scripts/
 COPY migrations/ ./migrations/
 COPY locales/ ./locales/
 COPY config/ ./config/
+
+# 确保容器入口脚本可执行
+RUN chmod +x /app/docker-entrypoint.sh
 
 # 创建日志、数据和缓存目录
 RUN mkdir -p /app/logs /app/data/models /app/data/.cache/fastembed /app/data/.cache/huggingface
@@ -60,6 +65,9 @@ ENV FASTEMBED_CACHE_PATH=/app/data/.cache/fastembed \
 
 # 切换到非特权用户
 USER appuser
+
+# 启动前先执行数据库迁移（见 docker-entrypoint.sh）
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # 运行 Bot
 CMD ["python", "-m", "src.main"]

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
@@ -13,6 +13,10 @@ class SpamSample(Base):
     """垃圾样本表（用于模型训练）"""
 
     __tablename__ = "spam_samples"
+    __table_args__ = (
+        Index("idx_spam_samples_is_spam", "is_spam"),
+        Index("idx_spam_samples_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     text: Mapped[str] = mapped_column(Text, nullable=False, comment="消息内容")

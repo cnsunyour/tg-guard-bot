@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
@@ -13,6 +13,10 @@ class Warning(Base):
     """用户警告表"""
 
     __tablename__ = "warnings"
+    __table_args__ = (
+        Index("idx_warnings_group_user", "group_id", "user_id"),
+        Index("idx_warnings_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     group_id: Mapped[int] = mapped_column(
