@@ -491,7 +491,7 @@
   "moderation.spam.channel_message.message": "❌ 無法舉報頻道訊息，請回覆使用者訊息",
   "moderation.spam.processed.message": "✅ 已處理垃圾訊息\n• 使用者已封禁: {target_user_id}{deleted_all}\n• 訊息已刪除\n• 已新增至訓練庫{reason_line}",
   "moderation.spam.reason.default.label": "垃圾訊息",
-  "moderation.spam.report.submitted.message": "✅ 舉報已送出\n• 舉報ID: #{report_id}\n• 原因: {reason}\n• 內容: {report_content}\n• 待處理舉報: {pending_count} 條\n\n💡 管理員可點擊按鈕快速處理",
+  "moderation.spam.report.submitted.message": "✅ 舉報已送出\n• 舉報ID: #{report_id}\n• 原因: {reason}\n• 待處理舉報: {pending_count} 條\n\n💡 管理員可點擊按鈕快速處理",
   "moderation.spam.report_limit.message": "❌ 您今天的舉報次數已達上限（10次）\n如有緊急情況，請聯絡管理員",
   "moderation.spam.submit_failed.message": "❌ 舉報送出失敗，請稍後再試",
   "moderation.spam.usage.message": "❌ 請回覆要標記為垃圾的訊息\n\n<b>用法</b>:\n• /spam [原因] - 封禁使用者並刪除被回覆的訊息\n• /spam -d [原因] - 封禁使用者並<b>刪除該使用者的所有訊息</b>\n\n<b>範例</b>:\n• /spam 發送廣告\n• /spam -d 大量發送垃圾訊息\n\n💡 <b>說明</b>:\n• 一般使用者：建立舉報記錄\n• 管理員：直接封禁並新增至訓練庫",

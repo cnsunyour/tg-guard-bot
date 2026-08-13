@@ -96,14 +96,14 @@ def _render_report_reason(localizer: BoundLocalizer, reason: str | None) -> str:
     return escape_html(reason)
 
 
-# 举报内容预览截断长度（Unicode 字符）；举报提示与 /reports 列表共用，保证规则一致
+# /reports 列表的举报内容截断长度（Unicode 字符）；群内举报提示不复制原文，只回复被举报消息
 _REPORT_CONTENT_PREVIEW_LIMIT = 50
 
 
 def _render_report_content_preview(text: str | None) -> str:
-    """截断并 HTML 转义举报内容文本，用于展示（提示消息 / 举报列表）。
+    """截断并 HTML 转义举报内容文本，用于 /reports 列表展示。
 
-    先截断后转义，与既有列表渲染一致；空文本返回空串，占位文案由调用方决定。
+    列表无 reply 关联可依托，故仍需内容摘要定位；空文本返回空串，占位文案由调用方决定。
     """
 
     if not text:
@@ -1368,16 +1368,15 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             # 构建消息 header（包含管理员 mention）
             report_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
 
-            # 提示消息回复被举报消息（管理员点开引用即可定位），并附内容预览；预览在原
-            # 消息被删 / approve 删除后仍可见。allow_sending_without_reply 保证被举报消息
-            # 已删除时仍能发出降级普通提示。预览可能含垃圾链接，关闭网页预览。
+            # 提示消息只回复被举报消息（管理员点开引用即可定位），正文不复制原文。
+            # allow_sending_without_reply 保证被举报消息已删除时仍能发出降级普通提示。
+            # 举报原因为举报者自由文本，可能含链接，关闭网页预览。
             reply = await message.answer(
                 report_header
                 + localizer.t(
                     "moderation.spam.report.submitted.message",
                     report_id=report.id,
                     reason=_render_report_reason(localizer, reason_value),
-                    report_content=_render_report_content_preview(spam_text),
                     pending_count=pending_count,
                 ),
                 reply_parameters=ReplyParameters(
@@ -2065,7 +2064,13 @@ async def _handle_report_callback(
     finally:
         if completed_text is not None:
             with contextlib.suppress(Exception):
-                await message.edit_text(completed_text, reply_markup=None)
+                # 与发送时一致关闭网页预览：编辑会按新正文重新生成预览，
+                # 不显式关闭则举报原因中的链接会在此刻渲染出卡片。
+                await message.edit_text(
+                    completed_text,
+                    reply_markup=None,
+                    disable_web_page_preview=True,
+                )
         with contextlib.suppress(Exception):
             await auto_delete_message(message, delay=30)
 
