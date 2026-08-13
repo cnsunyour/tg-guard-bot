@@ -56,15 +56,10 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
-# ⚠️ 数据库备份文件
-*.sql
+# 数据库备份产物（pg_dump 输出落在 backups/ 目录树下，见 scripts/backup.py）
 *.dump
 backup/
 backups/
-
-# 例外：允许提交数据库迁移文件（根目录 + legacy_sql 归档）
-!migrations/*.sql
-!migrations/legacy_sql/*.sql
 
 # AI 模型
 data/models/*.pkl
