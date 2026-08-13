@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from aiogram.types import ReplyParameters
 
 from src.bot.handlers import antispam
 from src.services import moderation
@@ -134,6 +135,13 @@ async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localiz
     review_ttl = antispam.settings.spam_review_prompt_auto_delete_seconds
     create_state.assert_awaited_once_with(state, CHAT_ID, ORIG_MSG_ID, ttl=review_ttl)
     message.answer.assert_awaited_once()
+    # 提示回复被检测消息（原文由回复引用展示，不复制进正文）；原消息已删则降级发送
+    reply_parameters = message.answer.await_args.kwargs["reply_parameters"]
+    assert isinstance(reply_parameters, ReplyParameters)
+    assert reply_parameters.message_id == ORIG_MSG_ID
+    assert reply_parameters.allow_sending_without_reply is True
+    # 检测原因可能含可疑域名，关闭网页预览
+    assert message.answer.await_args.kwargs["disable_web_page_preview"] is True
     # prompt 发出后安排与 state TTL 一致的自动删除（兜底未处理残留）
     auto_delete.assert_awaited_once_with(message.answer.return_value, delay=review_ttl)
 
@@ -283,6 +291,8 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     consume.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID, REVIEW_ID)
     message.edit_text.assert_awaited_once()
     assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    # 编辑同样关闭网页预览（否则原因中的可疑域名会在此刻渲染出卡片）
+    assert message.edit_text.await_args.kwargs["disable_web_page_preview"] is True
     auto_delete.assert_awaited_once_with(message, delay=30)
 
 

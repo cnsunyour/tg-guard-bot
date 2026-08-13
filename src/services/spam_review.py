@@ -104,6 +104,8 @@ class SpamReviewState:
 
     所有文本字段（original_text / recognized_text / sample_text / reason_codes）
     保留**原始值**，不在本层 HTML escape —— escape 由展示层在插入 Telegram 消息前完成。
+    ``original_text`` 不再渲染进提示（原文由回复引用展示），但仍作为 v1 快照字段保留：
+    它是「检测时原文」的取证记录，且删字段会使存量 state 无法反序列化。
     """
 
     schema_version: Literal["v1"] = "v1"
