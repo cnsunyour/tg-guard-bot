@@ -7,6 +7,7 @@
 - 处理完成后（成功/业务失败/异常）必须 edit_text 移除按钮 + 安排 30s 删除，
   杜绝提示残留（对齐 on_spam_review_callback 的清理契约）
 - 前置校验失败（数据无效/Inaccessible/权限）不清理提示，等他人处理
+- 举报提示只回复被举报消息，正文不复制原文（对齐 antispam review 提示）
 """
 
 from types import SimpleNamespace
@@ -196,6 +197,8 @@ async def test_report_callback_cleans_prompt_after_processing(
     # edit_text 移除按钮，文案含对应结果 key
     message.edit_text.assert_awaited_once()
     assert message.edit_text.await_args.kwargs["reply_markup"] is None
+    # 编辑同样关闭网页预览（否则举报原因中的链接会在此刻渲染出卡片）
+    assert message.edit_text.await_args.kwargs["disable_web_page_preview"] is True
     rendered = message.edit_text.await_args.args[0]
     assert (success_key if outcome == "success" else expected_key) in rendered
     auto_delete.assert_awaited_once_with(message, delay=30)
@@ -308,8 +311,12 @@ def test_report_status_label_supports_ignored() -> None:
 
 
 @pytest.mark.unit
-async def test_cmd_spam_builds_three_button_prompt_with_review_ttl() -> None:
-    """普通用户举报提示为三按钮（approve/reject 同行、ignore 独行）+ review TTL。"""
+async def test_cmd_spam_prompt_replies_original_without_copying_content() -> None:
+    """举报提示回复被举报消息、正文不复制原文；三按钮 + review TTL 不变。
+
+    被举报原文仍完整落库（message_text 供 /reports 与 approve 后入训练库），
+    只是不再复制进群内提示。
+    """
     message = MagicMock(spec=Message)
     message.chat = SimpleNamespace(id=-1001234567890, type="supergroup")
     message.from_user = SimpleNamespace(id=100200300)
@@ -327,6 +334,7 @@ async def test_cmd_spam_builds_three_button_prompt_with_review_ttl() -> None:
     localizer = _localizer()
     report = SimpleNamespace(id=123)
     auto_delete = AsyncMock()
+    create_report = AsyncMock(return_value=report)
 
     with (
         patch.object(
@@ -340,11 +348,7 @@ async def test_cmd_spam_builds_three_button_prompt_with_review_ttl() -> None:
             "count_user_reports",
             new=AsyncMock(return_value=0),
         ),
-        patch.object(
-            moderation.ReportRepository,
-            "create_report",
-            new=AsyncMock(return_value=report),
-        ),
+        patch.object(moderation.ReportRepository, "create_report", new=create_report),
         patch.object(
             moderation.ReportRepository,
             "count_pending_reports",
@@ -359,7 +363,33 @@ async def test_cmd_spam_builds_three_button_prompt_with_review_ttl() -> None:
     ):
         await moderation.cmd_spam(message, AsyncMock(), localizer)
 
-    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    # 原文照旧完整落库，不受提示不展示影响
+    create_report.assert_awaited_once_with(
+        group_id=-1001234567890,
+        reporter_id=100200300,
+        reported_user_id=42,
+        message_id=77,
+        message_text="spam text",
+        reason=moderation._REPORT_DEFAULT_REASON_CODE,
+    )
+
+    answer_call = message.answer.await_args
+    # 提示回复被举报消息；原消息已删则降级发送
+    reply_parameters = answer_call.kwargs["reply_parameters"]
+    assert reply_parameters.message_id == 77
+    assert reply_parameters.allow_sending_without_reply is True
+    # 举报原因为自由文本可能含链接，关闭网页预览
+    assert answer_call.kwargs["disable_web_page_preview"] is True
+    # 正文不复制被举报内容（localizer mock 会把变量原样渲进文本，可捕获残留实参）
+    assert "spam text" not in answer_call.args[0]
+    localizer.t.assert_any_call(
+        "moderation.spam.report.submitted.message",
+        report_id=123,
+        reason="<moderation.spam.reason.default.label>",
+        pending_count=1,
+    )
+
+    keyboard = answer_call.kwargs["reply_markup"]
     assert [len(row) for row in keyboard.inline_keyboard] == [2, 1]
     assert keyboard.inline_keyboard[0][0].callback_data == "report_approve:123"
     assert keyboard.inline_keyboard[0][1].callback_data == "report_reject:123"
