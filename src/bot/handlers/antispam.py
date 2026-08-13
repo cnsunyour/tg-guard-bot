@@ -19,6 +19,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    ReplyParameters,
 )
 from loguru import logger
 from PIL import Image
@@ -555,8 +556,9 @@ async def _handle_spam_with_review(
     流程：
     1. 构造 ``SpamReviewState``，``create_review_state`` 以 ``SET NX EX`` 写入；键已
        存在（同消息重复 update / 编辑再次命中）则直接返回，保留首快照、不重复发提示。
-    2. 按群 locale 渲染 prompt + 按钮，``message.answer`` 发送（不用 reply，避免回复
-       预览泄露 spammer 显示名）。
+    2. 按群 locale 渲染 prompt + 按钮，以 ``reply_parameters`` 回复被检测消息发送：
+       原文由 Telegram 回复引用展示，不复制进提示正文；原消息已被删除时
+       ``allow_sending_without_reply`` 降级为同 topic 普通消息，不阻断复核。
     3. admin lookup / locale / 渲染 / 发送任一失败，则按 ``review_id`` CAS 删除刚写入
        的 state，避免遗留 24h 无法触达的 review（codex 3b-3 review P2）。
     """
@@ -593,9 +595,16 @@ async def _handle_spam_with_review(
         localizer = get_translator().for_locale(group_locale)
         prompt = build_review_prompt(localizer, state, offender_mention)
         header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+        # 回复被检测消息：管理员经回复引用查看原文。检测原因可能含可疑域名，
+        # 关闭网页预览避免在群内渲染垃圾站点卡片（与 /report 提示一致）。
         prompt_message = await message.answer(
             header + prompt,
+            reply_parameters=ReplyParameters(
+                message_id=message.message_id,
+                allow_sending_without_reply=True,
+            ),
             reply_markup=build_review_keyboard(localizer, message.message_id, state.review_id),
+            disable_web_page_preview=True,
         )
         # prompt 与 state 共用 review_ttl：到期自动删 prompt，state 同步过期；
         # 管理员未处理则两者一起清理（不处罚、不入库）。
@@ -2653,9 +2662,12 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                 await consume_review_state(message.chat.id, orig_msg_id, review_id)
             if completed_text is not None:
                 with contextlib.suppress(Exception):
+                    # 与发送时一致关闭网页预览：编辑会按新正文重新生成预览，
+                    # 不显式关闭则原因中的可疑域名会在此刻渲染出卡片。
                     await message.edit_text(
                         f"{message.text or ''}\n\n{completed_text}",
                         reply_markup=None,
+                        disable_web_page_preview=True,
                     )
             with contextlib.suppress(Exception):
                 await auto_delete_message(message, delay=30)

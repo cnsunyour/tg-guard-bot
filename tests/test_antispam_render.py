@@ -4,8 +4,8 @@
 
 - review prompt 在有 / 无 recognized_text 时选对 catalog key
 - HTML escape：reason_codes / recognized_text 转义；offender / operator 等
-  预转义 mention 直接插入不二次转义；确认模式保留原消息，故 original_text
-  不注入提示
+  预转义 mention 直接插入不二次转义；确认模式回复原消息，原文由回复引用展示，
+  故 original_text 不注入提示
 - recognized_text 截断 200 后再 escape
 - SpamMessageType 5 值 + PunishmentKey 3 值在 catalog 精确覆盖（无孤立 key）
 - callback_data 格式与按钮文案
@@ -83,7 +83,7 @@ def _assert_no_placeholders(text: str) -> None:
     assert _PLACEHOLDER_PATTERN.search(text) is None
 
 
-def test_review_prompt_without_recognized_uses_plain_key() -> None:
+def test_review_prompt_without_recognized_uses_plain_key_and_omits_original() -> None:
     localizer = _localizer()
     unsafe_original = '<b>原文</b><script>alert("x")</script> 😀'
     state = _state(
@@ -102,7 +102,6 @@ def test_review_prompt_without_recognized_uses_plain_key() -> None:
         user=offender,
         confidence="91.25%",
         reasons=escape_html('rule:<script>"x"</script>、emoji:😀'),
-        original=escape_html(unsafe_original),
     )
     # 无 recognized 时走 plain key，不含识别内容段
     assert "识别内容" not in rendered
@@ -111,9 +110,9 @@ def test_review_prompt_without_recognized_uses_plain_key() -> None:
     assert "&lt;a href=" not in rendered
     # reason_codes 被转义
     assert "&lt;script&gt;&quot;x&quot;&lt;/script&gt;" in rendered
-    # P1：original_text 截断后 escape 展示（管理员需在提示内看到判断依据）
-    assert escape_html(unsafe_original) in rendered
-    assert "<script>alert" not in rendered
+    # 原文由 Telegram 回复引用展示，不复制进提示（escape 前后两种形态均不得出现）
+    assert unsafe_original not in rendered
+    assert escape_html(unsafe_original) not in rendered
     _assert_no_placeholders(rendered)
 
 
@@ -130,10 +129,11 @@ def test_review_prompt_with_recognized_uses_recognized_key_and_escapes_html() ->
         user="Alice",
         confidence=_format_confidence(state.confidence),
         reasons=_format_reasons(localizer, state.reason_codes),
-        original=escape_html(state.original_text),
         recognized=escape_html(recognized),
     )
     assert escape_html(recognized) in rendered
+    # OCR 证据保留（媒体回复引用无法展示），原文仍不注入
+    assert state.original_text not in rendered
     assert "<script>" not in rendered
     assert "&quot;quoted&quot;" in rendered
     _assert_no_placeholders(rendered)

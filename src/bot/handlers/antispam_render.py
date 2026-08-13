@@ -9,8 +9,9 @@ Telegram HTML 文本与内联键盘。本模块是纯展示层：
 - escape 策略：``recognized_text`` 截断后 escape、``reason_codes`` 解析后按 code
   渲染或 escape 兼容旧格式；``offender / operator`` mention 由调用方传入已 escape
   的 HTML（``format_user_mention`` / ``format_trusted_user_mention`` 产物），
-  渲染层直接插入不二次转义。确认模式保留并回复原消息，故 ``original_text`` 不
-  复制进提示，仅随 state 供 callback 处罚时取用。
+  渲染层直接插入不二次转义。确认模式回复原消息，原文由 Telegram 回复引用展示，
+  故 ``original_text`` 不复制进提示；OCR ``recognized_text`` 无法由媒体引用替代，
+  仍作为独立证据渲染。
 
 参考范式：``src/bot/handlers/verification_render.py``。
 """
@@ -180,16 +181,14 @@ def build_review_prompt(
     """渲染确认模式提示正文（管理员 header 由调用方前置拼接）。
 
     ``offender_mention`` 已由调用方 escape，作为可信 HTML 直接插入。``original_text``
-    与 ``recognized_text`` 均截断后 escape 作为证据展示：确认模式虽保留原消息，但
-    ``message.answer`` 不建立 reply 关联，管理员需在提示内直接看到判断依据
-    （codex 3b-3 review P1）。
+    不注入提示：确认模式保留原消息并以回复关联，原文由 Telegram 回复引用展示。
+    ``recognized_text``（OCR）无法由媒体引用替代，仍截断后 escape 作为独立证据展示。
     """
     variables = {
         "message_type": message_type_label(localizer, state.message_type),
         "user": offender_mention,
         "confidence": _format_confidence(state.confidence),
         "reasons": _format_reasons(localizer, state.reason_codes),
-        "original": escape_html(state.original_text[:_RECOGNIZED_TEXT_LIMIT]),
     }
     if state.recognized_text:
         return localizer.t(
