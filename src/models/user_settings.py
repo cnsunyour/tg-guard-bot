@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String
+from sqlalchemy import BigInteger, DateTime, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database import Base
@@ -27,6 +27,7 @@ class UserSettings(Base):
     locale: Mapped[str] = mapped_column(
         String(16),
         default="zh-Hans",
+        server_default=text("'zh-Hans'"),
         nullable=False,
         comment="用户私聊语言偏好（BCP 47，如 zh-Hans/zh-Hant/en）",
     )
@@ -34,6 +35,7 @@ class UserSettings(Base):
         DateTime,
         default=utcnow_naive,
         onupdate=utcnow_naive,
+        server_default=func.now(),
         nullable=False,
         comment="最后更新时间",
     )

@@ -1,122 +1,61 @@
-# 数据库迁移指南
+# 数据库迁移（Alembic）
 
-本目录包含数据库 schema 的版本化迁移文件。
+本项目使用 [Alembic](https://alembic.sqlalchemy.org/) 管理 PostgreSQL schema 迁移。
 
-## 迁移文件命名规则
+## 配置
 
-迁移文件按顺序编号，格式为：`{编号}_{描述}.sql`
+- `alembic.ini`（项目根目录）：Alembic 主配置，`sqlalchemy.url` 留空，由 `migrations/env.py` 从 `settings.database_url` 注入（避免密码在 ConfigParser 的 `%` 插值中出错）
+- `migrations/env.py`：异步迁移环境（`create_async_engine` + `NullPool`，显式 import 全部模型，含 Report）
+- `migrations/versions/`：迁移脚本目录
+- `migrations/legacy_sql/`：已废弃的手写 SQL 迁移归档（001-007，其 DDL 已并入 baseline，仅作历史留存）
 
-例如：
-- `001_add_activity_enabled.sql` - 添加活跃度系统开关字段
-- `002_add_some_feature.sql` - 添加某个功能
+## 常用命令
 
-## 快速开始
-
-### 1. 查看迁移状态
-
-```bash
-python scripts/migrate_schema.py --list
-```
-
-### 2. 应用所有待处理的迁移
+迁移通过 Docker 容器执行（无需 bot 在运行）：
 
 ```bash
-python scripts/migrate_schema.py --run
+# 应用所有待执行迁移到最新
+make db-migrate
+
+# 生成新迁移（修改 src/models/*.py 后）
+make db-revision M="添加 xxx 字段"
+
+# 回滚最近一个迁移
+make db-down
+
+# 查看当前版本 / 迁移历史
+docker-compose run --rm bot alembic current
+docker-compose run --rm bot alembic history
 ```
 
-### 3. Docker 环境中运行
+## 容器启动自动迁移
 
-```bash
-# 查看状态
-docker exec tg-guard-bot python scripts/migrate_schema.py --list
+`docker-entrypoint.sh` 在启动 Bot 主进程前自动执行 `alembic upgrade head`，并用 PostgreSQL advisory lock 防止与手动迁移命令并发。迁移失败则阻止 Bot 启动。
 
-# 应用迁移
-docker exec tg-guard-bot python scripts/migrate_schema.py --run
-```
+手动执行 `make db-migrate` / `db-revision` / `db-down` 时，entrypoint 检测到首参为 `alembic` 直接透传，不重复执行自动迁移。
 
-## 生产环境部署
+## 工作流
 
-### 方式一：使用迁移脚本（推荐）
+### 新增 / 修改表结构
 
-```bash
-# 1. 进入容器
-docker exec -it tg-guard-bot bash
+1. 修改 `src/models/*.py` 中的模型定义
+2. `make db-revision M="描述变更"` 生成迁移脚本（autogenerate）
+3. **审查生成的迁移**：autogenerate 可能漏检 rename（会识别成删列 + 加列）、枚举类型、约束名；必要时手动调整
+4. `make db-migrate` 应用迁移
+5. `make check` 验证
 
-# 2. 运行迁移
-python scripts/migrate_schema.py --run
-```
+### baseline（初始迁移）
 
-### 方式二：直接执行 SQL
+`20260813_c3d35c9d5221_initial_schema.py` 是初始 baseline，涵盖全部 6 张表、索引、外键与 server_default。
 
-如果你更喜欢手动控制，可以直接在 PostgreSQL 中执行 SQL 文件：
-
-```bash
-# 方式 A：使用 psql
-docker exec -i tg-guard-postgres psql -U postgres -d tg_guard < migrations/001_add_activity_enabled.sql
-
-# 方式 B：进入 psql 交互式环境
-docker exec -it tg-guard-postgres psql -U postgres -d tg_guard
-\i /path/to/migrations/001_add_activity_enabled.sql
-```
-
-## 迁移文件清单
-
-| 文件 | 版本 | 描述 | 应用日期 |
-|------|------|------|---------|
-| 001_add_activity_enabled.sql | 001 | 添加群组活跃度系统开关字段 | - |
-
-## 迁移跟踪
-
-系统使用 `schema_migrations` 表记录已应用的迁移：
-
-```sql
--- 查看已应用的迁移
-SELECT * FROM schema_migrations ORDER BY version;
-
--- 手动标记迁移为已应用（仅在必要时使用）
-INSERT INTO schema_migrations (version, description)
-VALUES ('001_add_activity_enabled', 'Manually marked as applied');
-```
+- **全新数据库**：`alembic upgrade head` 直接建表
+- **已有生产库**（schema 与 baseline 一致）：`alembic stamp c3d35c9d5221` 标记到位，不执行 DDL
+- baseline 的 `downgrade()` 故意留空——回滚 baseline 等于删表，灾难恢复请用 `scripts/backup.py`（pg_dump）或 `docker-compose down -v` 重建数据卷
 
 ## 注意事项
 
-1. **幂等性**：所有迁移都应该是幂等的（使用 `IF NOT EXISTS`、`IF EXISTS` 等）
-2. **顺序执行**：迁移按文件名顺序执行，请确保编号连续
-3. **备份数据**：生产环境应用迁移前务必备份数据库
-4. **测试环境验证**：先在测试环境验证迁移无误后再应用到生产环境
-
-## 创建新迁移
-
-1. 在 `migrations/` 目录创建新的 SQL 文件
-2. 使用递增的编号（例如：`002_xxx.sql`）
-3. 编写幂等的 SQL 语句
-4. 在测试环境验证
-5. 提交到版本控制
-
-## 故障排除
-
-### 迁移失败回滚
-
-如果迁移失败，系统会自动回滚事务。你可以：
-
-1. 修复迁移文件中的错误
-2. 重新运行 `python scripts/migrate_schema.py --run`
-
-### 手动回滚迁移
-
-如果需要回滚已应用的迁移：
-
-```sql
--- 1. 手动执行回滚 SQL
--- 2. 从迁移记录表删除该版本
-DELETE FROM schema_migrations WHERE version = '001_add_activity_enabled';
-```
-
-## 与现有 migrate.py 的区别
-
-- **migrate.py**：使用 SQLAlchemy 的 `create_all()`，适用于全新数据库初始化
-- **migrate_schema.py**：版本化迁移管理，适用于生产环境的 schema 更新
-
-建议：
-- 新部署：使用 `migrate.py`
-- 升级现有环境：使用 `migrate_schema.py`
+1. **autogenerate 不是银弹**：rename column 会被误判为删旧列 + 加新列（丢数据），需手动改为 `op.alter_column`；server_default / 约束名 / 注释变更可能漏检
+2. **server_default 契约**：模型中 `default=` 是 Python 端默认值，`server_default=` 才写入 DB DDL。NOT NULL 列若需支持原生 SQL INSERT，应配 `server_default`
+3. **不要在生产执行 `alembic downgrade base`**：会删除全部表。灾难回滚用 pg_dump
+4. **`schema_migrations` 表**：旧自研脚本的记录表，迁移到 Alembic 后保留不删（仅作历史），新迁移走 `alembic_version` 表
+5. **索引命名**：显式 `Index("idx_xxx", ...)` 保持稳定命名，便于 autogenerate diff；主键列不要再加冗余索引（PG 主键自带索引）

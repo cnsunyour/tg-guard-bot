@@ -3,6 +3,8 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+from loguru import logger
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -68,20 +70,16 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """初始化数据库表"""
-    engine = get_engine()
-    async with engine.begin() as conn:
-        # 导入所有模型以确保它们被注册
-        from src.models import (  # noqa: F401
-            audit_log,
-            group,
-            report,
-            spam_sample,
-            user,
-            user_settings,
-        )
+    """验证数据库连接。
 
-        await conn.run_sync(Base.metadata.create_all)
+    表结构由 Alembic 管理（容器启动时 ENTRYPOINT 执行 ``alembic upgrade head``），
+    此处仅做连接健康检查，确保数据库可达后继续启动。
+    """
+    engine = get_engine()
+    logger.info("验证数据库连接...")
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+    logger.info("✅ 数据库连接验证成功")
 
 
 async def close_db() -> None:

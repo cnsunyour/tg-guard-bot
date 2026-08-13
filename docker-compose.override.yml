@@ -4,31 +4,19 @@
 
 services:
   bot:
-    # 开发环境：使用 root 用户运行（允许安装依赖）
-    user: "root"
+    # 开发环境：与生产统一使用非 root 用户
+    user: "1000:1000"
 
-    # 开发环境：挂载源代码以支持热重载
+    # 开发环境：挂载源代码与运行时数据（修改后需 make dev-restart 生效）
     volumes:
       - ./src:/app/src:ro           # 只读挂载源代码
       - ./scripts:/app/scripts:ro   # 只读挂载脚本
-      - ./migrations:/app/migrations:ro  # 只读挂载迁移脚本
+      - ./migrations:/app/migrations  # 挂载迁移脚本（生成新迁移时需可写）
       - ./locales:/app/locales:ro   # 只读挂载 i18n catalog（修改后需重启 bot）
       - ./pyproject.toml:/app/pyproject.toml:ro  # 只读挂载版本号来源（Sentry release 随版本即时同步）
       - ./data:/app/data            # 挂载整个 data 目录（包含 models 和 session 文件）
       - ./logs:/app/logs
       - ./config:/app/config
-
-    # 开发环境：使用 watchfiles 监控文件变化并自动重启
-    command:
-      - /bin/sh
-      - -c
-      - |
-        echo '🔥 开发模式：已启用热重载'
-        echo '📦 安装开发依赖...'
-        pip install --no-cache-dir watchfiles && \
-        echo '✅ watchfiles 安装完成' && \
-        echo '🚀 启动 bot（监控 src/ 目录）' && \
-        exec watchfiles --filter python 'python -m src.main' src/
 
     # 开发环境：启用调试日志
     environment:

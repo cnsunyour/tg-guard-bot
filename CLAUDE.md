@@ -28,9 +28,9 @@ make prod-logs       # 查看生产日志
 
 ### 数据库管理
 ```bash
-make db-migrate      # 运行数据库迁移
-make db-backup       # 备份数据库
-make db-restore      # 恢复数据库
+make db-migrate              # 运行数据库迁移（alembic upgrade head）
+make db-revision M="描述"    # 生成新迁移（autogenerate）
+make db-down                 # 回滚一个迁移（alembic downgrade -1）
 ```
 
 ### 模型训练
@@ -485,19 +485,16 @@ VERIFICATION_TIMEOUT=120  # 私聊验证超时时间 (秒)
 VERIFICATION_INFLIGHT_TTL_SECONDS=300  # 入群处理 in-flight 锁 TTL（秒；正常结束立即释放，仅作异常兜底，应大于 AI 检测最坏耗时）
 ```
 
-### 数据库迁移
+### 数据库迁移（Alembic）
 
-使用 Alembic 管理迁移:
+迁移通过 Docker 容器执行（`docker-entrypoint.sh` 启动时自动 `alembic upgrade head`，带 PG advisory lock 防并发；手动命令经 entrypoint 透传不重复执行）：
 ```bash
-# 创建迁移
-alembic revision --autogenerate -m "描述"
-
-# 应用迁移
-make db-migrate
-
-# 回滚
-alembic downgrade -1
+make db-migrate              # 应用迁移到最新（alembic upgrade head）
+make db-revision M="描述"    # 生成新迁移（autogenerate，改完模型后）
+make db-down                 # 回滚一个迁移（alembic downgrade -1）
 ```
+
+baseline `c3d35c9d5221` 涵盖全部初始表；已有生产库（schema 一致）用 `docker-compose run --rm bot alembic stamp c3d35c9d5221` 标记到位。详见 `migrations/README.md`。
 
 ---
 
@@ -577,7 +574,7 @@ tail -f logs/error_*.log  # 查看错误日志
 2. **Redis 键名使用统一管理**: 所有 Redis 键通过 `RedisKeys` 类生成,避免硬编码
 3. **异步任务不要忘记 await**: `asyncio.create_task()` 用于后台任务,直接调用协程需要 `await`
 4. **TelegramForbiddenError 需要捕获**: 私聊失败是正常情况,必须优雅处理
-5. **数据库模型修改后需要迁移**: 修改 `models/*.py` 后必须运行 `alembic revision`
+5. **数据库模型修改后需要迁移**: 修改 `models/*.py` 后运行 `make db-revision M="描述"` 生成迁移（容器内 autogenerate），再 `make db-migrate` 应用；不要手写 SQL 补丁
 6. **代码提交前运行 `make check`**: 确保通过格式化、检查和测试
 7. **上下文检测需要AI检测**: `CONTEXT_ENABLED` 需要 `AI_SPAM_ENABLED=true` 才能工作
 8. **上下文一致性可独立使用**: `CONTEXT_CONSISTENCY_ENABLED` 即使没有AI也能通过Embedding工作
@@ -698,5 +695,5 @@ grep "Stage [1-3] 检测到垃圾" logs/bot_*.log | wc -l
 
 ---
 
-**最后更新**: 2026-08-11
+**最后更新**: 2026-08-13
 **适用于**: tg-guard-bot 多层反垃圾检测 + i18n 多语言版本
