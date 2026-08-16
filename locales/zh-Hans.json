@@ -394,7 +394,6 @@
   "events.bot_added.welcome.message": "✅ <b>欢迎使用 Telegram Guard Bot</b>\n\n此群组已在授权列表中，Bot 已准备就绪！\n\n📋 使用 /help 查看可用命令\n⚙️ 使用 /verifyconfig 查看当前配置",
   "lang.change.invalid_data.toast": "❌ 语言设置数据无效，请重新打开 /lang",
   "lang.change.invalid_locale.toast": "❌ 不支持此语言",
-  "lang.change.message_unavailable.toast": "❌ 无法更新语言菜单，请重新发送 /lang",
   "lang.change.permission_denied.toast": "❌ 只有群组管理员可以切换群组语言",
   "lang.change.save_failed.toast": "❌ 保存语言设置失败，请稍后重试",
   "lang.change.saved.toast": "✅ 已切换为 {locale_name}",

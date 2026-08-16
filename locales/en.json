@@ -394,7 +394,6 @@
   "events.bot_added.welcome.message": "✅ <b>Welcome to Telegram Guard Bot</b>\n\nThis group is on the whitelist and the Bot is ready!\n\n📋 Use /help to view available commands\n⚙️ Use /verifyconfig to view the current configuration",
   "lang.change.invalid_data.toast": "❌ Invalid language setting data. Please run /lang again",
   "lang.change.invalid_locale.toast": "❌ This language is not supported",
-  "lang.change.message_unavailable.toast": "❌ Unable to update the language menu. Please run /lang again",
   "lang.change.permission_denied.toast": "❌ Only group administrators can change the group language",
   "lang.change.save_failed.toast": "❌ Failed to save language settings. Please try again later",
   "lang.change.saved.toast": "✅ Switched to {locale_name}",
