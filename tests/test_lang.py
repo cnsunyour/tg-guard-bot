@@ -39,7 +39,6 @@ def _make_translator() -> Translator:
         "lang.change.invalid_data.toast": "❌ 无效",
         "lang.change.invalid_locale.toast": "❌ 不支持",
         "lang.change.save_failed.toast": "❌ 失败",
-        "lang.change.message_unavailable.toast": "❌ 无法更新",
     }
     en_keys = {
         "lang.menu.current.message": "Current: {locale_name}",
@@ -52,7 +51,6 @@ def _make_translator() -> Translator:
         "lang.change.invalid_data.toast": "❌ Invalid",
         "lang.change.invalid_locale.toast": "❌ Unsupported",
         "lang.change.save_failed.toast": "❌ Failed",
-        "lang.change.message_unavailable.toast": "❌ Unavailable",
     }
     hant_keys = {
         "lang.menu.current.message": "目前：{locale_name}",
@@ -65,7 +63,6 @@ def _make_translator() -> Translator:
         "lang.change.invalid_data.toast": "❌ 無效",
         "lang.change.invalid_locale.toast": "❌ 不支援",
         "lang.change.save_failed.toast": "❌ 失敗",
-        "lang.change.message_unavailable.toast": "❌ 無法更新",
     }
     return Translator(
         {"zh-Hans": base_keys, "zh-Hant": hant_keys, "en": en_keys},
@@ -753,6 +750,152 @@ async def test_on_lang_callback_group_writes_through_and_rerenders_new_locale(mo
     callback.answer.assert_awaited_once()
     answer_text = callback.answer.await_args.args[0]
     assert "Switched" in answer_text
+
+
+# ==================== _edit_saved_menu 幂等与失败降级 ====================
+
+
+def _make_saved_menu_callback(*, edit_side_effect: BaseException | None = None) -> MagicMock:
+    """构造 _edit_saved_menu 所需的 callback mock（edit_text 可注入异常）"""
+    callback = MagicMock()
+    callback.from_user = SimpleNamespace(id=42)
+    callback.answer = AsyncMock()
+    callback.message = MagicMock()
+    callback.message.edit_text = AsyncMock(side_effect=edit_side_effect)
+    return callback
+
+
+def _bad_request(message: str):
+    """构造 TelegramBadRequest，屏蔽 aiogram 构造细节"""
+    from aiogram.exceptions import TelegramBadRequest
+
+    return TelegramBadRequest(method=MagicMock(), message=message)
+
+
+class _LoguruCapture:
+    """loguru sink，收集日志记录用于断言。
+
+    loguru 不走标准 logging，pytest caplog 抓不到；用 logger.add 注册临时
+    sink 在 with 作用域内收集记录，退出时 remove。
+    """
+
+    def __init__(self) -> None:
+        self.records: list = []
+
+    def __enter__(self):
+        from loguru import logger
+
+        self._handler_id = logger.add(self.records.append, level="DEBUG")
+        return self
+
+    def __exit__(self, *exc):
+        from loguru import logger
+
+        logger.remove(self._handler_id)
+        return False
+
+    def messages_at(self, level_no: int) -> list[str]:
+        return [r.record["message"] for r in self.records if r.record["level"].no >= level_no]
+
+
+async def test_edit_saved_menu_idempotent_not_modified_logs_debug_and_answers_saved(
+    mocker,
+) -> None:
+    """幂等未变化（重复点击当前语言）→ debug 日志 + saved 成功 toast（DB 已保存，不弹错误）"""
+    from loguru import logger as _loguru_logger
+
+    DEBUG_NO = _loguru_logger.level("DEBUG").no
+    WARNING_NO = _loguru_logger.level("WARNING").no
+
+    mocker.patch.object(lang_module, "_read_user_locale", new=AsyncMock(return_value="en"))
+    callback = _make_saved_menu_callback(edit_side_effect=_bad_request("message is not modified"))
+    translator = _make_translator()
+
+    with _LoguruCapture() as cap:
+        await lang_module._edit_saved_menu(
+            callback=callback,
+            message=callback.message,
+            resolver=_make_resolver(),
+            translator=translator,
+            scope="private",
+            chat_id=None,
+            requested_locale="en",
+        )
+
+    callback.message.edit_text.assert_awaited_once()
+    callback.answer.assert_awaited_once()
+    assert "Switched" in callback.answer.await_args.args[0]
+    assert callback.answer.await_args.kwargs.get("show_alert") is not True
+    # 幂等走 debug，严禁 warning/error
+    assert any("未变化" in m for m in cap.messages_at(DEBUG_NO))
+    assert cap.messages_at(WARNING_NO) == []
+
+
+async def test_edit_saved_menu_other_bad_request_logs_warning_and_answers_saved(
+    mocker,
+) -> None:
+    """非幂等编辑失败（如消息被删）→ warning 日志 + saved 成功 toast（locale 已保存，不显示成失败）"""
+    from loguru import logger as _loguru_logger
+
+    WARNING_NO = _loguru_logger.level("WARNING").no
+    ERROR_NO = _loguru_logger.level("ERROR").no
+
+    mocker.patch.object(lang_module, "_read_user_locale", new=AsyncMock(return_value="en"))
+    callback = _make_saved_menu_callback(edit_side_effect=_bad_request("message to edit not found"))
+    translator = _make_translator()
+
+    with _LoguruCapture() as cap:
+        await lang_module._edit_saved_menu(
+            callback=callback,
+            message=callback.message,
+            resolver=_make_resolver(),
+            translator=translator,
+            scope="private",
+            chat_id=None,
+            requested_locale="en",
+        )
+
+    callback.message.edit_text.assert_awaited_once()
+    callback.answer.assert_awaited_once()
+    assert "Switched" in callback.answer.await_args.args[0]
+    assert any("locale 已保存" in m for m in cap.messages_at(WARNING_NO))
+    # 非幂等失败严禁 error（原 bug 就是误报 ERROR）
+    assert cap.messages_at(ERROR_NO) == []
+
+
+async def test_edit_saved_menu_non_bad_request_not_treated_as_idempotent(mocker) -> None:
+    """非 TelegramBadRequest 即使文本含 'not modified' 也不误判为幂等（走 warning 分支）"""
+    from loguru import logger as _loguru_logger
+
+    WARNING_NO = _loguru_logger.level("WARNING").no
+
+    class FakeError(Exception):
+        pass
+
+    mocker.patch.object(lang_module, "_read_user_locale", new=AsyncMock(return_value="en"))
+    callback = _make_saved_menu_callback(
+        edit_side_effect=FakeError("something not modified something")
+    )
+    translator = _make_translator()
+
+    with _LoguruCapture() as cap:
+        await lang_module._edit_saved_menu(
+            callback=callback,
+            message=callback.message,
+            resolver=_make_resolver(),
+            translator=translator,
+            scope="private",
+            chat_id=None,
+            requested_locale="en",
+        )
+
+    callback.message.edit_text.assert_awaited_once()
+    callback.answer.assert_awaited_once()
+    # 非 TelegramBadRequest 不误判为幂等 → 走 warning 分支（而非 debug 幂等分支）
+    assert any("locale 已保存" in m for m in cap.messages_at(WARNING_NO))
+    # 辅助函数分类正确性
+    assert lang_module._is_message_not_modified(FakeError("not modified")) is False
+    assert lang_module._is_message_not_modified(_bad_request("message is not modified")) is True
 
 
 async def test_on_lang_callback_group_chat_mismatch_rejected(mocker) -> None:

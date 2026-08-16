@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
@@ -33,6 +34,23 @@ from src.services.locale_preference import LocalePreferenceService
 router = Router(name="lang")
 
 _GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
+
+
+def _is_message_not_modified(exc: BaseException) -> bool:
+    """判断 edit_text 异常是否为 Telegram 幂等未变化错误。
+
+    当重渲染的菜单文本/按钮与当前消息完全一致时，Telegram 返回
+    ``Bad Request: message is not modified``。这发生在用户重复点击已选中
+    的语言、或并发请求写入相同 locale 等场景——locale 实际已保存成功，
+    属于幂等成功而非失败，调用方应据此降级为静默处理。
+
+    必须同时校验 ``TelegramBadRequest`` 类型与错误文本，避免任意异常文本
+    偶然包含 "not modified" 被误判为幂等。
+    """
+    if not isinstance(exc, TelegramBadRequest):
+        return False
+    api_message = getattr(exc, "message", "")
+    return "not modified" in f"{api_message} {exc}".casefold()
 
 
 def _locale_key(locale: str) -> str:
@@ -264,8 +282,7 @@ async def _switch_locale_via_message(
         )
     except Exception as exc:
         logger.error(
-            f"直接切换语言失败 [scope:{scope}] "
-            f"[chat:{message.chat.id}] [locale:{locale}]: {exc}"
+            f"直接切换语言失败 [scope:{scope}] [chat:{message.chat.id}] [locale:{locale}]: {exc}"
         )
         saved = False
 
@@ -412,11 +429,13 @@ async def _edit_saved_menu(
     try:
         await message.edit_text(text, reply_markup=keyboard)
     except Exception as exc:
-        logger.error(f"更新语言菜单消息失败: {exc}")
-        await callback.answer(
-            new_localizer.t("lang.change.message_unavailable.toast"), show_alert=True
-        )
-        return
+        # locale 已保存成功，菜单编辑仅是 best-effort UI 更新：
+        # - 幂等未变化（重复点击当前语言/并发写入同 locale）：静默，UI 本就正确
+        # - 其他编辑失败（消息被删/无编辑权限等）：记 warning，但不把业务成功显示成失败
+        if _is_message_not_modified(exc):
+            logger.debug(f"语言菜单内容未变化，忽略幂等编辑: {exc}")
+        else:
+            logger.warning(f"更新语言菜单消息失败（locale 已保存）: {exc}")
 
     await callback.answer(
         new_localizer.t(
