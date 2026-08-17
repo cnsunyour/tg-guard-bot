@@ -533,6 +533,67 @@ tail -f logs/error_*.log  # 查看错误日志
 
 ---
 
+## 📢 版本发布流程
+
+### 版本号 bump（在 dev 完成，不碰 main）
+
+1. 从 dev 创建 `release/vX.Y.Z` 分支
+2. 改 `pyproject.toml` version；`CHANGELOG.md` 顶部新增 `## [X.Y.Z] - YYYY-MM-DD` 条目（倒序，分「新增功能 / Bug 修复 / 代码质量」）；README 路线图追加（功能型版本单独成行，补丁型并入前序 vX.Y.x 条目）
+3. `--no-ff` 合并回 dev，在 dev 的 merge commit 打 annotated 标签：`vX.Y.Z: 一句话摘要`（无 `release:` 前缀、无 ` - ` 连接）
+4. 推送 dev + 标签。版本号与标签在 dev 上领先 main 是正常状态
+
+### GitHub release（仅用户明确指令时执行）
+
+1. dev `--no-ff` 合并到 main，推送 main（标签已在 bump 时打在 dev，无需重打）
+2. 创建 release：标题纯 `vX.Y.Z`（不加描述后缀），notes 经 `--notes-file` 传入
+3. **notes 累积原则**：必须包含自上一个 GitHub release（`gh release list` 确认）以来所有中间 tag 的 CHANGELOG 条目；不是每个 tag 都要发 release，中间版本内容累积进下一个 release
+4. **notes 类目减法**：只保留「新增功能」+「Bug 修复」（用户可感知变更），移除「代码质量」段（CHANGELOG 保留全部类目）
+
+### Telegram 频道公告（发 GitHub release 时必须同步生成）
+
+发布 GitHub release 后**自动生成**版本公告，输出到会话供用户复制、手动经 Telegram 客户端发布到项目频道。
+
+**格式必须是 TG 客户端键入语法（不是 Bot API MarkdownV2，两套不兼容）**：
+
+| 样式 | 客户端语法 | 说明 |
+|------|-----------|------|
+| 粗体 | `**双星号**` | ⚠️ 单星号是斜体，勿用 |
+| 行内代码 | `` `make prod-logs` `` | 命令/路径用 |
+| 代码块 | 三反引号包裹 | 升级命令块 |
+| 链接 | 裸 URL | 客户端自动识别；`[text](url)` 是 Bot API 语法不解析 |
+| 转义 | 无 | 客户端无转义机制，正文不得残留 `\.` `\-` 等字符 |
+
+**内容频道化减法**（面向频道读者，非开发者）：
+
+- 只保留用户可感知的行为变化（对应 release notes 的「新增功能」+「Bug 修复」）+ 自部署用户升级指引
+- 去掉开发者细节（baseline 编号、内部函数名、实现策略）
+- 升级命令对齐 DEPLOYMENT.md「更新部署」实际流程（源码构建：`git pull` + `make prod-down/build/up`），重大 schema 变更加备份提醒
+- 末尾附 GitHub release 裸链接
+- 正文避免 `~~`、`__`、`||` 等会意外触发客户端格式的字符序列
+
+**结构模板**（emoji 分节 + `•` 列表）：
+
+```
+🛡 **tg-guard-bot vX.Y.Z**
+
+✨ **亮点**
+
+• （新功能一句话 + 用户价值）
+
+🐛 **修复**
+
+• （修复项一句话）
+
+📦 **升级方式**
+
+（三反引号代码块：升级命令）
+
+升级后 `make prod-logs` 确认启动正常
+📄 完整变更：https://github.com/cnsunyour/tg-guard-bot/releases/tag/vX.Y.Z
+```
+
+---
+
 ## 📚 技术栈参考
 
 | 组件 | 版本 | 文档 |
@@ -695,5 +756,5 @@ grep "Stage [1-3] 检测到垃圾" logs/bot_*.log | wc -l
 
 ---
 
-**最后更新**: 2026-08-13
+**最后更新**: 2026-08-18
 **适用于**: tg-guard-bot 多层反垃圾检测 + i18n 多语言版本
