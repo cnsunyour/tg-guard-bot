@@ -41,6 +41,10 @@ ENV/
 .tool-versions
 .zed/
 
+# AI 助手规则文件（个人配置，非项目必需）
+CLAUDE.md
+AGENTS.md
+
 # 环境变量
 .env
 .env.local
