@@ -5,6 +5,39 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.8.2] - 2026-08-18
+
+### 新增功能
+
+#### 数据库迁移切换到 Alembic 🗄️
+- **背景**：原方案为自研 `create_all` + 手写 SQL 双轨，缺乏版本化迁移与回滚能力，且 CLAUDE.md 声称用 Alembic 但实际零配置（失实描述）
+- **新增**：完整 Alembic 迁移体系
+  - baseline `c3d35c9d5221` 涵盖全部初始表 + 索引 + FK + server_default（对齐旧库 DDL）；downgrade 抛错防静默假成功留孤儿表
+  - `docker-entrypoint.sh` 启动时自动 `alembic upgrade head`，PG advisory lock 防并发；检测「有业务表但无 alembic_version」的旧库自动 stamp baseline，避免 DuplicateTable 启动失败
+  - 异步迁移环境（`create_async_engine` + `NullPool`，独立 engine 不复用应用连接池）
+  - `make db-migrate` / `db-revision` / `db-down` 命令经容器内执行
+- **影响**：数据库 schema 变更从此走版本化迁移；模型补齐 9 列 server_default 与显式索引对齐旧库
+- **废弃**：删除自研 `scripts/migrate*.py`；旧 7 个 SQL 归档 `migrations/legacy_sql/`
+
+### Bug 修复
+
+#### 反垃圾 review 待审提示回归回复原文 💬
+- **问题**：确认模式（spam_confirm）的待审核提示正文复制被检测原文预览，群内消息冗余且预览可能展开链接卡片
+- **修复**：提示以 reply 关联被检测消息（原消息已删则降级普通消息），原文由 Telegram 回复引用展示；提示正文与复核完成后的编辑统一关闭网页预览
+
+#### /report 举报提示不再复制被举报内容 💬
+- **问题**：与 review 提示同源——群内待处理提示正文复制被举报内容预览，冗余且举报原因中的链接会在编辑完成态渲染出预览卡片
+- **修复**：提示仅以 reply 关联被举报消息定位原文，正文不复制内容预览；完成态三条路径（成功/业务失败/异常）统一关闭网页预览
+
+#### /lang 菜单幂等编辑不再误报错误 🔧
+- **问题**：生产日志报 `edit_text` 在菜单内容未变化时抛 `message is not modified`，被误判为 ERROR 并弹出「无法更新语言菜单」错误 toast，但 locale 实际已保存成功
+- **修复**：新增 `_is_message_not_modified` 判定（类型 + 错误文本双校验）；幂等编辑静默降级为 debug 日志并提示保存成功，其他编辑失败降级为 warning 且不再显示失败 toast
+
+### 代码质量
+
+#### 杂项 🧹
+- `.gitignore` 收紧 `*.sql` 规则，改为只忽略备份产物（不再误忽略 Alembic 迁移相关 SQL）
+
 ## [1.8.1] - 2026-08-12
 
 ### Bug 修复
