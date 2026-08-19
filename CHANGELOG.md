@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.8.3] - 2026-08-20
+
+### Bug 修复
+
+#### /spam 封禁失败不再阻断消息处理与样本入库 🗑️
+- **问题**：管理员对已被踢出群的用户执行 `/spam` 时，`ban_user` 返回 `user_not_in_chat`，而删除消息、写入训练样本、自动训练全部包在 `if result.success` 内，导致整条命令被阻断——垃圾消息既不删除也不进训练库
+- **根因**：`cmd_spam` 管理员分支调用 `ban_user` 时遗漏 `allow_left=True`（举报人工复核与 antispam 链路均已传），默认行为会先校验目标在群内，`left`/`kicked` 直接失败返回
+- **修复**：
+  - 补 `allow_left=True`，目标已退群/被踢仍可拉黑
+  - 封禁降级为 best-effort：删消息 / 入训练库 / 自动训练 / 回复脱离 `result.success`，仅 `target_is_admin` 硬阻断；`verify_user_failed`、`verify_admin_failed`、`operation_failed` 等 API 故障同样不再连带丢弃管理员已明确表态的标注
+  - 移除 handler 层重复的管理员预检查，统一由 `ban_user` 内 `verify_not_admin` 负责，少一次 API RTT 并消除两次查询间的状态竞态
+  - `-d` 封禁失败时 `revoke_messages` 未生效，退化为删除被回复的单条消息
+  - 自动训练仅在样本成功入库后触发
+- **新增文案**：`moderation.spam.processed_ban_failed.message`（三语），如实告知「消息已处理但用户未封禁」及失败原因，不再谎报封禁成功
+
+#### 封禁审计写入失败不再误报为封禁失败 📝
+- **问题**：`ban_user` 将 `ban_chat_member` 与 `AuditRepository.log_action` 放在同一 `try` 中，Telegram 侧封禁已成功但审计入库失败时仍返回 `operation_failed`
+- **影响**：调用方据此判定「未封禁」并执行补偿动作，向管理员报告错误状态
+- **修复**：审计写入移出主 `try`，失败仅记录 error，不翻转处罚结果返回码
+
+### 代码质量
+
+- 新增 `tests/test_moderation_spam_command.py`（10 项），覆盖 `/spam` 管理员分支契约：四种封禁失败码仍删除并入库、`target_is_admin` 硬阻断、`-d` 成功/失败的删除分支、样本入库失败跳过自动训练、`allow_left=True` 传参回归
+- 修复 `test_backup_failure_also_marks_for_rebuild` 依赖真实 API 的伪绿：原测试第二段只注入 backup 失败，primary 未失败时会真实调用并直接返回、走不到 backup 分支；改为同一次 `detect` 内注入主备双失败，测试不再发出真实网络请求
+
 ## [1.8.2] - 2026-08-18
 
 ### 新增功能
