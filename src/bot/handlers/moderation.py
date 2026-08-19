@@ -1211,19 +1211,10 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
     is_admin = await check_admin_permission_strict_message(message, bot)
 
     if is_admin:
-        # 检查目标用户是否是管理员
-        try:
-            target_member = await bot.get_chat_member(message.chat.id, target_user_id)
-            if target_member.status in ["creator", "administrator"]:
-                reply = await message.answer(
-                    f"❌ {_render_moderation_error(localizer, ModerationErrorCode.target_is_admin)}"
-                )
-                await auto_delete_message(reply)
-                return
-        except Exception as e:
-            logger.debug(f"检查目标用户管理员身份失败: {e}")
-
-        # 管理员模式：直接封禁+删除+训练库
+        # 管理员模式：封禁 + 删除 + 入训练库。
+        # 封禁是 best-effort：目标可能已退群/被踢（allow_left=True 仍可拉黑），
+        # 也可能因 API 故障失败；无论如何都不应连带丢掉「删消息 + 标注样本」这两个
+        # 管理员已明确表态的动作。
         result = await ModerationService.ban_user(
             bot=bot,
             chat_id=message.chat.id,
@@ -1231,35 +1222,55 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             operator_id=message.from_user.id,
             reason=f"{spam_reason_label}: {reason}" if reason else spam_reason_label,
             revoke_messages=delete_all,
+            allow_left=True,
         )
 
-        if result.success:
-            # 删除消息
-            # 如果使用 -d，API 已自动删除所有消息
-            # 如果不使用 -d，只删除被回复的消息
-            if not delete_all:
-                try:
-                    await message.reply_to_message.delete()
-                    logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
-                except Exception as e:
-                    logger.debug(f"删除垃圾消息失败: {e}")
+        ban_error_text: str | None = None
+        if not result.success:
+            assert result.code is not None
+            # 已确认目标是管理员：唯一的硬阻断，不删消息也不入库
+            if result.code is ModerationErrorCode.target_is_admin:
+                reply = await message.answer(
+                    f"❌ {_render_moderation_error(localizer, result.code)}"
+                )
+                await auto_delete_message(reply)
+                return
 
-            # 添加到反垃圾训练库
+            ban_error_text = _render_moderation_error(localizer, result.code)
+            logger.warning(
+                f"/spam 封禁失败，继续处理消息与训练样本 "
+                f"[群组ID:{message.chat.id}] [用户ID:{target_user_id}] "
+                f"[错误:{result.code.value}]"
+            )
+
+        # -d 依赖封禁 API 的 revoke_messages 批量删除；封禁失败时它未生效，
+        # 退化为至少删除被回复的这一条
+        if not delete_all or ban_error_text is not None:
             try:
-                await SpamRepository.add_sample(
-                    text=spam_text,
-                    is_spam=True,
-                    confidence=1.0,  # 管理员标注，置信度为1.0
-                    labeled_by=message.from_user.id,
-                )
-                logger.info(
-                    f"垃圾样本已添加到训练库 [标注者:{message.from_user.id}] "
-                    f"[文本长度:{len(spam_text)}]"
-                )
+                await message.reply_to_message.delete()
+                logger.debug(f"已删除垃圾消息 [消息ID:{message.reply_to_message.message_id}]")
             except Exception as e:
-                logger.error(f"添加垃圾样本失败: {e}")
+                logger.debug(f"删除垃圾消息失败: {e}")
 
-            # 检查是否需要自动训练
+        # 添加到反垃圾训练库
+        sample_added = False
+        try:
+            await SpamRepository.add_sample(
+                text=spam_text,
+                is_spam=True,
+                confidence=1.0,  # 管理员标注，置信度为1.0
+                labeled_by=message.from_user.id,
+            )
+            sample_added = True
+            logger.info(
+                f"垃圾样本已添加到训练库 [标注者:{message.from_user.id}] "
+                f"[文本长度:{len(spam_text)}]"
+            )
+        except Exception as e:
+            logger.error(f"添加垃圾样本失败: {e}")
+
+        # 检查是否需要自动训练（样本入库失败时无新增数据，跳过）
+        if sample_added:
             try:
                 from src.services.spam_detector import get_detector
 
@@ -1270,25 +1281,29 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             except Exception as e:
                 logger.error(f"检查自动训练失败: {e}")
 
-            # 发送响应消息
-            reason_line = localizer.t(
-                "moderation.common.reason.line",
-                reason=_render_report_reason(localizer, reason_value),
-            )
+        # 发送响应消息
+        reason_line = localizer.t(
+            "moderation.common.reason.line",
+            reason=_render_report_reason(localizer, reason_value),
+        )
+        if ban_error_text is None:
             deleted_all = localizer.t("moderation.common.deleted_all.suffix") if delete_all else ""
-            reply = await message.answer(
-                localizer.t(
-                    "moderation.spam.processed.message",
-                    target_user_id=target_user_id,
-                    reason_line=reason_line,
-                    deleted_all=deleted_all,
-                )
+            response_text = localizer.t(
+                "moderation.spam.processed.message",
+                target_user_id=target_user_id,
+                reason_line=reason_line,
+                deleted_all=deleted_all,
             )
-            await auto_delete_message(reply)
         else:
-            assert result.code is not None
-            reply = await message.answer(f"❌ {_render_moderation_error(localizer, result.code)}")
-            await auto_delete_message(reply)
+            response_text = localizer.t(
+                "moderation.spam.processed_ban_failed.message",
+                target_user_id=target_user_id,
+                ban_error=ban_error_text,
+                reason_line=reason_line,
+            )
+
+        reply = await message.answer(response_text)
+        await auto_delete_message(reply)
     else:
         # 普通用户模式：创建举报记录
         try:
