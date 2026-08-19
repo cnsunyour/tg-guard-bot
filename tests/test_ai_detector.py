@@ -505,28 +505,27 @@ class TestBackupProvider:
 
     @pytest.mark.asyncio
     async def test_backup_failure_also_marks_for_rebuild(self):
-        """测试 backup 失败也会标记待重建"""
+        """测试 backup 失败也会标记待重建
+
+        必须在同一次 detect 内同时注入主备失败：只 mock backup 时，primary 会
+        真实调用成功并直接返回，根本走不到 backup 分支（本机配置了可用 API key
+        时该测试曾因此失败，在无 key 环境下则靠 primary 恰好失败而侥幸通过）。
+        """
         detector = HybridAIDetector(circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5)
 
-        # Mock primary 失败
         with (
             patch.object(
                 detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
             ),
-            suppress(RuntimeError),
-        ):
-            await detector.detect("test text")
-
-        # Mock backup 失败
-        with (
             patch.object(
                 detector.backup, "detect", side_effect=AIServiceError("backup", "test error")
             ),
-            suppress(RuntimeError),
+            suppress(RuntimeError),  # 主备皆失败时 detect 抛 RuntimeError
         ):
             await detector.detect("test text")
 
-        # 验证 backup 也被标记重建
+        # 主备失败均须标记 client 待重建
+        assert detector.primary._client_rebuild_pending is True
         assert detector.backup._client_rebuild_pending is True
 
 
