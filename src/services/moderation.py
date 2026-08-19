@@ -363,13 +363,18 @@ class ModerationService:
             if revoke_messages:
                 details["revoke_messages"] = True
 
-            await AuditRepository.log_action(
-                group_id=chat_id,
-                operator_id=operator_id,
-                action="ban",
-                target_user_id=user_id,
-                details=details,
-            )
+            # 审计写入失败不得翻转处罚结果：封禁已在 Telegram 侧生效，
+            # 此处再返回 operation_failed 会让调用方误判为「未封禁」并做补偿操作
+            try:
+                await AuditRepository.log_action(
+                    group_id=chat_id,
+                    operator_id=operator_id,
+                    action="ban",
+                    target_user_id=user_id,
+                    details=details,
+                )
+            except Exception as e:
+                logger.error(f"封禁审计日志写入失败 [群组:{chat_id}] [用户:{user_id}]: {e}")
 
             logger.info(
                 f"用户 {user_id} 被管理员 {operator_id} 永久封禁"
