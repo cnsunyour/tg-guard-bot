@@ -272,6 +272,25 @@ async def test_add_hint_user_rejects_expired_window(mocker) -> None:
     assert redis._zcard(USERS_KEY) == 0
 
 
+async def test_add_hint_user_joins_whatever_window_is_live(mocker) -> None:
+    """窗口切换后登记的用户进入新窗口——他仍在等待验证（超时 120s > 窗口 30s），
+    正该被当前这条引导消息提醒；严格世代校验反而会让他错过所有提醒。"""
+    redis = _FakeRedis()
+    _patch_redis(mocker, redis)
+
+    token = await reserve_hint(CHAT_ID, FLOW)
+    await promote_hint(CHAT_ID, FLOW, token, 111)
+    await add_hint_user(CHAT_ID, FLOW, 1001)
+
+    # 上一窗口过期，另一个用户开启新窗口
+    redis._delete(HINT_KEY)
+    await reserve_hint(CHAT_ID, FLOW)
+
+    # 迟到的旧协程登记进新窗口，且不带入上一窗口的成员
+    assert await add_hint_user(CHAT_ID, FLOW, 1001) == (True, False, 1)
+    assert await snapshot_hint_users(CHAT_ID, FLOW, 5) == ([1001], 1)
+
+
 async def test_snapshot_hint_users_truncates_in_join_order(mocker) -> None:
     redis = _FakeRedis()
     _patch_redis(mocker, redis)

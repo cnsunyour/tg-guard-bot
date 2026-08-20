@@ -213,6 +213,23 @@ async def test_redis_failure_on_reserve_skips_hint_without_raising(mocker) -> No
     bot.send_message.assert_not_awaited()
 
 
+async def test_promote_rejection_deletes_unmanaged_message(mocker) -> None:
+    """reservation 在发送期间失效时，已发出的消息不受状态机管理，必须立即删除。"""
+    _patch_common(mocker)
+    bot = _bot()
+    mocker.patch.object(handler, "reserve_hint", new=AsyncMock(return_value="owner-token"))
+    mocker.patch.object(handler, "add_hint_user", new=AsyncMock(return_value=(True, False, 1)))
+    mocker.patch.object(handler, "snapshot_hint_users", new=AsyncMock(return_value=([USER_ID], 1)))
+    mocker.patch.object(handler, "promote_hint", new=AsyncMock(return_value=False))
+    claim = mocker.patch.object(handler, "claim_hint_render", new=AsyncMock())
+
+    await handler.handle_user_not_started_bot(bot, CHAT_ID, USER_ID)
+
+    bot.delete_message.assert_awaited_once_with(chat_id=CHAT_ID, message_id=4242)
+    # 消息未纳入状态机，不得提交渲染版本，否则会挡住新窗口的首次编辑
+    claim.assert_not_awaited()
+
+
 async def test_promote_failure_deletes_orphan_message(mocker) -> None:
     """promote 抛错时消息已发出却无人回收，必须补删，避免群里永久残留引导消息。"""
     _patch_common(mocker)
