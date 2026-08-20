@@ -593,6 +593,7 @@
   "verification.emoji.bank.watermelon.description": "西瓜",
   "verification.emoji.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内选择对应的表情：\n\n❓ {description}",
   "verification.hint.join.group.message": "⚠️ <b>入群验证提示</b>\n\n欢迎加入 <b>{chat_title}</b>！\n\n📱 本群使用 Bot 私聊验证。如果您刚加入但未收到验证消息，说明您尚未启动 Bot。\n\n👉 请点击下方按钮启动 Bot 进行验证：\n\n✅ 启动后会立即收到验证消息\n💡 此提示将在 30 秒后自动删除",
+  "verification.hint.join.group.mentions": "🔔 {users}",
   "verification.hint.join_request.group.message": "⚠️ <b>加入请求验证提示</b>\n\n您正在请求加入 <b>{chat_title}</b>！\n\n📱 本群使用 Bot 私聊验证。如果您发送了加入请求但未收到验证消息，说明您尚未启动 Bot。\n\n👉 请点击下方按钮启动 Bot，然后重新发送加入请求：\n\n✅ 重新请求加入后即可收到验证消息\n💡 此提示将在 30 秒后自动删除",
   "verification.hint.start.button": "🤖 启动 Bot 进行验证",
   "verification.honeypot.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内回答问题：\n\n❓ {expression} = ?",

@@ -310,6 +310,28 @@ class Settings(BaseSettings):
 
     # 验证配置
     verification_timeout: int = Field(default=120, description="验证超时时间(秒)")
+    verification_hint_aggregation_delay: float = Field(
+        default=1.5,
+        ge=0,
+        le=10,
+        description=(
+            "群内验证引导消息的聚合等待时间（秒）。取得发送权后先等待这段时间，"
+            "把同一批入群、同样未启动 Bot 的用户一起 mention 进第一条消息——"
+            "只有随消息一起发出的 mention 才会触发 Telegram 推送提醒。"
+            "设为 0 表示立即发送（此时首条通常只 mention 触发者本人）。默认 1.5 秒。"
+        ),
+    )
+    verification_hint_max_mentions: int = Field(
+        default=5,
+        ge=0,
+        le=50,
+        description=(
+            "群内验证引导消息最多渲染的匿名 mention 数量。Telegram 单条消息只有"
+            "前 5 个 mention 会触发通知，调大只会让消息变长而拿不到额外提醒；"
+            "设为 0 可完全关闭该功能。上限 50 对齐 Telegram 单条消息的 mention "
+            "硬上限，防止消息过长。默认 5。"
+        ),
+    )
     verification_inflight_ttl_seconds: int = Field(
         default=300,
         ge=1,

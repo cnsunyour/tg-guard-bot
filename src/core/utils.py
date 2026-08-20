@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import re
 import tomllib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -408,6 +409,29 @@ def masked_mention_html(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
+def anonymous_mentions_html(user_ids: Sequence[int]) -> str:
+    """生成一组匿名的可点击 HTML 提及（只 mention，不暴露任何身份信息）
+
+    链接文本固定为 👤，既不显示名称也不显示 @username，用于「需要提醒到人、
+    但不应在群里展示是谁」的场景（管理员通知、入群验证引导）。
+
+    Args:
+        user_ids: Telegram 数字用户 ID 序列（按需要展示的顺序）
+
+    Returns:
+        空格连接的 HTML mention 串；``user_ids`` 为空时返回空字符串
+
+    Example:
+        >>> anonymous_mentions_html([123, 456])
+        '<a href="tg://user?id=123">👤</a> <a href="tg://user?id=456">👤</a>'
+
+    Note:
+        user_id 是整数，不含用户可控文本，故无需 HTML 转义。调用方把返回值
+        插入 catalog 模板时不得再次 :func:`escape_html`，否则链接会被破坏。
+    """
+    return " ".join(f'<a href="tg://user?id={user_id}">👤</a>' for user_id in user_ids)
+
+
 def mask_text(text: str | None, show_length: int = 10) -> str:
     """脱敏文本内容，用于日志记录
 
@@ -702,7 +726,7 @@ async def get_chat_administrators_mention(
     if cached_data:
         try:
             admins: list[dict[str, Any]] = json.loads(cached_data)
-            mentions = " ".join(f'<a href="tg://user?id={admin["id"]}">👤</a>' for admin in admins)
+            mentions = anonymous_mentions_html([admin["id"] for admin in admins])
             logger.debug(f"从缓存获取管理员列表 [群组:{chat_id}] [数量:{len(admins)}]")
             return mentions
         except (json.JSONDecodeError, KeyError) as e:
@@ -733,7 +757,7 @@ async def get_chat_administrators_mention(
         await redis.setex(cache_key, 300, json.dumps(admins_data, ensure_ascii=False))
 
         # 6. 构建 mention 字符串（使用 emoji 代替显示名称）
-        mentions = " ".join(f'<a href="tg://user?id={admin["id"]}">👤</a>' for admin in admins_data)
+        mentions = anonymous_mentions_html([admin["id"] for admin in admins_data])
 
         logger.debug(f"获取管理员列表 [群组:{chat_id}] [数量:{len(admins_data)}] [已缓存]")
         return mentions
