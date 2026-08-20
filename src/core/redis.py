@@ -46,6 +46,13 @@ class RedisKeys:
     """Redis 键名常量"""
 
     @staticmethod
+    def _hint_flow(flow: str) -> str:
+        """校验验证引导 flow（三个 hint 键共用，防止拼出无归属的键名）"""
+        if flow not in ("join", "join_request"):
+            raise ValueError(f"不支持的验证引导 flow: {flow}")
+        return flow
+
+    @staticmethod
     def verification(chat_id: int, user_id: int) -> str:
         """验证码键名"""
         return f"verification:{chat_id}:{user_id}"
@@ -125,9 +132,26 @@ class RedisKeys:
         两种验证流程的后续动作不同（join 可恢复 challenge；join_request 立即 decline
         + clear），文案也不同，共用 key 会让先到 flow 的错误文案压住另一个。
         """
-        if flow not in ("join", "join_request"):
-            raise ValueError(f"不支持的验证引导 flow: {flow}")
-        return f"verification_hint:{flow}:{chat_id}"
+        return f"verification_hint:{RedisKeys._hint_flow(flow)}:{chat_id}"
+
+    @staticmethod
+    def verification_hint_users(chat_id: int, flow: str) -> str:
+        """引导消息待 mention 用户键名（ZSET：member=user_id，score=加入序号）。
+
+        存放当前引导窗口内「未启动 Bot、仍在等待验证」的用户，供引导消息渲染
+        匿名 mention。生命周期严格跟随 :meth:`verification_hint`：新窗口取得
+        发送权时清空，窗口续期时同步续期，故不会把上一窗口的用户带进新消息。
+        """
+        return f"verification_hint_users:{RedisKeys._hint_flow(flow)}:{chat_id}"
+
+    @staticmethod
+    def verification_hint_render(chat_id: int, flow: str) -> str:
+        """引导消息 mention 渲染版本键名（String：已渲染的 mention 数）。
+
+        多个晚到用户会各自触发一次编辑，此值作单调递增 CAS 版本，防止先发起
+        但后到达的编辑把已含更多 mention 的消息覆盖回旧内容。
+        """
+        return f"verification_hint_render:{RedisKeys._hint_flow(flow)}:{chat_id}"
 
     @staticmethod
     def verification_approved(chat_id: int, user_id: int) -> str:

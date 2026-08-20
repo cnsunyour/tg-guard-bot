@@ -2,9 +2,10 @@
 
 import asyncio
 import contextlib
+import math
 import secrets
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import Literal
 
@@ -37,6 +38,7 @@ from src.core.i18n import get_resolver, get_translator
 from src.core.redis import RedisKeys, get_redis
 from src.core.retry import retry_async_call
 from src.core.utils import (
+    anonymous_mentions_html,
     auto_delete_message,
     escape_html,
     format_trusted_user_mention,
@@ -58,10 +60,14 @@ from src.services.verification import (
 )
 from src.services.verification_hint import (
     VerificationHintFlow,
+    add_hint_user,
+    claim_hint_edit,
+    claim_hint_render,
     delete_hint_reservation,
     get_hint_ttl_if_match,
     promote_hint,
     reserve_hint,
+    snapshot_hint_users,
     try_extend_hint,
 )
 from src.services.verification_recovery import (
@@ -80,6 +86,10 @@ router = Router(name="verification")
 
 # 初始发送编排结果：sent 已发送 / undelivered 未启动 Bot（可恢复）/ busy 残留旧会话
 type InitialDeliveryResult = Literal["sent", "undelivered", "busy"]
+
+# 群内验证引导消息的共享窗口（秒）：窗口内同群同 flow 只发一条，到期删除。
+# catalog 文案「此提示将在 30 秒后自动删除」与此值对应，调整时需同步三语文案。
+_HINT_SHARE_WINDOW_SECONDS = 30
 
 # 安全释放 in-flight 锁的 Lua 脚本：仅当键值等于 owner token 时才删除，
 # 避免「单次处理耗时超过 TTL → 旧协程 finally 误删新协程刚取得的锁」。
@@ -2189,14 +2199,16 @@ async def handle_verification_timeout(
         logger.error(f"处理验证超时失败: {e}")
 
 
-async def _send_hint_message(
+async def _build_hint_content(
     bot: Bot,
     chat_id: int,
     flow: VerificationHintFlow,
-) -> Message:
-    """按群 locale 发送对应 flow 的验证引导消息（未启动 Bot 提示）。
+    mention_ids: Sequence[int] = (),
+) -> tuple[str, InlineKeyboardMarkup]:
+    """按群 locale 构建 flow 对应的验证引导内容（发送与编辑共用同一套渲染）。
 
     chat_title 获取失败时回退到语言无关的 chat_id，避免重新引入硬编码中文。
+    mention_ids 非空时在正文前加一行匿名 mention（仅 join flow 有此文案）。
     """
     group_locale = await get_resolver().for_group(chat_id)
     localizer = get_translator().for_locale(group_locale)
@@ -2223,41 +2235,221 @@ async def _send_hint_message(
         ]
     )
 
+    text = localizer.t(
+        f"verification.hint.{flow}.group.message",
+        chat_title=escape_html(chat_title),
+    )
+    if flow == "join" and mention_ids:
+        # anonymous_mentions_html 只由数字 user_id 拼成，是可信 HTML，不能再转义
+        mention_line = localizer.t(
+            "verification.hint.join.group.mentions",
+            users=anonymous_mentions_html(mention_ids),
+        )
+        text = f"{mention_line}\n\n{text}"
+
+    return text, keyboard
+
+
+async def _send_hint_message(
+    bot: Bot,
+    chat_id: int,
+    flow: VerificationHintFlow,
+    mention_ids: Sequence[int] = (),
+) -> Message:
+    """发送对应 flow 的验证引导消息（未启动 Bot 提示）。"""
+    text, keyboard = await _build_hint_content(bot, chat_id, flow, mention_ids)
     return await bot.send_message(
         chat_id=chat_id,
-        text=localizer.t(
-            f"verification.hint.{flow}.group.message",
-            chat_title=escape_html(chat_title),
-        ),
+        text=text,
         reply_markup=keyboard,
         parse_mode="HTML",
     )
+
+
+def _log_mention_overflow(chat_id: int, flow: VerificationHintFlow, shown: int, total: int) -> None:
+    """记录 mention 溢出：Telegram 只有前 5 个 mention 触发通知，多渲染无收益。"""
+    if total > shown:
+        logger.info(
+            f"群组 {chat_id} 的 {flow} 引导消息 mention 溢出：{total} 人等待验证，"
+            f"仅前 {shown} 人被 mention"
+        )
+
+
+async def _register_hint_user(
+    chat_id: int,
+    flow: VerificationHintFlow,
+    user_id: int,
+    ttl: int,
+) -> tuple[bool, bool, int]:
+    """登记待 mention 用户；Redis 故障时降级为「本次不 mention」而非中断引导。"""
+    try:
+        return await add_hint_user(chat_id, flow, user_id, ttl=ttl)
+    except Exception as e:
+        logger.warning(f"登记群组 {chat_id} 的待验证用户 {user_id} 失败，本次不 mention: {e}")
+        return False, False, 0
+
+
+async def _collect_hint_mentions(chat_id: int, flow: VerificationHintFlow) -> list[int]:
+    """读取窗口内待 mention 用户（按加入顺序截断到上限）；失败降级为不 mention。"""
+    limit = settings.verification_hint_max_mentions
+    if limit <= 0:
+        return []
+
+    try:
+        mention_ids, total = await snapshot_hint_users(chat_id, flow, limit)
+    except Exception as e:
+        logger.warning(f"读取群组 {chat_id} 的 {flow} 引导 mention 名单失败: {e}")
+        return []
+
+    _log_mention_overflow(chat_id, flow, len(mention_ids), total)
+    return mention_ids
+
+
+async def _refresh_hint_mentions(
+    bot: Bot,
+    chat_id: int,
+    flow: VerificationHintFlow,
+) -> None:
+    """把窗口内新登记的用户补进已发出的引导消息。
+
+    Telegram 不会为「编辑时新增的 mention」推送提醒，故这里只是视觉补全：让晚到
+    用户在消息里可见并拿到 @ 徽章。任何失败（消息已删、内容未变化、限流）都只
+    降级为消息少一个 👤，绝不影响验证主流程。
+
+    Note:
+        claim 与 edit 之间仍有一段网络窗口：两个并发编辑若在此乱序到达，较旧的
+        内容可能后落地，导致消息少显示一个 mention。因窗口仅 30 秒、后果纯视觉，
+        这里不引入分布式编辑锁；下一个用户加入时版本继续增长会自然补齐。
+    """
+    limit = settings.verification_hint_max_mentions
+    if limit <= 0:
+        return
+
+    try:
+        claim = await claim_hint_edit(chat_id, flow, limit, ttl=_HINT_SHARE_WINDOW_SECONDS)
+    except Exception as e:
+        logger.warning(f"取得群组 {chat_id} 的 {flow} 引导 mention 编辑权失败: {e}")
+        return
+
+    if claim is None:
+        return
+    _log_mention_overflow(chat_id, flow, len(claim.mention_ids), claim.total)
+
+    try:
+        text, keyboard = await _build_hint_content(bot, chat_id, flow, claim.mention_ids)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=claim.message_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        logger.debug(f"群组 {chat_id} 的 {flow} 引导消息已补全 {len(claim.mention_ids)} 个 mention")
+    except Exception as e:
+        logger.debug(f"补全群组 {chat_id} 的 {flow} 引导消息 mention 失败: {e}")
+
+
+async def _join_shared_hint(
+    bot: Bot,
+    chat_id: int,
+    flow: VerificationHintFlow,
+    mention_user_id: int | None,
+) -> None:
+    """未取得发送权：登记到当前窗口、延长共享时间，必要时补全 mention。"""
+    added = False
+    committed = False
+    if mention_user_id is not None:
+        added, committed, _ = await _register_hint_user(
+            chat_id, flow, mention_user_id, _HINT_SHARE_WINDOW_SECONDS
+        )
+
+    # 已有 hint（已提交或他人 pending）：已提交则延长共享窗口；pending 不续命。
+    # Redis 故障只影响共享时长，不能冒泡到入群流程（否则用户会被误封禁）
+    extended = False
+    try:
+        extended = await try_extend_hint(chat_id, flow)
+    except Exception as e:
+        logger.warning(f"延长群组 {chat_id} 的 {flow} 引导消息共享窗口失败: {e}")
+    if extended:
+        logger.debug(
+            f"群组 {chat_id} 已有 {flow} 引导消息，延长 TTL 到 {_HINT_SHARE_WINDOW_SECONDS} 秒"
+        )
+
+    # 仅「新登记 + 消息已发出」才需要编辑：pending 期间登记的用户会被 owner 的快照
+    # 一并发出；是否溢出上限由 claim_hint_edit 在 Redis 侧原子判定
+    if added and committed:
+        await _refresh_hint_mentions(bot, chat_id, flow)
 
 
 async def _publish_shared_hint(
     bot: Bot,
     chat_id: int,
     flow: VerificationHintFlow,
+    user_id: int | None = None,
 ) -> None:
     """竞争发送权并发布共享引导消息（NX reservation → send → promote CAS）。
 
     取不到发送权时尝试延长已提交消息的共享窗口。发送失败或 reservation 过期时
     清理自己的 reservation / 未提交消息，避免第二条 hint 残留。
+
+    传入 user_id 时（join flow）额外把窗口内等待验证的用户匿名 mention 进消息：
+    取得发送权者先聚合等待一小段时间，让同批入群的用户进入同一条消息——只有随
+    消息一起发出的 mention 才会触发 Telegram 推送提醒；晚到用户改由编辑补全。
+    join_request 用户尚未入群、收不到群消息，故不传 user_id、行为保持不变。
     """
-    owner_token = await reserve_hint(chat_id, flow)
-    if owner_token is None:
-        # 已有 hint（已提交或他人 pending）：已提交则延长共享窗口；pending 不续命
-        if await try_extend_hint(chat_id, flow):
-            logger.debug(f"群组 {chat_id} 已有 {flow} 引导消息，延长 TTL 到 30 秒")
-        return
+    mention_user_id = user_id if settings.verification_hint_max_mentions > 0 else None
+    aggregation_delay = (
+        settings.verification_hint_aggregation_delay if mention_user_id is not None else 0.0
+    )
+    # 聚合等待同样消耗窗口 TTL（promote 用 KEEPTTL），据此加长预留，
+    # 使消息发出后仍有完整的共享窗口
+    reserve_ttl = _HINT_SHARE_WINDOW_SECONDS + math.ceil(aggregation_delay)
 
     try:
-        hint_msg = await _send_hint_message(bot, chat_id, flow)
+        owner_token = await reserve_hint(chat_id, flow, ttl=reserve_ttl)
+    except Exception as e:
+        # 引导消息只是尽力提醒：Redis 故障时跳过即可，challenge 已标记 undelivered，
+        # 由同 session 的 timeout task 兜底。异常若冒泡到 on_user_join 会走封禁分支，
+        # 把 Redis 抖动变成对正常新用户的误封
+        logger.warning(f"群组 {chat_id} 竞争 {flow} 引导发送权失败，跳过引导消息: {e}")
+        return
+
+    if owner_token is None:
+        await _join_shared_hint(bot, chat_id, flow, mention_user_id)
+        return
+
+    hint_msg: Message | None = None
+    try:
+        mention_ids: list[int] = []
+        if mention_user_id is not None:
+            await _register_hint_user(chat_id, flow, mention_user_id, reserve_ttl)
+            if aggregation_delay > 0:
+                await asyncio.sleep(aggregation_delay)
+            mention_ids = await _collect_hint_mentions(chat_id, flow)
+
+        hint_msg = await _send_hint_message(bot, chat_id, flow, mention_ids)
         if await promote_hint(chat_id, flow, owner_token, hint_msg.message_id):
+            if mention_ids:
+                with contextlib.suppress(Exception):
+                    await claim_hint_render(
+                        chat_id,
+                        flow,
+                        hint_msg.message_id,
+                        len(mention_ids),
+                        ttl=_HINT_SHARE_WINDOW_SECONDS,
+                    )
             asyncio.create_task(
-                delete_hint_message_after_delay(bot, chat_id, hint_msg.message_id, flow, 30)
+                delete_hint_message_after_delay(
+                    bot, chat_id, hint_msg.message_id, flow, _HINT_SHARE_WINDOW_SECONDS
+                )
             )
-            logger.info(f"群组 {chat_id} 发送 {flow} 验证引导消息（30秒内共享）")
+            logger.info(
+                f"群组 {chat_id} 发送 {flow} 验证引导消息"
+                f"（{_HINT_SHARE_WINDOW_SECONDS}秒内共享，mention {len(mention_ids)} 人）"
+            )
+            if mention_user_id is not None:
+                # 补检：覆盖「快照之后、promote 之前」挤进窗口的用户
+                await _refresh_hint_mentions(bot, chat_id, flow)
         else:
             # reservation 在发送期间过期或被替换：删未受状态机管理的消息，不覆盖新 owner
             logger.warning(
@@ -2269,6 +2461,11 @@ async def _publish_shared_hint(
     except Exception:
         with contextlib.suppress(Exception):
             await delete_hint_reservation(chat_id, flow, owner_token)
+        if hint_msg is not None:
+            # promote 抛错（如 Redis 故障）时消息已发出却未纳入状态机：没有删除任务
+            # 会回收它，此处补删，避免群里永久残留一条引导消息
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=chat_id, message_id=hint_msg.message_id)
         logger.error(f"发送 {flow} 引导消息失败", exc_info=True)
 
 
@@ -2276,9 +2473,10 @@ async def handle_user_not_started_bot(bot: Bot, chat_id: int, user_id: int) -> N
     """直接入群用户未启动 Bot：发布共享引导消息。
 
     challenge 已由 _start_initial_verification 标记为 undelivered，并由同 session 的
-    timeout task 兜底处罚，故此处不再另启 timeout。30 秒内同一 flow 只发一条引导消息。
+    timeout task 兜底处罚，故此处不再另启 timeout。30 秒内同一 flow 只发一条引导消息，
+    消息内以匿名 mention 提醒窗口内所有等待验证的用户（用户已入群，mention 必定生效）。
     """
-    await _publish_shared_hint(bot, chat_id, "join")
+    await _publish_shared_hint(bot, chat_id, "join", user_id)
     logger.info(f"用户 {user_id} 的 join challenge 已标记为 undelivered（群组 {chat_id}）")
 
 
