@@ -392,32 +392,61 @@ async def send_group_welcome(
 
 
 async def check_user_spam_info(
-    bot: Bot, chat_id: int, user_id: int, username: str, mode: str = "join"
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    username: str,
+    mode: str = "join",
+    *,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    bio: str | None = None,
 ) -> bool:
     """检测用户信息是否为垃圾
+
+    名字与 bio 优先取事件自带字段：join_request 的 ChatJoinRequest 事件直接
+    携带 bio（权威来源，不再额外获取）；直接入群的 ChatMemberUpdated 无 bio
+    字段，缺失时按 Telethon full user → Bot API getChat 顺序补齐——getChat
+    仅对曾与 Bot 私聊过的用户返回 bio（tdlib#839），入群场景下大多拿不到，
+    故 Telethon 优先；两级都失败则只检测名字（不阻断流程）。
 
     Args:
         bot: Bot 实例
         chat_id: 群组 ID
         user_id: 用户 ID
-        username: 用户名
+        username: 用户名（仅用于日志）
         mode: 处理模式，"join" 或 "join_request"
+        first_name: 用户名（事件自带，空则不计入检测文本）
+        last_name: 用户姓（事件自带，空则不计入检测文本）
+        bio: 用户简介（join_request 事件自带；join 模式留空则由本函数补齐）
 
     Returns:
         True: 检测到垃圾信息并已处理
         False: 通过检测，继续正常流程
     """
     try:
-        user_info = await bot.get_chat(user_id)
+        if not bio and mode == "join":
+            try:
+                bio = await get_user_status_service().get_user_bio(chat_id, user_id)
+            except Exception as e:
+                # 服务层契约上不应抛出；防御契约破坏时降级 getChat 而非放弃检测
+                logger.debug(f"Telethon 获取用户 bio 异常 [用户:{user_id}]: {e}")
+
+            if not bio:
+                try:
+                    user_info = await bot.get_chat(user_id)
+                    bio = getattr(user_info, "bio", None)
+                except Exception as e:
+                    logger.debug(f"getChat 获取用户 bio 失败 [用户:{user_id}]: {e}")
 
         # 构建检测文本：名字 + bio
         check_texts = []
-        if user_info.first_name:
-            check_texts.append(user_info.first_name)
-        if user_info.last_name:
-            check_texts.append(user_info.last_name)
-        if hasattr(user_info, "bio") and user_info.bio:
-            check_texts.append(user_info.bio)
+        if first_name:
+            check_texts.append(first_name)
+        if last_name:
+            check_texts.append(last_name)
+        if bio:
+            check_texts.append(bio)
 
         if not check_texts:
             return False
@@ -799,7 +828,16 @@ async def _process_join_request(
     # ========== 用户状态检查结束 ==========
 
     # ==================== 用户信息反垃圾检测 ====================
-    if await check_user_spam_info(bot, chat_id, user_id, username, mode="join_request"):
+    if await check_user_spam_info(
+        bot,
+        chat_id,
+        user_id,
+        username,
+        mode="join_request",
+        first_name=event.from_user.first_name,
+        last_name=event.from_user.last_name,
+        bio=event.bio,
+    ):
         return  # 检测到垃圾信息，已处理，直接返回
     # ==================== 用户信息反垃圾检测结束 ====================
 
@@ -1113,7 +1151,15 @@ async def _process_user_join(
     # ========== 用户状态检查结束 ==========
 
     # ==================== 用户信息反垃圾检测 ====================
-    if await check_user_spam_info(bot, chat_id, user_id, username, mode="join"):
+    if await check_user_spam_info(
+        bot,
+        chat_id,
+        user_id,
+        username,
+        mode="join",
+        first_name=user.first_name,
+        last_name=user.last_name,
+    ):
         return  # 检测到垃圾信息，已处理，直接返回
     # ==================== 用户信息反垃圾检测结束 ====================
 

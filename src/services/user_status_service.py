@@ -13,6 +13,7 @@ from telethon.errors import (
     UserNotParticipantError,
 )
 from telethon.tl.functions.channels import GetParticipantRequest
+from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import ChannelParticipant, ChannelParticipantBanned
 
 from src.core.config import settings
@@ -48,6 +49,34 @@ class UserStatusService:
     def enabled(self) -> bool:
         """检查服务是否可用"""
         return settings.user_status_check_enabled and self._client is not None
+
+    async def get_user_bio(self, chat_id: int, user_id: int) -> str | None:
+        """获取用户 bio（Telethon full user 的 about 字段）
+
+        降级策略与 check_user 一致：未启用或任何失败（含 userbot 不在群组、
+        session 无该用户实体）返回 None，由调用方决定是否走 Bot API getChat 兜底。
+
+        Args:
+            chat_id: 群组 ID（经群组上下文解析用户实体，userbot 须在该群）
+            user_id: 用户 ID
+
+        Returns:
+            用户 bio；无 bio 或获取失败时为 None
+        """
+        client = self._client
+        if not self.enabled or client is None:
+            return None
+
+        try:
+            user = await self._get_participant_entity(chat_id, user_id)
+            if user is None:
+                return None
+
+            result = await client(GetFullUserRequest(id=user))
+            return result.full_user.about or None
+        except Exception as e:
+            logger.debug(f"Telethon 获取用户 bio 失败 [用户:{user_id}]: {e}")
+            return None
 
     async def check_user(self, user_id: int, chat_id: int | None = None) -> UserStatusResult:
         """检查用户状态
