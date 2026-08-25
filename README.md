@@ -665,7 +665,7 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [x] **v1.6.x**: 入群短窗口消息防护中间件、入群 in-flight 互斥锁（AI 慢请求去重）、举报按钮权限加固、群消息管理员名称完整显示、验证流程网络重试
 - [x] **多语言 i18n**: zh-Hans/zh-Hant/en 全链路本地化（catalog + 稳定 code 持久化 + 命令菜单 locale + WebApp 页面）
 - [x] **v1.7.x**: 四管理员命令支持带参直接设置、`/report` 举报引用预览、`/lang` 参数直接切换、全项目安全审查加固（0 Critical/0 High）
-- [x] **v1.8.x**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退；入群限制权限收紧（禁 react/编辑头衔/发起话题）、datetime 时区脆弱性消除、altcha PHP 版本约束对齐、数据库迁移切换 Alembic（启动自动迁移 + 旧库自动 stamp）、review/report 提示改回复原文、/lang 幂等编辑修复、/spam 封禁失败不再阻断消息删除与训练样本入库
+- [x] **v1.8.x**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退；入群限制权限收紧（禁 react/编辑头衔/发起话题）、datetime 时区脆弱性消除、altcha PHP 版本约束对齐、数据库迁移切换 Alembic（启动自动迁移 + 旧库自动 stamp）、review/report 提示改回复原文、/lang 幂等编辑修复、/spam 封禁失败不再阻断消息删除与训练样本入库、群内引导消息匿名 mention 待验证用户、入群资料检测修复 bio 获取链（事件 bio + Telethon 降级）
 
 ## 🤝 贡献
 
