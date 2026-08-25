@@ -5,6 +5,30 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.8.4] - 2026-08-25
+
+### 新增功能
+
+#### 群内验证引导消息匿名 mention 等待验证的用户 👤
+- 未启动 Bot 的用户入群时，群内共享引导消息把该批用户匿名 mention 进首条消息（渲染为 👤 可点击链接，不暴露用户名）；只有随消息发出的 mention 才触发 Telegram 推送，提醒用户主动私聊完成验证
+- 首条消息聚合同批入群用户（`VERIFICATION_HINT_AGGREGATION_DELAY`，默认 1.5 秒窗口）；窗口内晚到的用户经编辑补进消息（视觉补全，Telegram 不为编辑新增的 mention 推送提醒）
+- 单条消息 mention 上限 5 个（对齐 Telegram「仅前 5 个 mention 触发通知」）；加入请求（Approve New Members）模式不 mention（用户尚未入群，收不到群消息）
+- mention 相关 Redis 调用全部可降级：故障时退回无 mention 的原引导消息，不阻断验证主流程
+
+### Bug 修复
+
+#### 入群资料检测修复 bio 获取链 🔍
+- **问题**：入群时对用户资料（名字 + bio）的 AI 反垃圾检测长期拿不到 bio——Bot API `getChat` 仅对曾与 Bot 私聊交互过的用户返回 bio（tdlib/telegram-bot-api#839），而入群场景下用户几乎必然未启动过 Bot，垃圾账号得以把广告放 bio 里绕过入群检测；启用「批准新成员」的群还会丢弃加入请求事件自带的 bio 字段
+- **修复**：
+  - join_request（批准新成员模式）：直接使用 `ChatJoinRequest` 事件自带的 bio 与用户名字，不再依赖 getChat
+  - join（直接入群模式）：`ChatMemberUpdated` 事件无 bio 字段，新增 Telethon `get_user_bio`（经群组上下文解析实体后取 full user 的 about），失败降级 `getChat` 兜底，两级都拿不到则只检测名字，不阻断验证流程
+- **注意**：join 模式的 Telethon bio 路径需开启 `USER_STATUS_CHECK_ENABLED` 并配置 Telethon session；未开启时自动降级为仅 getChat（行为同旧版）
+
+### 代码质量
+
+- 新增 `tests/test_verification_profile_check.py`（13 项）：bio 来源选择、全部降级路径、入群流程字段透传、`get_user_bio` 分支
+- 新增引导 mention 跨窗口登记语义测试（2 项），固化「上一窗口用户不进下一条消息」的语义
+
 ## [1.8.3] - 2026-08-20
 
 ### Bug 修复
