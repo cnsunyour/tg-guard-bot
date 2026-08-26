@@ -1,5 +1,6 @@
 """工具函数测试"""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -353,3 +354,145 @@ async def test_check_admin_permission_without_from_user_fails_closed(mocker) -> 
         assert await utils.check_admin_permission(message, MagicMock()) is False
 
     by_id.assert_not_awaited()
+
+
+# ---------- 管理员权限过滤（spam 提示只 mention 能处置违规者）----------
+
+
+def _admin(user_id: int, *, anonymous: bool = False, delete: bool = True, restrict: bool = True):
+    """构造一个非匿名/具名权限的普通管理员（ChatMemberAdministrator）"""
+    from aiogram.types import ChatMemberAdministrator, User
+
+    return ChatMemberAdministrator(
+        user=User(id=user_id, is_bot=False, first_name=f"u{user_id}"),
+        is_anonymous=anonymous,
+        can_be_edited=False,
+        can_manage_chat=delete or restrict,
+        can_delete_messages=delete,
+        can_manage_video_chats=False,
+        can_restrict_members=restrict,
+        can_promote_members=False,
+        can_change_info=False,
+        can_invite_users=False,
+        can_post_stories=False,
+        can_edit_stories=False,
+        can_delete_stories=False,
+    )
+
+
+def _owner(user_id: int, *, anonymous: bool = False):
+    """构造群主（ChatMemberOwner）——隐含全部权限，无 can_delete/restrict 字段"""
+    from aiogram.types import ChatMemberOwner, User
+
+    return ChatMemberOwner(
+        user=User(id=user_id, is_bot=False, first_name=f"owner{user_id}"),
+        is_anonymous=anonymous,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("admin_factory", "expected"),
+    [
+        # 群主：非匿名始终计入，匿名排除
+        (lambda: _owner(1, anonymous=False), True),
+        (lambda: _owner(2, anonymous=True), False),
+        # 普通管理员：需同时具备删除 + 封禁两项权限
+        (lambda: _admin(3, delete=True, restrict=True), True),
+        (lambda: _admin(4, delete=True, restrict=False), False),
+        (lambda: _admin(5, delete=False, restrict=True), False),
+        (lambda: _admin(6, delete=False, restrict=False), False),
+        # 匿名管理员一律排除（即便权限齐全）
+        (lambda: _admin(7, anonymous=True, delete=True, restrict=True), False),
+    ],
+)
+def test_can_handle_spam_filter_rule(admin_factory, expected) -> None:
+    """_can_handle_spam：群主始终计入、普通管理员需双权限、匿名一律排除"""
+    from src.core.utils import _can_handle_spam
+
+    assert _can_handle_spam(admin_factory()) is expected
+
+
+@pytest.mark.unit
+async def test_get_chat_administrators_mention_caches_filtered_ids(mocker) -> None:
+    """API 路径：过滤后 ID 列表写入缓存，空列表也缓存（省后续 API 调用）"""
+    import src.core.utils as utils
+
+    redis = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        setex=AsyncMock(),
+    )
+    mocker.patch.object(utils, "get_redis", return_value=redis)
+
+    bot = MagicMock()
+    bot.get_chat_administrators = AsyncMock(
+        return_value=[
+            _owner(100, anonymous=False),  # 群主：计入
+            _admin(200, delete=True, restrict=True),  # 双权限：计入
+            _admin(300, delete=True, restrict=False),  # 缺封禁权：排除
+            _owner(400, anonymous=True),  # 匿名群主：排除
+        ]
+    )
+
+    mentions = await utils.get_chat_administrators_mention(bot, -100123)
+
+    # 仅群主 100 与双权限管理员 200 进入 mention
+    assert "id=100" in mentions and "id=200" in mentions
+    assert "id=300" not in mentions and "id=400" not in mentions
+    # 过滤后 ID 列表已缓存（非空也写）
+    cached = redis.setex.await_args
+    assert cached.args[1] == 300  # TTL 5 分钟
+    assert cached.args[2] == json.dumps([{"id": 100}, {"id": 200}], ensure_ascii=False)
+
+
+@pytest.mark.unit
+async def test_get_chat_administrators_mention_caches_empty_when_none_eligible(mocker) -> None:
+    """无符合条件管理员时缓存空列表，避免反复请求 Telegram API"""
+    import src.core.utils as utils
+
+    redis = SimpleNamespace(get=AsyncMock(return_value=None), setex=AsyncMock())
+    mocker.patch.object(utils, "get_redis", return_value=redis)
+    bot = MagicMock()
+    bot.get_chat_administrators = AsyncMock(
+        return_value=[_admin(500, delete=False, restrict=False)]
+    )
+
+    mentions = await utils.get_chat_administrators_mention(bot, -100456)
+
+    assert mentions == ""
+    cached = redis.setex.await_args
+    assert cached.args[2] == json.dumps([], ensure_ascii=False)
+
+
+@pytest.mark.unit
+async def test_get_chat_administrators_mention_cache_hit_skips_api(mocker) -> None:
+    """缓存命中直接渲染，不调用 Telegram API"""
+    import src.core.utils as utils
+
+    redis = SimpleNamespace(
+        get=AsyncMock(return_value=json.dumps([{"id": 700}, {"id": 800}], ensure_ascii=False)),
+        setex=AsyncMock(),
+    )
+    mocker.patch.object(utils, "get_redis", return_value=redis)
+    bot = MagicMock()
+    bot.get_chat_administrators = AsyncMock()
+
+    mentions = await utils.get_chat_administrators_mention(bot, -100789)
+
+    assert "id=700" in mentions and "id=800" in mentions
+    bot.get_chat_administrators.assert_not_awaited()
+    redis.setex.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_get_chat_administrators_mention_api_failure_returns_empty(mocker) -> None:
+    """Telegram API 异常时降级返回空 mention（调用方据此去掉 🔔 前缀）"""
+    import src.core.utils as utils
+
+    redis = SimpleNamespace(get=AsyncMock(return_value=None), setex=AsyncMock())
+    mocker.patch.object(utils, "get_redis", return_value=redis)
+    bot = MagicMock()
+    bot.get_chat_administrators = AsyncMock(side_effect=RuntimeError("telegram down"))
+
+    assert await utils.get_chat_administrators_mention(bot, -100999) == ""
+    redis.setex.assert_not_awaited()  # API 失败不写缓存

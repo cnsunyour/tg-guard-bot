@@ -695,23 +695,45 @@ def parse_message_link_with_chat(text: str) -> tuple[int | None, int | None, str
     return None, None, None
 
 
+def _can_handle_spam(admin: ChatMemberOwner | ChatMemberAdministrator) -> bool:
+    """判断该管理员是否应被纳入 spam 提示的 mention
+
+    Telegram 对单条消息只推送前 5 个 mention，故只提醒真能处置违规的管理员
+    以提高提醒有效性：
+
+    - 群主（owner）隐含拥有全部管理权限，始终计入
+    - 普通管理员需同时具备删除消息（``can_delete_messages``）与
+      封禁/限制用户（``can_restrict_members``，对应客户端「Ban Users」勾选）
+      两项权限
+    - 匿名管理员无法 mention，一律排除
+    """
+    if admin.is_anonymous:
+        return False
+    if isinstance(admin, ChatMemberOwner):
+        return True
+    return admin.can_delete_messages and admin.can_restrict_members
+
+
 @retry_on_network_error(max_retries=3, initial_delay=1.0)
 async def get_chat_administrators_mention(
     bot: Bot,
     chat_id: int,
 ) -> str:
-    """获取群组管理员列表的 mention 字符串
+    """获取具备垃圾消息处置权限的管理员 mention 字符串
 
-    使用 user_id 方式生成 mention，适用于所有管理员（包括没有 username 的）
-    结果会被缓存 5 分钟，减少 Telegram API 调用
+    过滤规则见 :func:`_can_handle_spam`：群主始终计入，普通管理员需同时具备
+    删除消息与封禁用户权限，匿名管理员一律排除。过滤后的 ID 列表缓存 5 分钟
+    （键 ``chat_admins:{chat_id}``），减少 Telegram API 调用；权限变更最长
+    延迟 5 分钟生效（与 TTL 一致）。使用 user_id 生成匿名 mention，适用于
+    没有 username 的管理员。
 
     Args:
         bot: Bot 实例
         chat_id: 群组 ID
 
     Returns:
-        mention 字符串，包含所有非匿名管理员，空格分隔
-        每个管理员显示为 👤 emoji，不会显示真实姓名
+        匿名 mention 字符串（👤 空格连接，不含管理员身份信息）。无符合条件
+        的管理员时返回空字符串，调用方据此降级为不带 🔔 前缀的提示。
 
     Example:
         >>> mentions = await get_chat_administrators_mention(bot, chat_id)
@@ -721,45 +743,37 @@ async def get_chat_administrators_mention(
     redis = get_redis()
     cache_key = RedisKeys.chat_admins(chat_id)
 
-    # 1. 尝试从 Redis 缓存获取
+    # 1. 命中缓存：直接渲染已过滤的 ID 列表
     cached_data = await redis.get(cache_key)
     if cached_data:
         try:
             admins: list[dict[str, Any]] = json.loads(cached_data)
             mentions = anonymous_mentions_html([admin["id"] for admin in admins])
-            logger.debug(f"从缓存获取管理员列表 [群组:{chat_id}] [数量:{len(admins)}]")
+            logger.debug(f"从缓存获取符合权限的管理员列表 [群组:{chat_id}] [数量:{len(admins)}]")
             return mentions
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"解析管理员缓存失败 [群组:{chat_id}]: {e}")
 
-    # 2. 从 Telegram API 获取
+    # 2. 未命中：从 Telegram API 获取并按权限过滤
     try:
         administrators = await bot.get_chat_administrators(chat_id)
 
-        # 3. 过滤匿名管理员（无法 mention）
-        # 仅保留有用户信息的非匿名管理员
-        non_anonymous_admins = [
+        eligible_admins = [
             admin
             for admin in administrators
-            if not getattr(admin, "is_anonymous", False)
-            and admin.user
-            and isinstance(admin, (ChatMemberOwner, ChatMemberAdministrator))
+            if isinstance(admin, (ChatMemberOwner, ChatMemberAdministrator))
+            and _can_handle_spam(admin)
         ]
 
-        if not non_anonymous_admins:
-            logger.debug(f"群组没有非匿名管理员 [群组:{chat_id}]")
-            return ""
-
-        # 4. 构建缓存数据（只存 ID）
-        admins_data = [{"id": admin.user.id} for admin in non_anonymous_admins]
-
-        # 5. 缓存结果（5分钟 TTL）
+        # 3. 缓存过滤后的 ID 列表（含空列表，避免无符合项时反复请求 API），5 分钟 TTL
+        admins_data = [{"id": admin.user.id} for admin in eligible_admins]
         await redis.setex(cache_key, 300, json.dumps(admins_data, ensure_ascii=False))
 
-        # 6. 构建 mention 字符串（使用 emoji 代替显示名称）
         mentions = anonymous_mentions_html([admin["id"] for admin in admins_data])
-
-        logger.debug(f"获取管理员列表 [群组:{chat_id}] [数量:{len(admins_data)}] [已缓存]")
+        logger.debug(
+            f"获取符合权限的管理员列表 [群组:{chat_id}] "
+            f"[总数:{len(administrators)}] [过滤后:{len(admins_data)}] [已缓存]"
+        )
         return mentions
 
     except Exception as e:
