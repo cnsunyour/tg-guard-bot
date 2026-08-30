@@ -319,16 +319,16 @@ make dev-logs
 
 ## 常见问题
 
-### Q: 备份失败，提示 "pg_dump: command not found"
+### Q: 备份失败，提示 "pg_dump: command not found" 或 "docker: command not found"
 
-**A**: 需要在 Docker 容器内执行备份脚本：
+**A**: 备份脚本经宿主机 `docker exec` 在 postgres 容器内执行 pg_dump，宿主机无需安装 pg_dump，但必须在宿主机运行（且已安装 Docker CLI）：
 
 ```bash
-# 错误方式（宿主机没有 pg_dump）
-python scripts/backup.py
-
-# 正确方式（容器内有 pg_dump）
+# 正确方式（宿主机执行，pg_dump 在 postgres 容器内运行）
 make backup
+
+# 错误方式（bot 容器内没有 docker 命令与 socket）
+docker-compose exec bot python scripts/backup.py
 ```
 
 ### Q: Redis 备份时提示 "BGSAVE already in progress"

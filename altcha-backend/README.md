@@ -14,7 +14,7 @@ ALTCHA 是一个开源的 Proof-of-Work (PoW) CAPTCHA 解决方案，无需第�
 
 ## 前置要求
 
-- PHP 7.4+ (推荐 PHP 8.0+)
+- PHP 8.2+
 - Composer（用于安装依赖）
 - 免费 PHP 主机（推荐 Serv00）
 

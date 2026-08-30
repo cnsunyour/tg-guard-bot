@@ -206,8 +206,6 @@ make check
 - **持久化业务字段用稳定 code**（如 `system:spam`、`system:channel_impersonation`），展示层渲染——不存本地化文案（群切语言后旧记录会显示旧语言）
 - **库枚举/标识符不嵌入文案**（避免「[photo消息]」中英混排）
 
-详细规范见 `CLAUDE.md` 的「🌐 i18n 多语言」章节。
-
 ---
 
 ## 🧪 测试
@@ -399,8 +397,8 @@ make dev-down
 # 运行数据库迁移
 make db-migrate
 
-# 备份数据库
-make db-backup
+# 备份数据库（PostgreSQL + Redis）
+make backup
 
 # 进入数据库 Shell
 make db-shell

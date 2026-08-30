@@ -231,7 +231,6 @@ make train-model    # 训练模型
 
 | 文档 | 说明 |
 |------|------|
-| [QUICKSTART.md](QUICKSTART.md) | 详细的快速开始指南 |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 生产环境部署指南 |
 | [SECURITY.md](SECURITY.md) | 安全说明与建议 |
 | [docs/backup-strategy.md](docs/backup-strategy.md) | 备份策略说明 |
@@ -579,7 +578,7 @@ TURNSTILE_SITE_KEY=
 # 配置 CAPTCHA_WEBAPP_URL 后会自动使用统一 WebApp
 ```
 
-> ✅ 说明：当前“随机验证”对 Turnstile 的可用性判断依赖 `TURNSTILE_SITE_KEY`（见 `src/services/verification.py:1051`）。
+> ✅ 说明：当前“随机验证”对 Turnstile 的可用性判断依赖 `TURNSTILE_SITE_KEY`（见 `src/services/verification.py:697`）。
 > - **TURNSTILE_SECRET_KEY 不在 Bot 端配置**：它应配置在统一 WebApp（Cloudflare Pages/Functions）的环境变量 `TURNSTILE_SECRET_KEY` 中（见 `captcha-webapp/README.md`、`captcha-webapp/functions/api/verify.js`）。
 > - 如果你希望 Turnstile 可能被随机选中，请在 Bot 端同时配置 Turnstile Site Key；直接指定 Turnstile 验证不受影响。
 
@@ -665,7 +664,7 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [x] **v1.6.x**: 入群短窗口消息防护中间件、入群 in-flight 互斥锁（AI 慢请求去重）、举报按钮权限加固、群消息管理员名称完整显示、验证流程网络重试
 - [x] **多语言 i18n**: zh-Hans/zh-Hant/en 全链路本地化（catalog + 稳定 code 持久化 + 命令菜单 locale + WebApp 页面）
 - [x] **v1.7.x**: 四管理员命令支持带参直接设置、`/report` 举报引用预览、`/lang` 参数直接切换、全项目安全审查加固（0 Critical/0 High）
-- [x] **v1.8.x**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退；入群限制权限收紧（禁 react/编辑头衔/发起话题）、datetime 时区脆弱性消除、altcha PHP 版本约束对齐、数据库迁移切换 Alembic（启动自动迁移 + 旧库自动 stamp）、review/report 提示改回复原文、/lang 幂等编辑修复、/spam 封禁失败不再阻断消息删除与训练样本入库、群内引导消息匿名 mention 待验证用户、入群资料检测修复 bio 获取链（事件 bio + Telethon 降级）
+- [x] **v1.8.x**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退；入群限制权限收紧（禁 react/编辑头衔/发起话题）、datetime 时区脆弱性消除、altcha PHP 版本约束对齐、数据库迁移切换 Alembic（启动自动迁移 + 旧库自动 stamp）、review/report 提示改回复原文、/lang 幂等编辑修复、/spam 封禁失败不再阻断消息删除与训练样本入库、群内引导消息匿名 mention 待验证用户、入群资料检测修复 bio 获取链（事件 bio + Telethon 降级）、spam 提示仅 mention 具备处置权限的管理员
 
 ## 🤝 贡献
 

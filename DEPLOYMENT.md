@@ -11,7 +11,7 @@
 | 项目 | 最低配置 | 推荐配置 |
 |------|---------|---------|
 | CPU | 1 vCPU | 2 vCPU |
-| 内存 | 1GB（无 OCR） | 2GB（基础）/ 4GB（启用 OCR） |
+| 内存 | 1GB | 2GB |
 | 存储 | 20GB SSD | 40GB SSD |
 | 带宽 | 1TB/月 | 无限 |
 | 系统 | Debian 11+ / Ubuntu 20.04+ | Debian 12 / Ubuntu 22.04 |
@@ -89,20 +89,6 @@ REDIS_PASSWORD=your_redis_password     # ⚠️ 强烈建议设置
 
 # 模型签名密钥（必填，防止模型文件被篡改）
 MODEL_SIGNATURE_KEY=<使用 openssl rand -hex 32 生成>  # ⚠️ 必填
-
-# 是否启用 OCR（需要更多内存）
-ENABLE_OCR=false  # 根据需要设置为 true
-
-# OCR 提供者配置（可选）
-# OpenAI OCR（推荐，云 API，内存占用低）
-OCR_OPENAI_ENABLED=false
-OCR_OPENAI_API_KEY=
-OCR_OPENAI_MODEL=gpt-4o-mini
-
-# 百度智能云 OCR（备选，云 API）
-OCR_BAIDU_ENABLED=false
-OCR_BAIDU_API_KEY=
-OCR_BAIDU_SECRET_KEY=
 ```
 
 **获取你的 Telegram User ID**:
@@ -114,10 +100,7 @@ OCR_BAIDU_SECRET_KEY=
 
 ```bash
 # 方式 1: 使用 Makefile（推荐）
-make prod-build       # 构建镜像（不启用 OCR）
-# 或
-make prod-build-ocr   # 构建镜像（启用 OCR）
-
+make prod-build       # 构建镜像
 make prod-up          # 启动服务
 
 # 方式 2: 使用 Docker Compose
@@ -284,17 +267,17 @@ docker-compose exec bot cat logs/error_$(date +%Y-%m-%d).log
 ### 2. 数据库备份
 
 ```bash
-# 手动备份
-make db-backup
+# 手动备份（PostgreSQL + Redis）
+make backup
 
-# 或使用脚本
-docker-compose exec bot python scripts/backup.py --backup
+# 或使用脚本（在宿主机执行；脚本内部调用宿主机 docker 命令，不能在 bot 容器内运行）
+python scripts/backup.py --backup
 
 # 查看备份列表
-docker-compose exec bot python scripts/backup.py --list
+python scripts/backup.py --list
 
-# 恢复备份
-docker-compose exec bot python scripts/backup.py --restore backup_20240115_120000.sql
+# 恢复备份（路径相对仓库根目录，文件名格式见 docs/backup-strategy.md）
+python scripts/backup.py --restore-postgres backups/daily/postgres_20260105.sql
 ```
 
 **设置自动备份 (Cron)**:
@@ -304,7 +287,7 @@ docker-compose exec bot python scripts/backup.py --restore backup_20240115_12000
 crontab -e
 
 # 添加每天凌晨 3 点备份
-0 3 * * * cd /path/to/tg-guard-bot && make db-backup >> /var/log/tg-guard-backup.log 2>&1
+0 3 * * * cd /path/to/tg-guard-bot && make backup >> /var/log/tg-guard-backup.log 2>&1
 ```
 
 ### 3. 性能监控
@@ -411,39 +394,10 @@ docker-compose restart postgres
 free -h
 docker stats
 
-# 2. 禁用 OCR（如果启用了）
-# 编辑 .env: ENABLE_OCR=false
-make prod-down
-make prod-build
-make prod-up
-
-# 3. 升级 VPS 到 4GB RAM
+# 2. 升级 VPS 到 4GB RAM
 ```
 
-### 问题 4: OCR 初始化失败
-
-**症状**: 日志显示 OCR 相关错误
-
-**解决方法**:
-
-```bash
-# 1. 检查 OCR 配置
-cat .env | grep OCR
-
-# 2. 如果使用云 OCR（推荐）
-# 配置 OpenAI OCR 或百度云 OCR，无需本地 OCR
-OCR_OPENAI_ENABLED=true
-OCR_OPENAI_API_KEY=sk-...
-
-# 3. 如果使用本地 OCR
-# 确认 ENABLE_OCR 设置并重新构建
-make prod-build-ocr
-
-# 或
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml build --build-arg ENABLE_OCR=true
-```
-
-### 问题 5: 模型签名验证失败
+### 问题 4: 模型签名验证失败
 
 **症状**: 日志显示 "模型签名验证失败" 或 "MODEL_SIGNATURE_KEY is required"
 
@@ -512,7 +466,7 @@ await dp.start_polling(
 - [ ] 验证 Bot 响应: 发送 `/help` 测试
 
 ### 每周检查
-- [ ] 数据库备份验证: `make db-backup`
+- [ ] 数据库备份验证: `make backup`
 - [ ] 查看性能指标: `/health` 和 `/stats`
 - [ ] 检查磁盘空间: `df -h`
 - [ ] 清理旧日志: `ls -lh logs/`
@@ -528,9 +482,10 @@ await dp.start_polling(
 ## 🔗 相关文档
 
 - [README.md](README.md) - 项目概览
-- [QUICKSTART.md](QUICKSTART.md) - 快速开始指南
-- [PHASE3_TESTING.md](PHASE3_TESTING.md) - 群管理测试
-- [PHASE5_OCR_TESTING.md](PHASE5_OCR_TESTING.md) - OCR 测试
+- [SECURITY.md](SECURITY.md) - 安全说明与建议
+- [docs/backup-strategy.md](docs/backup-strategy.md) - 备份策略说明
+- [captcha-webapp/README.md](captcha-webapp/README.md) - 统一 CAPTCHA WebApp 部署指南
+- [altcha-backend/README.md](altcha-backend/README.md) - ALTCHA PHP 后端部署指南
 
 ---
 

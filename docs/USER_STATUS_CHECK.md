@@ -286,7 +286,9 @@ curl -I https://api.telegram.org
 在 `.env` 中添加：
 
 ```bash
-PROXY_URL=socks5://127.0.0.1:1080
+# 仅代理 Telegram（Telethon）流量：socks5_proxy 仅被 Bot 用作代理，httpx 会忽略该键，AI API 等其它 HTTP 请求不受影响（all_proxy 则会被 httpx 全局采用）
+# Docker 部署不能用 127.0.0.1（指向容器自身）；Linux 原生 Docker 无 host.docker.internal 时改用宿主机 bridge 地址（如 172.17.0.1）
+socks5_proxy=socks5://host.docker.internal:1080
 ```
 
 ---
@@ -307,5 +309,3 @@ PROXY_URL=socks5://127.0.0.1:1080
 
 - [Telethon 官方文档](https://docs.telethon.dev/)
 - [Telegram User 对象](https://core.telegram.org/type/User)
-- [CAS 黑名单配置](./CAS_CONFIGURATION.md)
-- [群组清理功能](./CLEANUP_FEATURE.md)
