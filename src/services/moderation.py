@@ -1,10 +1,12 @@
 """群管理服务模块"""
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import ChatPermissions
 from loguru import logger
 
@@ -12,6 +14,9 @@ from src.core.config import settings
 from src.core.utils import utcnow
 from src.repositories.audit_repo import AuditRepository
 from src.repositories.user_repo import UserRepository
+
+_DELETE_MESSAGES_BATCH_SIZE = 100
+"""Telegram deleteMessages 单次调用允许的 message_ids 上限（官方限制 1-100）"""
 
 
 class ModerationErrorCode(StrEnum):
@@ -578,6 +583,100 @@ class ModerationService:
             return False, 0
 
     @staticmethod
+    async def _delete_messages_in_batches(
+        bot: Bot, chat_id: int, message_ids: Iterable[int]
+    ) -> tuple[int, int]:
+        """按 Telegram 100 条上限分批调用 deleteMessages 批量删除。
+
+        计数口径：批量接口只返回批次级 bool，找不到的消息由 Telegram 静默
+        跳过，故批成功时整批计入成功（含已不存在的消息，幂等口径）——
+        旧逐条实现里这类消息会计为失败，统计虚高。批级错误的分级处理
+        见 ``_delete_message_batch``。
+        """
+        success_count = 0
+        fail_count = 0
+        batch: list[int] = []
+
+        for message_id in message_ids:
+            batch.append(message_id)
+            if len(batch) < _DELETE_MESSAGES_BATCH_SIZE:
+                continue
+
+            batch_success, batch_fail = await ModerationService._delete_message_batch(
+                bot=bot, chat_id=chat_id, message_ids=batch
+            )
+            success_count += batch_success
+            fail_count += batch_fail
+            batch = []
+
+        if batch:
+            batch_success, batch_fail = await ModerationService._delete_message_batch(
+                bot=bot, chat_id=chat_id, message_ids=batch
+            )
+            success_count += batch_success
+            fail_count += batch_fail
+
+        return success_count, fail_count
+
+    @staticmethod
+    async def _delete_message_batch(
+        bot: Bot, chat_id: int, message_ids: list[int]
+    ) -> tuple[int, int]:
+        """执行一批（≤100 条）批量删除，按错误类型决定是否降级逐条。
+
+        - ``TelegramBadRequest``（400）：通常是批次混入超 48 小时或不可删的
+          service message，降级为逐条删除以定位具体失败消息并保住其余删除
+        - 其余 ``TelegramAPIError``（权限不足 / chat 不存在 / 429 重试耗尽等
+          请求级错误）：逐条重试只会复制失败，整批计失败
+        - 其他异常：best-effort 降级逐条（与旧实现容错口径一致）
+        """
+        try:
+            await bot.delete_messages(chat_id=chat_id, message_ids=message_ids)
+        except TelegramAPIError as e:
+            if not isinstance(e, TelegramBadRequest):
+                logger.warning(f"批量删除 {len(message_ids)} 条消息失败（请求级错误）: {e}")
+                return 0, len(message_ids)
+            logger.debug(f"批量删除 {len(message_ids)} 条消息失败，降级逐条定位: {e}")
+        except Exception as e:
+            logger.debug(f"批量删除 {len(message_ids)} 条消息异常，降级逐条: {e}")
+        else:
+            return len(message_ids), 0
+
+        return await ModerationService._delete_messages_individually(
+            bot=bot, chat_id=chat_id, message_ids=message_ids
+        )
+
+    @staticmethod
+    async def _delete_messages_individually(
+        bot: Bot, chat_id: int, message_ids: Iterable[int]
+    ) -> tuple[int, int]:
+        """逐条删除消息（批量删除失败后的降级路径，保持串行避免突发限速）"""
+        success_count = 0
+        fail_count = 0
+
+        for message_id in message_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                success_count += 1
+            except Exception as e:
+                logger.debug(f"删除消息 {message_id} 失败: {e}")
+                fail_count += 1
+
+        return success_count, fail_count
+
+    @staticmethod
+    def _iter_message_ids_before(start_message_id: int, count: int) -> Iterator[int]:
+        """生成往前（更早）删除的消息 ID 序列（count 是总数，包含起始消息）
+
+        消息 ID 递减，非正 ID 截断——Telegram 消息 ID 从 1 开始，0 及以下无效。
+        """
+        for i in range(max(count, 0)):
+            message_id = start_message_id - i
+            if message_id <= 0:
+                break
+            yield message_id
+
+    @staticmethod
     async def delete_messages_before(
         bot: Bot, chat_id: int, start_message_id: int, count: int, operator_id: int
     ) -> tuple[int, int]:
@@ -591,24 +690,13 @@ class ModerationService:
             operator_id: 操作者 ID
 
         Returns:
-            (成功删除数量, 失败数量)
+            (成功删除数量, 失败数量)，计数口径见 ``_delete_messages_in_batches``
         """
-        success_count = 0
-        fail_count = 0
-
-        # 从起始消息往前删除（消息ID递减）
-        # count 是总数，包含起始消息，所以删除 start_message_id 到 start_message_id-(count-1)
-        for i in range(count):
-            message_id = start_message_id - i
-            if message_id <= 0:
-                break
-
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                success_count += 1
-            except Exception as e:
-                logger.debug(f"删除消息 {message_id} 失败: {e}")
-                fail_count += 1
+        success_count, fail_count = await ModerationService._delete_messages_in_batches(
+            bot=bot,
+            chat_id=chat_id,
+            message_ids=ModerationService._iter_message_ids_before(start_message_id, count),
+        )
 
         # 记录日志
         await AuditRepository.log_action(
@@ -643,22 +731,13 @@ class ModerationService:
             operator_id: 操作者 ID
 
         Returns:
-            (成功删除数量, 失败数量)
+            (成功删除数量, 失败数量)，计数口径见 ``_delete_messages_in_batches``
         """
-        success_count = 0
-        fail_count = 0
-
-        # 从起始消息往后删除（消息ID递增）
-        # count 是总数，包含起始消息，所以删除 start_message_id 到 start_message_id+(count-1)
-        for i in range(count):
-            message_id = start_message_id + i
-
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                success_count += 1
-            except Exception as e:
-                logger.debug(f"删除消息 {message_id} 失败: {e}")
-                fail_count += 1
+        success_count, fail_count = await ModerationService._delete_messages_in_batches(
+            bot=bot,
+            chat_id=chat_id,
+            message_ids=range(start_message_id, start_message_id + max(count, 0)),
+        )
 
         # 记录日志
         await AuditRepository.log_action(
@@ -693,23 +772,17 @@ class ModerationService:
             operator_id: 操作者 ID
 
         Returns:
-            (成功删除数量, 失败数量)
+            (成功删除数量, 失败数量)，计数口径见 ``_delete_messages_in_batches``
         """
         # 确保 start <= end
         if start_message_id > end_message_id:
             start_message_id, end_message_id = end_message_id, start_message_id
 
-        success_count = 0
-        fail_count = 0
-
-        # 遍历消息ID范围并删除
-        for message_id in range(start_message_id, end_message_id + 1):
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=message_id)
-                success_count += 1
-            except Exception as e:
-                logger.debug(f"删除消息 {message_id} 失败: {e}")
-                fail_count += 1
+        success_count, fail_count = await ModerationService._delete_messages_in_batches(
+            bot=bot,
+            chat_id=chat_id,
+            message_ids=range(start_message_id, end_message_id + 1),
+        )
 
         # 记录日志
         await AuditRepository.log_action(
