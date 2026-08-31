@@ -29,6 +29,9 @@ NETWORK_ERROR_TYPES = (
     ConnectionError,  # 通用连接错误（内置异常，包含 ConnectionResetError 等）
 )
 
+# 启动阶段派发的后台任务保留强引用，直到任务完成
+_startup_background_tasks: set[asyncio.Task] = set()
+
 
 def before_send(event, hint):
     """Sentry 事件发送前的数据清理钩子，过滤敏感信息和临时性错误"""
@@ -279,6 +282,18 @@ async def on_startup(bot: Bot) -> None:
     scheduler = get_curfew_scheduler(bot, get_resolver(), get_translator())
     await scheduler.start()
     logger.info("宵禁调度器已启动")
+
+    # 恢复进程重启前仍存在 Redis 状态的验证会话 timeout（deadline 已过立即
+    # 处罚、未到自动等待；不 await，避免 SCAN 阻塞 polling 启动）
+    try:
+        from src.bot.handlers.verification import resume_pending_verification_timeouts
+
+        resume_task = asyncio.create_task(resume_pending_verification_timeouts(bot))
+        _startup_background_tasks.add(resume_task)
+        resume_task.add_done_callback(_startup_background_tasks.discard)
+    except Exception as e:
+        # 调度失败不阻断启动；扫描内部异常由函数自身兜底
+        logger.exception(f"调度启动验证 timeout 恢复失败: {e}")
 
     logger.info("Bot 启动完成")
 
