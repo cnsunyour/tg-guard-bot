@@ -766,10 +766,10 @@ def _make_saved_menu_callback(*, edit_side_effect: BaseException | None = None) 
 
 
 def _bad_request(message: str):
-    """构造 TelegramBadRequest，屏蔽 aiogram 构造细节"""
+    """构造 TelegramBadRequest，屏蔽 aiogram 构造细节（method 接受字符串）"""
     from aiogram.exceptions import TelegramBadRequest
 
-    return TelegramBadRequest(method=MagicMock(), message=message)
+    return TelegramBadRequest(method="sendMessage", message=message)
 
 
 class _LoguruCapture:

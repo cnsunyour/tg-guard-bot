@@ -1694,7 +1694,7 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                     with contextlib.suppress(Exception):
                         await bot.delete_message(chat_id=chat_id, message_id=welcome_msg.message_id)
 
-                asyncio.create_task(delayed_delete())
+                spawn_background_task(delayed_delete())
 
                 logger.info(f"用户 {user_id} 验证成功")
 
@@ -2508,7 +2508,7 @@ async def _publish_shared_hint(
                         len(mention_ids),
                         ttl=_HINT_SHARE_WINDOW_SECONDS,
                     )
-            asyncio.create_task(
+            spawn_background_task(
                 delete_hint_message_after_delay(
                     bot, chat_id, hint_msg.message_id, flow, _HINT_SHARE_WINDOW_SECONDS
                 )
@@ -2573,7 +2573,7 @@ async def delete_hint_message_after_delay(
             logger.debug(
                 f"群组 {chat_id} 的 {flow} 引导消息 TTL 被延长，继续等待 {remaining_ttl} 秒"
             )
-            asyncio.create_task(
+            spawn_background_task(
                 delete_hint_message_after_delay(bot, chat_id, message_id, flow, remaining_ttl)
             )
             return

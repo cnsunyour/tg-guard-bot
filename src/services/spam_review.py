@@ -29,6 +29,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, NoReturn
 
 from src.core.redis import RedisKeys, get_redis
+from src.services.verification_recovery import as_text
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -90,12 +91,8 @@ def _require_json_string(value: object, field_name: str) -> str:
 
 
 def _redis_value_to_text(value: object) -> str:
-    """规范化 Redis 返回值；正式客户端开启 decode_responses 时已是 str。"""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    raise TypeError("Redis 状态值不是字符串")
+    """规范化 Redis 返回值（统一入口见 verification_recovery.as_text）。"""
+    return as_text(value)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

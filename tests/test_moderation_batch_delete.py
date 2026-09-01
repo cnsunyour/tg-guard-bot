@@ -37,11 +37,6 @@ def _make_bot() -> MagicMock:
     return bot
 
 
-def _fake_method() -> MagicMock:
-    """aiogram 异常构造所需的 method 占位"""
-    return MagicMock()
-
-
 async def test_exactly_100_ids_form_single_batch() -> None:
     """恰好 100 条只发一批，且不触发逐条删除"""
     bot = _make_bot()
@@ -77,14 +72,14 @@ async def test_network_error_falls_back_to_individual_deletes() -> None:
     """瞬态网络错误降级逐条：逐条可恢复并继续删除其余消息（而非整批丢弃）"""
     bot = _make_bot()
     bot.delete_messages.side_effect = TelegramNetworkError(
-        method=_fake_method(), message="connection reset"
+        method="delete_messages", message="connection reset"
     )
 
     # 逐条结果按序：1 成功、2 抖动失败、3 成功——比整批计失败的 1/3 多删 1 条
     bot.delete_message = AsyncMock(
         side_effect=[
             True,
-            TelegramNetworkError(method=_fake_method(), message="connection reset"),
+            TelegramNetworkError(method="delete_messages", message="connection reset"),
             True,
         ]
     )
@@ -103,14 +98,14 @@ async def test_bad_request_falls_back_to_individual_deletes() -> None:
     """批量 400 时逐条定位：单条失败不影响其余消息的删除与统计"""
     bot = _make_bot()
     bot.delete_messages.side_effect = TelegramBadRequest(
-        method=_fake_method(), message="message can't be deleted"
+        method="delete_messages", message="message can't be deleted"
     )
 
     # 逐条结果按序：1 成功、2 失败（不可删）、3 成功
     bot.delete_message = AsyncMock(
         side_effect=[
             True,
-            TelegramBadRequest(method=_fake_method(), message="message can't be deleted"),
+            TelegramBadRequest(method="delete_messages", message="message can't be deleted"),
             True,
         ]
     )
@@ -129,7 +124,7 @@ async def test_request_level_api_error_counts_whole_batch_without_fallback() -> 
     """权限级错误（403）整批计失败，不降级逐条制造注定失败的请求"""
     bot = _make_bot()
     bot.delete_messages.side_effect = TelegramForbiddenError(
-        method=_fake_method(), message="bot is not an administrator"
+        method="delete_messages", message="bot is not an administrator"
     )
 
     with patch.object(AuditRepository, "log_action", new=AsyncMock()):
@@ -225,7 +220,7 @@ async def test_mixed_batches_aggregate_counts() -> None:
     """多批混合结果：首批整批失败（请求级错误）+ 次批成功，统计累加"""
     bot = _make_bot()
     bot.delete_messages.side_effect = [
-        TelegramForbiddenError(method=_fake_method(), message="kicked"),
+        TelegramForbiddenError(method="delete_messages", message="kicked"),
         True,
     ]
 
@@ -243,7 +238,7 @@ async def test_retry_after_exhausted_counts_whole_batch_without_fallback() -> No
     """429 重试耗尽后抛到业务层：按请求级错误整批计失败，不降级逐条"""
     bot = _make_bot()
     bot.delete_messages.side_effect = TelegramRetryAfter(
-        method=_fake_method(), message="Too many requests", retry_after=30
+        method="delete_messages", message="Too many requests", retry_after=30
     )
 
     with patch.object(AuditRepository, "log_action", new=AsyncMock()):

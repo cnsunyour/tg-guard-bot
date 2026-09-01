@@ -29,6 +29,10 @@
 - **管理员 mention 缓存语义隔离**：`chat_admins:{chat_id}` 键更换为 `spam_handler_admins:{chat_id}`（过滤策略编入键名）——滚动部署期间新旧进程不再误用旧语义缓存，spam 提示的 mention 推送名额不再浪费在无处置权限的管理员上；函数更名 `get_spam_handler_admins_mention` 消除「全部管理员」误导
 - **批量删除瞬态错误降级**：`TelegramNetworkError`/`TelegramServerError` 由「整批计失败」改为降级逐条删除（网络抖动时保住其余消息的删除）；删除结果文案「成功」改为「已处理」（deleteMessages 幂等口径：不存在/已删的消息也计入，旧措辞失真）；批累积改用 `itertools.batched` 消除双份 flush 逻辑
 
+### 代码质量（补充）
+
+- verification.py 剩余 3 处裸 `asyncio.create_task`（欢迎消息/hint 延迟删除）统一改经 `spawn_background_task` 强引用管理；`verification_recovery._as_text` 公开化为 `as_text`，`spam_review._redis_value_to_text` 收敛为薄委托；测试异常构造统一字符串 `method` 风格（与 test_cleanup_i18n 惯例对齐）
+
 ## [1.8.4] - 2026-08-25
 
 ### 新增功能

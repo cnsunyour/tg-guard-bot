@@ -60,7 +60,7 @@ def _validate_component(value: str, name: str) -> None:
         raise ValueError(f"{name} 必须为非空且不含冒号的字符串")
 
 
-def _as_text(value: object) -> str:
+def as_text(value: object) -> str:
     """规范化 Redis 返回值；正式客户端开启 decode_responses 时已是 str。"""
     if isinstance(value, str):
         return value
@@ -72,8 +72,8 @@ def _as_text(value: object) -> str:
 def redis_text(value: object) -> str | None:
     """宽松版 Redis 返回值规范化：脏数据返回 None（由调用方跳过）。
 
-    与 :func:`_as_text` 的区别：不抛异常——适用于启动恢复扫描这类
-    「坏一个键跳过一个键」的容错场景（_as_text 用于状态机断言路径）。
+    与 :func:`as_text` 的区别：不抛异常——适用于启动恢复扫描这类
+    「坏一个键跳过一个键」的容错场景（as_text 用于状态机断言路径）。
     """
     if isinstance(value, str):
         return value
@@ -613,11 +613,11 @@ async def reserve_recovery(
     return RecoveryReservation(
         chat_id=chat_id,
         user_id=user_id,
-        session_id=_as_text(result[3]),
+        session_id=as_text(result[3]),
         revision=revision,
         owner_token=owner_token,
         deadline_ms=int(result[1]),
-        expected_state_value=_as_text(result[2]),
+        expected_state_value=as_text(result[2]),
         initial=False,
     )
 
@@ -746,7 +746,7 @@ async def _claim_verdict(
     if not isinstance(result, list) or len(result) != 2 or int(result[0]) != 1:
         raise RuntimeError("claim verdict Lua 返回格式错误")
 
-    flow = _as_text(result[1])
+    flow = as_text(result[1])
     if flow == "join":
         return "join"
     if flow == "join_request":
@@ -800,9 +800,9 @@ async def capture_verification_clear_token(
         RedisKeys.verification_recovery(chat_id, user_id),
     )
     return VerificationClearToken(
-        state_value=_as_text(state_raw) if state_raw is not None else None,
-        deadline_value=_as_text(deadline_raw) if deadline_raw is not None else None,
-        recovery_value=_as_text(recovery_raw) if recovery_raw is not None else None,
+        state_value=as_text(state_raw) if state_raw is not None else None,
+        deadline_value=as_text(deadline_raw) if deadline_raw is not None else None,
+        recovery_value=as_text(recovery_raw) if recovery_raw is not None else None,
     )
 
 
@@ -872,8 +872,8 @@ async def claim_timeout(
             message_id=max(0, int(result[1])),
             clear_token=VerificationClearToken(
                 state_value=None,  # main 已被 claim 删除
-                deadline_value=_as_text(result[3]),
-                recovery_value=_as_text(result[4]),
+                deadline_value=as_text(result[3]),
+                recovery_value=as_text(result[4]),
             ),
         )
     return TimeoutClaim(status="stale")
