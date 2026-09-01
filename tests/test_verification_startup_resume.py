@@ -198,6 +198,10 @@ def _patch_on_startup_dependencies(mocker, resume_mock) -> None:
     mocker.patch(
         "src.services.curfew_scheduler.get_curfew_scheduler", return_value=curfew_scheduler
     )
+    # 数据清理调度器同样必须 mock：真实启动会连真实 DB 执行清理并泄漏后台任务
+    cleanup_service = MagicMock()
+    cleanup_service.start = AsyncMock()
+    mocker.patch("src.services.data_cleanup.get_data_cleanup_service", return_value=cleanup_service)
 
 
 async def test_on_startup_schedules_resume_without_blocking(mocker) -> None:

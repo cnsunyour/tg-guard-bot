@@ -385,3 +385,13 @@ class RedisKeys:
         TTL: 10 秒（防止死锁）
         """
         return f"user_status:lock:{user_id}"
+
+    @staticmethod
+    def data_cleanup_last_run() -> str:
+        """数据清理最近一次成功运行的时间戳键名
+
+        存储格式: Unix 秒级时间戳（字符串）。用于启动间隔守卫：距上次运行
+        过近（crash-loop / 滚动部署背靠背重启）时跳过启动首轮清理。
+        TTL: 2 × data_cleanup_interval_hours 小时（仅作清理，判断以时间戳为准）
+        """
+        return "data_cleanup:last_run"

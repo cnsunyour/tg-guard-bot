@@ -1,10 +1,11 @@
 """数据库连接管理模块"""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
+from typing import Any
 
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import Select, delete, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -14,6 +15,10 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from src.core.config import settings
+
+# 分批删除的默认单批行数：每批独立提交，避免长事务与复制延迟/WAL 峰值。
+# （moderation 的 100 条/批是 Telegram deleteMessages API 硬限制，与本常量无关）
+DEFAULT_DELETE_BATCH_SIZE = 5000
 
 
 # 声明式基类（SQLAlchemy 2.0 风格）
@@ -69,6 +74,45 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+async def delete_in_batches(
+    session: AsyncSession,
+    victim_ids_select: Select[tuple[Any]],
+    target: type[Any],
+    *,
+    batch_size: int = DEFAULT_DELETE_BATCH_SIZE,
+    extra_conditions: Sequence[Any] = (),
+) -> int:
+    """按 victim_ids_select 选取的主键分批删除 target 行
+
+    target 须是带 ``id`` 主键列的 ORM 模型类。每批独立提交，避免长事务。
+    victim_ids_select 须返回待删行主键（不含 limit，由本函数按 batch_size
+    追加），并自带排序保证删除顺序。
+
+    extra_conditions 会并入 DELETE 的 WHERE——用于并发防护，例如删除时
+    再次校验选取时的过滤条件（行在选取与删除之间被并发修改则跳过）。
+
+    Returns:
+        删除的记录总数
+    """
+    total = 0
+    while True:
+        victim_result = await session.execute(victim_ids_select.limit(batch_size))
+        victim_ids = [row[0] for row in victim_result.all()]
+        if not victim_ids:
+            break
+
+        result = await session.execute(
+            delete(target).where(target.id.in_(victim_ids), *extra_conditions)
+        )
+        await session.commit()
+        # mypy: Result[Any] 实际上是 CursorResult，它有 rowcount 属性
+        total += int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+        if len(victim_ids) < batch_size:
+            break
+    return total
+
+
 async def init_db() -> None:
     """验证数据库连接。
 
@@ -102,8 +146,10 @@ def __getattr__(name: str):
 
 # 显式导出供外部使用的对象
 __all__ = [
+    "DEFAULT_DELETE_BATCH_SIZE",
     "Base",
     "close_db",
+    "delete_in_batches",
     "engine",  # 通过 __getattr__ 提供  # noqa: F822
     "get_db_session",
     "get_engine",

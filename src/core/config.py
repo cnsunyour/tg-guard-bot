@@ -265,6 +265,22 @@ class Settings(BaseSettings):
         default=168, description="自动训练冷却时间（小时），默认 168 小时（7 天）"
     )
 
+    # ========== 数据保留 / 定时清理配置 ==========
+    data_cleanup_enabled: bool = Field(
+        default=True,
+        description="是否启用数据定时清理（spam_samples 负样本按训练比例裁剪 + audit_logs 按保留期删除）",
+    )
+    data_cleanup_interval_hours: int = Field(
+        default=24,
+        ge=1,
+        description="数据清理任务执行间隔（小时），默认 24（每天一轮）",
+    )
+    audit_log_retention_days: int = Field(
+        default=365,
+        ge=0,
+        description="审计日志保留天数（按 created_at 滚动删除过期记录），默认 365 天；0 表示永久保留",
+    )
+
     # Turnstile 验证配置（Cloudflare 无感人机验证）
     turnstile_enabled: bool = Field(default=False, description="是否启用 Turnstile 验证")
     turnstile_site_key: str = Field(default="", description="Turnstile Site Key")

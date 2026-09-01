@@ -1,11 +1,11 @@
 """审计日志数据仓库"""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, select
 
-from src.core.database import get_db_session
+from src.core.database import DEFAULT_DELETE_BATCH_SIZE, delete_in_batches, get_db_session
 from src.core.utils import utcnow_naive
 from src.models.audit_log import AuditLog
 
@@ -93,3 +93,26 @@ class AuditRepository:
                 .limit(limit)
             )
             return list(result.scalars().all())
+
+    @staticmethod
+    async def delete_logs_before(
+        cutoff: datetime, batch_size: int = DEFAULT_DELETE_BATCH_SIZE
+    ) -> int:
+        """删除 cutoff 时间之前的审计日志（按时间从旧到新分批）
+
+        Args:
+            cutoff: 截止时间，created_at 早于此值的记录将被删除
+            batch_size: 分批删除的单批数量，避免长事务
+
+        Returns:
+            删除的记录总数
+        """
+        async with get_db_session() as session:
+            return await delete_in_batches(
+                session,
+                select(AuditLog.id)
+                .where(AuditLog.created_at < cutoff)
+                .order_by(AuditLog.created_at.asc(), AuditLog.id.asc()),
+                AuditLog,
+                batch_size=batch_size,
+            )

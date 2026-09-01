@@ -627,6 +627,16 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [captcha-webapp/README.md](captcha-webapp/README.md) - WebApp 部署指南
 - [altcha-backend/README.md](altcha-backend/README.md) - ALTCHA 后端部署指南
 
+#### 数据保留与定时清理配置
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `DATA_CLEANUP_ENABLED` | 是否启用数据定时清理 | true | ❌ |
+| `DATA_CLEANUP_INTERVAL_HOURS` | 清理任务执行间隔（小时） | 24 | ❌ |
+| `AUDIT_LOG_RETENTION_DAYS` | 审计日志保留天数（按 `created_at` 滚动删除），0 表示永久保留 | 365 | ❌ |
+
+> 说明：清理包含两类独立策略——`spam_samples` 负样本按训练比例裁剪（正样本永久保留，仅删除不参与训练的最旧负样本，比例与训练取数共用同一常量，无需配置）；`audit_logs` 按上表保留期删除。删除操作分批提交（默认 5000 行/批），不影响 Bot 正常运行。启动时距上次成功清理超过 1 小时会先补跑一轮；不足 1 小时的重启（如滚动部署）自动跳过首轮，避免重复清理。
+
 ## 🔒 安全建议
 
 1. **修改默认密码**：生产环境必须修改 `DB_PASSWORD` 和 `REDIS_PASSWORD`

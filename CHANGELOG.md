@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 新增功能
+
+#### 数据定时清理：spam_samples 负样本裁剪 + audit_logs 保留期 🧹
+- **背景**：`spam_samples` 与 `audit_logs` 长期只写不删无限增长——前者拖慢 ML 重训练并污染负样本池，后者磁盘与备份体积无界膨胀
+- **spam_samples 策略**：正样本（`is_spam=true`）永久保留；负样本按训练取数比例裁剪，仅保留最新的 正样本数 × 20 条（比例提取为共享常量 `NEGATIVE_SAMPLES_PER_POSITIVE`，训练与清理强制同口径——**取数与保留共用 `(created_at, id)` 排序**，被删除的恰好是不参与训练的样本）；无正样本时跳过，避免全量误删；删除时二次校验 `is_spam=false`，防并发改标误删正样本
+- **audit_logs 策略**：按 `AUDIT_LOG_RETENTION_DAYS`（默认 365 天）滚动删除过期记录，0 表示永久保留；安全事件回溯窗口受保留期约束（SECURITY.md 已同步说明）
+- **实现**：新增 `src/services/data_cleanup.py` 后台调度器（启动即执行一轮，之后每 `DATA_CLEANUP_INTERVAL_HOURS`（默认 24）小时一轮）；**启动间隔守卫**：距上次成功运行不足 1 小时的重启（crash-loop/滚动部署）跳过首轮，时间戳存 Redis、故障降级放行；删除统一走 `core/database.delete_in_batches`（默认 5000 行/批从旧到新分批提交，避免长事务），spam 侧先一次性确定保留边界再按固定范围分批删（避免每批重算 top-K 保留集，并发新插入的负样本天然不受影响）；两类策略独立容错，任一失败不记录成功时间戳（下次重启守卫放行重试）；调度器任务异常死亡时自动复位状态可重启自愈；`DATA_CLEANUP_ENABLED=false` 可整体关闭
+- **修正**：`get_training_data` docstring 中过时的「正样本的 10 倍」描述同步修正为与代码一致的 20 倍
+
+### 代码质量
+
+- 新增 `src/core/tasks.py` `spawn_background_task()`：fire-and-forget 后台任务强引用统一管理（防 asyncio 弱引用下任务被 GC 静默回收），`main.py` 启动阶段任务已迁移
+- 新增 `tests/test_data_cleanup.py`（13 项）：裁剪比例、无正样本跳过、未超限 no-op、`prune(0)` 仓库层拒绝、保留期 cutoff 计算、永久保留跳过、策略间故障隔离、守卫拦截/放行/Redis 降级、失败轮不标记成功、调度器 start/stop 幂等、任务异常死亡自愈
+- 修复 on_startup 测试隔离：`test_verification_startup_resume` 此前会真实启动数据清理服务连真实 DB（新增 mock）
+
 ## [1.8.4] - 2026-08-25
 
 ### 新增功能

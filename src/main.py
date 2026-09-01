@@ -16,6 +16,7 @@ from src.core.config import settings
 from src.core.database import close_db, init_db
 from src.core.executor import shutdown_executor  # ✅ P1-11: 导入线程池关闭函数
 from src.core.redis import close_redis
+from src.core.tasks import spawn_background_task
 from src.core.telethon_client import close_telethon_client, init_telethon_client
 from src.core.utils import get_app_version
 
@@ -28,9 +29,6 @@ NETWORK_ERROR_TYPES = (
     TimeoutError,  # 超时错误（内置异常）
     ConnectionError,  # 通用连接错误（内置异常，包含 ConnectionResetError 等）
 )
-
-# 启动阶段派发的后台任务保留强引用，直到任务完成
-_startup_background_tasks: set[asyncio.Task] = set()
 
 
 def before_send(event, hint):
@@ -283,14 +281,19 @@ async def on_startup(bot: Bot) -> None:
     await scheduler.start()
     logger.info("宵禁调度器已启动")
 
+    # 启动数据定时清理（spam_samples 负样本按训练比例裁剪 + audit_logs 按保留期删除）
+    if settings.data_cleanup_enabled:
+        from src.services.data_cleanup import get_data_cleanup_service
+
+        await get_data_cleanup_service().start()
+
     # 恢复进程重启前仍存在 Redis 状态的验证会话 timeout（deadline 已过立即
     # 处罚、未到自动等待；不 await，避免 SCAN 阻塞 polling 启动）
     try:
         from src.bot.handlers.verification import resume_pending_verification_timeouts
 
-        resume_task = asyncio.create_task(resume_pending_verification_timeouts(bot))
-        _startup_background_tasks.add(resume_task)
-        resume_task.add_done_callback(_startup_background_tasks.discard)
+        # fire-and-forget：强引用由 spawn_background_task 持有直到完成
+        spawn_background_task(resume_pending_verification_timeouts(bot))
     except Exception as e:
         # 调度失败不阻断启动；扫描内部异常由函数自身兜底
         logger.exception(f"调度启动验证 timeout 恢复失败: {e}")
@@ -329,6 +332,15 @@ async def on_shutdown() -> None:
         logger.info("✅ 宵禁调度器已关闭")
     except Exception as e:
         logger.warning(f"关闭宵禁调度器失败: {e}")
+
+    # ✅ 停止数据清理调度器（先于数据库连接关闭，避免清理中的会话失效；
+    #    stop 幂等——未启动时为 no-op，日志由 stop() 在真实停止时输出）
+    try:
+        from src.services.data_cleanup import get_data_cleanup_service
+
+        await get_data_cleanup_service().stop()
+    except Exception as e:
+        logger.warning(f"停止数据清理调度器失败: {e}")
 
     # ✅ P1-11: 关闭线程池
     shutdown_executor(wait=True)
