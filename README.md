@@ -14,7 +14,9 @@
 
 ## 🏗️ 系统架构
 
-> 📐 **交互图**：[系统架构图](docs/architecture.html) —— 分层架构 / 私聊验证 / 多层反垃圾检测子系统总览（克隆仓库后用浏览器打开，支持缩放、聚焦、明暗主题；GitHub 页面内不渲染交互脚本）
+![系统架构图](docs/images/architecture.svg)
+
+> 📐 **交互版**：[architecture.html](docs/architecture.html) —— 支持缩放、聚焦、明暗主题（克隆仓库后用浏览器打开）
 
 ## ✨ 核心特性
 
@@ -41,7 +43,9 @@
 - **自动处理**：超时或失败自动踢出并封禁 1 小时
 - **统一 WebApp**：所有外部 CAPTCHA 使用统一 Telegram WebApp 界面
 
-> 📐 **交互图**：[入群与消息处理流程图](docs/join-message-flow.html) —— join_request / 直接入群双入口验证管线 + 消息检测双管线（含人工复核、非文本限制分支）
+![入群与消息处理流程图](docs/images/join-message-flow.svg)
+
+> 📐 **交互版**：[join-message-flow.html](docs/join-message-flow.html) —— join_request / 直接入群双入口验证管线 + 消息检测双管线（含人工复核、非文本限制分支）
 
 ### 👮 群管理
 - **踢人** `/kick` - 移出群组
@@ -93,7 +97,10 @@
 - **自动训练** - AI检测结果自动入库作为训练样本
 
 #### 活跃度系统
-> 📐 **交互图**：[用户活跃度机制图](docs/activity-system.html) —— 活跃度区间状态转移与各区间待遇（日常 · 宵禁）、≥10 护城河设计
+
+![用户活跃度机制图](docs/images/activity-system.svg)
+
+> 📐 **交互版**：[activity-system.html](docs/activity-system.html) —— 活跃度区间状态转移与各区间待遇（日常 · 宵禁）、≥10 护城河设计
 
 - **非文本消息限制**（可选，群主可通过 `/activity` 控制）：
   - 启用时：活跃度 ≤ 0 的用户无法发送图片、贴纸、视频等
