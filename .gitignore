@@ -113,3 +113,6 @@ coverage.xml
 
 # cloudflare pages 部署
 .wrangler/
+
+# 架构图 visual-check 临时证据（截图/收据，可由 archify 重新生成）
+docs/architecture.visual-check.*
