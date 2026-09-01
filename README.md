@@ -693,6 +693,7 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [x] **多语言 i18n**: zh-Hans/zh-Hant/en 全链路本地化（catalog + 稳定 code 持久化 + 命令菜单 locale + WebApp 页面）
 - [x] **v1.7.x**: 四管理员命令支持带参直接设置、`/report` 举报引用预览、`/lang` 参数直接切换、全项目安全审查加固（0 Critical/0 High）
 - [x] **v1.8.x**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退；入群限制权限收紧（禁 react/编辑头衔/发起话题）、datetime 时区脆弱性消除、altcha PHP 版本约束对齐、数据库迁移切换 Alembic（启动自动迁移 + 旧库自动 stamp）、review/report 提示改回复原文、/lang 幂等编辑修复、/spam 封禁失败不再阻断消息删除与训练样本入库、群内引导消息匿名 mention 待验证用户、入群资料检测修复 bio 获取链（事件 bio + Telethon 降级）、spam 提示仅 mention 具备处置权限的管理员
+- [x] **v1.9.0**: 数据定时清理（spam_samples 负样本按训练比例裁剪 + audit_logs 保留期）、启动时恢复进行中的验证会话 timeout、批量删除改 deleteMessages 分批调用、项目文档交互图（架构/流程/活跃度三张，GitHub Pages 在线 + README 内嵌 SVG）
 
 ## 🤝 贡献
 

@@ -5,9 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.9.0] - 2026-09-02
 
 ### 新增功能
+
+#### 启动时恢复进行中的验证会话 timeout ⏰
+- 验证超时原依赖 `asyncio.create_task` 内存任务，进程重启即丢——deadline 已过的会话无人处罚（Redis 键 grace 过期后沦为僵尸）；`on_startup` 末尾后台扫描 `verification_deadline:*` 键，为每个会话重新派发对应 flow 的 timeout 协程
+- 处罚时机仍由 `claim_timeout` 的 Redis Lua 状态机决定（已过立即处罚、未到按剩余毫秒等待、已清理 stale 退出），与 success、/start 恢复、补投事件、双实例并发天然互斥；timeout 按群组配置取值（扫描内缓存避免同群 N+1 查询），仅影响文案
+
+#### 项目文档交互图 📐
+- 新增三张 archify 生成的交互式图并接入 GitHub Pages 在线浏览（`cnsunyour.github.io/tg-guard-bot/`）：系统架构图（`docs/architecture.html`）、入群与消息处理流程图（`docs/join-message-flow.html`，双入口入群 + 消息检测双管线，含人工复核/非文本限制分支）、用户活跃度机制图（`docs/activity-system.html`，区间状态与待遇、≥10 护城河）
+- README 嵌入三张图的自包含 SVG 快照（GitHub 页内直接显示）并附在线/本地双链接；同步修正备份/代理示例与文档表述（与代码实际状态对齐）
 
 #### 数据定时清理：spam_samples 负样本裁剪 + audit_logs 保留期 🧹
 - **背景**：`spam_samples` 与 `audit_logs` 长期只写不删无限增长——前者拖慢 ML 重训练并污染负样本池，后者磁盘与备份体积无界膨胀
@@ -21,6 +29,8 @@
 - 新增 `src/core/tasks.py` `spawn_background_task()`：fire-and-forget 后台任务强引用统一管理（防 asyncio 弱引用下任务被 GC 静默回收），`main.py` 启动阶段任务已迁移
 - 新增 `tests/test_data_cleanup.py`（13 项）：裁剪比例、无正样本跳过、未超限 no-op、`prune(0)` 仓库层拒绝、保留期 cutoff 计算、永久保留跳过、策略间故障隔离、守卫拦截/放行/Redis 降级、失败轮不标记成功、调度器 start/stop 幂等、任务异常死亡自愈
 - 修复 on_startup 测试隔离：`test_verification_startup_resume` 此前会真实启动数据清理服务连真实 DB（新增 mock）
+- verification.py 剩余 3 处裸 `asyncio.create_task`（欢迎消息/hint 延迟删除）统一改经 `spawn_background_task` 强引用管理；`verification_recovery._as_text` 公开化为 `as_text`，`spam_review._redis_value_to_text` 收敛为薄委托；测试异常构造统一字符串 `method` 风格（与 test_cleanup_i18n 惯例对齐）
+- 真实 Redis 集成测试自动拉起：本机已安装 redis-server 但未启动时，conftest 自动起**临时实例**（独立端口、无持久化、仅 127.0.0.1）跑完即停——不再因服务未启动而跳过 7 项集成测试；已启动的 6379 直接复用，`REDIS_TEST_URL` 显式指定时尊重不代起，未安装才跳过
 
 ### Bug 修复
 
@@ -28,11 +38,6 @@
 - **恢复扫描健壮性**：deadline 键改按批 MGET（每批两次往返，500 会话从 1000 次串行 RTT 降至约 10 次）；SCAN 中途故障时已收集键继续处理不再丢弃；`{session}:{deadline_ms}` 值解析下沉为 `verification_recovery.parse_deadline_value` 唯一权威入口（消除第三处手写解析）；SCAN 匹配模式经 `RedisKeys.verification_deadline_pattern()` 集中管理
 - **管理员 mention 缓存语义隔离**：`chat_admins:{chat_id}` 键更换为 `spam_handler_admins:{chat_id}`（过滤策略编入键名）——滚动部署期间新旧进程不再误用旧语义缓存，spam 提示的 mention 推送名额不再浪费在无处置权限的管理员上；函数更名 `get_spam_handler_admins_mention` 消除「全部管理员」误导
 - **批量删除瞬态错误降级**：`TelegramNetworkError`/`TelegramServerError` 由「整批计失败」改为降级逐条删除（网络抖动时保住其余消息的删除）；删除结果文案「成功」改为「已处理」（deleteMessages 幂等口径：不存在/已删的消息也计入，旧措辞失真）；批累积改用 `itertools.batched` 消除双份 flush 逻辑
-
-### 代码质量（补充）
-
-- verification.py 剩余 3 处裸 `asyncio.create_task`（欢迎消息/hint 延迟删除）统一改经 `spawn_background_task` 强引用管理；`verification_recovery._as_text` 公开化为 `as_text`，`spam_review._redis_value_to_text` 收敛为薄委托；测试异常构造统一字符串 `method` 风格（与 test_cleanup_i18n 惯例对齐）
-- 真实 Redis 集成测试自动拉起：本机已安装 redis-server 但未启动时，conftest 自动起**临时实例**（独立端口、无持久化、仅 127.0.0.1）跑完即停——不再因服务未启动而跳过 7 项集成测试；已启动的 6379 直接复用，`REDIS_TEST_URL` 显式指定时尊重不代起，未安装才跳过
 
 ## [1.8.4] - 2026-08-25
 
