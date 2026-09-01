@@ -4,15 +4,14 @@
 （ZADD NX 的 score 语义、嵌套 table 返回值的 RESP 编码、多 key EXPIRE、
 并发下的原子性）。本文件跑真实 Redis，补上这段缺口。
 
-运行方式：默认连 ``REDIS_TEST_URL``（缺省 redis://localhost:6379/15），
-连不上则整体跳过，不阻塞 ``make test``：
+运行方式：URL 由 conftest 的 ``real_redis_url`` fixture 决定——优先
+``REDIS_TEST_URL`` 环境变量，其次复用已启动的 localhost:6379，本机装有
+redis-server 但未启动时自动拉起临时实例（测完停止）；未安装才跳过：
 
-    redis-server --port 6379 --daemonize yes
     pytest tests/test_verification_hint_redis.py -m integration
 """
 
 import asyncio
-import os
 
 import pytest
 import redis.asyncio as aioredis
@@ -33,7 +32,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 CHAT_ID = -1009999999999
 FLOW = "join"
-REDIS_URL = os.getenv("REDIS_TEST_URL", "redis://localhost:6379/15")
 
 HINT_KEY = RedisKeys.verification_hint(CHAT_ID, FLOW)
 USERS_KEY = RedisKeys.verification_hint_users(CHAT_ID, FLOW)
@@ -41,16 +39,9 @@ RENDER_KEY = RedisKeys.verification_hint_render(CHAT_ID, FLOW)
 
 
 @pytest.fixture
-async def redis_client(monkeypatch):
-    """连上真实 Redis 并注入为全局客户端；连不上则跳过整个文件。"""
-    client = aioredis.Redis.from_url(REDIS_URL, decode_responses=True)
-    try:
-        await client.ping()
-    except Exception as exc:
-        # 环境不可用即跳过，不区分错误类型
-        await client.aclose()
-        pytest.skip(f"真实 Redis 不可用（{REDIS_URL}）：{exc}")
-
+async def redis_client(monkeypatch, real_redis_url):
+    """连上真实 Redis 并注入为全局客户端（可用性由 real_redis_url 保证）。"""
+    client = aioredis.Redis.from_url(real_redis_url, decode_responses=True)
     monkeypatch.setattr(core_redis, "_redis_client", client)
     await client.delete(HINT_KEY, USERS_KEY, RENDER_KEY)
     try:

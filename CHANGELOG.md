@@ -32,6 +32,7 @@
 ### 代码质量（补充）
 
 - verification.py 剩余 3 处裸 `asyncio.create_task`（欢迎消息/hint 延迟删除）统一改经 `spawn_background_task` 强引用管理；`verification_recovery._as_text` 公开化为 `as_text`，`spam_review._redis_value_to_text` 收敛为薄委托；测试异常构造统一字符串 `method` 风格（与 test_cleanup_i18n 惯例对齐）
+- 真实 Redis 集成测试自动拉起：本机已安装 redis-server 但未启动时，conftest 自动起**临时实例**（独立端口、无持久化、仅 127.0.0.1）跑完即停——不再因服务未启动而跳过 7 项集成测试；已启动的 6379 直接复用，`REDIS_TEST_URL` 显式指定时尊重不代起，未安装才跳过
 
 ## [1.8.4] - 2026-08-25
 
