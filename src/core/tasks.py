@@ -33,3 +33,24 @@ def spawn_background_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
     _background_tasks.add(task)
     task.add_done_callback(_on_task_done)
     return task
+
+
+async def cancel_all_background_tasks() -> int:
+    """取消所有后台任务并等待退出（进程关闭时调用）
+
+    后台任务（如验证 timeout 协程）可能在长 sleep 后唤醒并访问
+    Redis/DB/Bot session——若不取消，它们会在这些依赖陆续关闭后唤醒，
+    触发连接重建与竞态。被取消任务的持久化状态（如 Redis deadline）
+    保留，进程重启后由启动恢复扫描重新派发。
+
+    已知权衡：若取消恰逢任务已 claim 状态并正在执行处罚副作用（秒级
+    窗口），该次处罚随取消丢失且 claim 已消费主键、重启不会重派——相比
+    不取消（任务会在依赖关闭后必然失败，逃逸窗口为 deadline 剩余全时长），
+    此方案的逃逸窗口缩小到副作用执行瞬间，严格更优。
+    """
+    tasks = list(_background_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return len(tasks)

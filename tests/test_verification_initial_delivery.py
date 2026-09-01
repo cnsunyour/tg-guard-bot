@@ -62,8 +62,9 @@ def _patch_common(mocker, reservation, send_side_effect=None, send_return=None):
     else:
         send_mock.return_value = send_return or MagicMock(message_id=9876)
     mocker.patch.object(handler, "send_verification_message", new=send_mock)
-    # create_task 的 coroutine 需 close，避免 "coroutine never awaited" warning
-    mocker.patch.object(handler.asyncio, "create_task", side_effect=lambda c: c.close())
+    # timeout 派发经 dispatch_verification_timeout（内部走 spawn_background_task）：
+    # 直接吞掉即可，不创建真实协程，也无需 close
+    mocker.patch.object(handler, "dispatch_verification_timeout", side_effect=lambda *a, **kw: None)
     return service
 
 

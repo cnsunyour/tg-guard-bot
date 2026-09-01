@@ -23,7 +23,7 @@ from src.core.utils import (
     check_admin_permission_strict_message,
     escape_html,
     format_trusted_user_mention,
-    get_chat_administrators_mention,
+    get_spam_handler_admins_mention,
     parse_message_link,
     parse_message_link_with_chat,
     parse_time_to_seconds,
@@ -1348,7 +1348,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             # 获取管理员 mention（Redis 等故障降级为空 mention，不阻断提示发送——
             # 否则用户无反馈反而重试，制造本想避免的重复举报）
             try:
-                admin_mentions = await get_chat_administrators_mention(
+                admin_mentions = await get_spam_handler_admins_mention(
                     bot=bot,
                     chat_id=message.chat.id,
                 )

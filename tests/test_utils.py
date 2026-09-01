@@ -414,7 +414,7 @@ def test_can_handle_spam_filter_rule(admin_factory, expected) -> None:
 
 
 @pytest.mark.unit
-async def test_get_chat_administrators_mention_caches_filtered_ids(mocker) -> None:
+async def test_get_spam_handler_admins_mention_caches_filtered_ids(mocker) -> None:
     """API 路径：过滤后 ID 列表写入缓存，空列表也缓存（省后续 API 调用）"""
     import src.core.utils as utils
 
@@ -434,7 +434,7 @@ async def test_get_chat_administrators_mention_caches_filtered_ids(mocker) -> No
         ]
     )
 
-    mentions = await utils.get_chat_administrators_mention(bot, -100123)
+    mentions = await utils.get_spam_handler_admins_mention(bot, -100123)
 
     # 仅群主 100 与双权限管理员 200 进入 mention
     assert "id=100" in mentions and "id=200" in mentions
@@ -446,7 +446,7 @@ async def test_get_chat_administrators_mention_caches_filtered_ids(mocker) -> No
 
 
 @pytest.mark.unit
-async def test_get_chat_administrators_mention_caches_empty_when_none_eligible(mocker) -> None:
+async def test_get_spam_handler_admins_mention_caches_empty_when_none_eligible(mocker) -> None:
     """无符合条件管理员时缓存空列表，避免反复请求 Telegram API"""
     import src.core.utils as utils
 
@@ -457,7 +457,7 @@ async def test_get_chat_administrators_mention_caches_empty_when_none_eligible(m
         return_value=[_admin(500, delete=False, restrict=False)]
     )
 
-    mentions = await utils.get_chat_administrators_mention(bot, -100456)
+    mentions = await utils.get_spam_handler_admins_mention(bot, -100456)
 
     assert mentions == ""
     cached = redis.setex.await_args
@@ -465,7 +465,7 @@ async def test_get_chat_administrators_mention_caches_empty_when_none_eligible(m
 
 
 @pytest.mark.unit
-async def test_get_chat_administrators_mention_cache_hit_skips_api(mocker) -> None:
+async def test_get_spam_handler_admins_mention_cache_hit_skips_api(mocker) -> None:
     """缓存命中直接渲染，不调用 Telegram API"""
     import src.core.utils as utils
 
@@ -477,7 +477,7 @@ async def test_get_chat_administrators_mention_cache_hit_skips_api(mocker) -> No
     bot = MagicMock()
     bot.get_chat_administrators = AsyncMock()
 
-    mentions = await utils.get_chat_administrators_mention(bot, -100789)
+    mentions = await utils.get_spam_handler_admins_mention(bot, -100789)
 
     assert "id=700" in mentions and "id=800" in mentions
     bot.get_chat_administrators.assert_not_awaited()
@@ -485,7 +485,7 @@ async def test_get_chat_administrators_mention_cache_hit_skips_api(mocker) -> No
 
 
 @pytest.mark.unit
-async def test_get_chat_administrators_mention_api_failure_returns_empty(mocker) -> None:
+async def test_get_spam_handler_admins_mention_api_failure_returns_empty(mocker) -> None:
     """Telegram API 异常时降级返回空 mention（调用方据此去掉 🔔 前缀）"""
     import src.core.utils as utils
 
@@ -494,5 +494,5 @@ async def test_get_chat_administrators_mention_api_failure_returns_empty(mocker)
     bot = MagicMock()
     bot.get_chat_administrators = AsyncMock(side_effect=RuntimeError("telegram down"))
 
-    assert await utils.get_chat_administrators_mention(bot, -100999) == ""
+    assert await utils.get_spam_handler_admins_mention(bot, -100999) == ""
     redis.setex.assert_not_awaited()  # API 失败不写缓存

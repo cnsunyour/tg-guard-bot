@@ -3,8 +3,9 @@
 覆盖 ``ModerationService.delete_messages_before/after/range`` 改用 Bot API
 deleteMessages 批量删除后的核心契约：
 - 按 Telegram 100 条上限分批，批成功整批计入成功（幂等口径）
-- ``TelegramBadRequest`` 降级逐条定位失败消息；其余 ``TelegramAPIError``
-  （请求级错误）整批计失败，不降级
+- ``TelegramBadRequest`` 与瞬态错误（``TelegramNetworkError``/
+  ``TelegramServerError``）降级逐条；其余 ``TelegramAPIError``（请求级
+  错误）整批计失败，不降级
 - 往前删除非正消息 ID 截断、范围删除起止归一化、空批次不发请求
 """
 
@@ -12,7 +13,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 
 from src.repositories.audit_repo import AuditRepository
 from src.services.moderation import ModerationService
@@ -65,6 +71,32 @@ async def test_101_ids_split_into_two_batches() -> None:
         list(range(1, 101)),
         [101],
     ]
+
+
+async def test_network_error_falls_back_to_individual_deletes() -> None:
+    """瞬态网络错误降级逐条：逐条可恢复并继续删除其余消息（而非整批丢弃）"""
+    bot = _make_bot()
+    bot.delete_messages.side_effect = TelegramNetworkError(
+        method=_fake_method(), message="connection reset"
+    )
+
+    # 逐条结果按序：1 成功、2 抖动失败、3 成功——比整批计失败的 1/3 多删 1 条
+    bot.delete_message = AsyncMock(
+        side_effect=[
+            True,
+            TelegramNetworkError(method=_fake_method(), message="connection reset"),
+            True,
+        ]
+    )
+
+    with patch.object(AuditRepository, "log_action", new=AsyncMock()):
+        result = await ModerationService.delete_messages_after(
+            bot=bot, chat_id=CHAT_ID, start_message_id=1, count=3, operator_id=OPERATOR_ID
+        )
+
+    assert result == (2, 1)
+    bot.delete_messages.assert_awaited_once()
+    assert [call.kwargs["message_id"] for call in bot.delete_message.await_args_list] == [1, 2, 3]
 
 
 async def test_bad_request_falls_back_to_individual_deletes() -> None:

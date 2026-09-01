@@ -116,7 +116,7 @@ async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localiz
     )
     mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
     mocker.patch.object(
-        antispam, "get_chat_administrators_mention", new=AsyncMock(return_value="@admins")
+        antispam, "get_spam_handler_admins_mention", new=AsyncMock(return_value="@admins")
     )
     auto_delete = mocker.patch.object(antispam, "auto_delete_message", new=AsyncMock())
 
@@ -171,7 +171,7 @@ async def test_review_producer_cleans_state_when_prompt_send_fails(mocker, local
         antispam, "delete_review_state_if_match", new=AsyncMock(return_value=True)
     )
     mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
-    mocker.patch.object(antispam, "get_chat_administrators_mention", new=AsyncMock(return_value=""))
+    mocker.patch.object(antispam, "get_spam_handler_admins_mention", new=AsyncMock(return_value=""))
 
     with pytest.raises(RuntimeError, match="send failed"):
         await antispam._handle_spam_with_review(
@@ -555,7 +555,7 @@ async def test_apply_immediate_punishment_selects_action_and_records_feedback(
     detector = SimpleNamespace(add_feedback=AsyncMock())
     mocker.patch.object(antispam, "get_detector", return_value=detector)
     mocker.patch.object(
-        antispam, "get_chat_administrators_mention", new=AsyncMock(return_value="@admins")
+        antispam, "get_spam_handler_admins_mention", new=AsyncMock(return_value="@admins")
     )
     mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
     render = mocker.patch.object(antispam, "build_immediate_processed", return_value="processed")

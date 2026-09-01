@@ -22,6 +22,13 @@
 - 新增 `tests/test_data_cleanup.py`（13 项）：裁剪比例、无正样本跳过、未超限 no-op、`prune(0)` 仓库层拒绝、保留期 cutoff 计算、永久保留跳过、策略间故障隔离、守卫拦截/放行/Redis 降级、失败轮不标记成功、调度器 start/stop 幂等、任务异常死亡自愈
 - 修复 on_startup 测试隔离：`test_verification_startup_resume` 此前会真实启动数据清理服务连真实 DB（新增 mock）
 
+### Bug 修复
+
+- **关停竞态**：验证 timeout 等后台任务改经 `spawn_background_task` 统一强引用管理，进程关闭时于一切依赖关闭前统一取消（原实现任务可能在 DB/Redis/Bot session 关闭后唤醒，触发连接懒重建与竞态、重启窗口内待处罚用户逃逸）
+- **恢复扫描健壮性**：deadline 键改按批 MGET（每批两次往返，500 会话从 1000 次串行 RTT 降至约 10 次）；SCAN 中途故障时已收集键继续处理不再丢弃；`{session}:{deadline_ms}` 值解析下沉为 `verification_recovery.parse_deadline_value` 唯一权威入口（消除第三处手写解析）；SCAN 匹配模式经 `RedisKeys.verification_deadline_pattern()` 集中管理
+- **管理员 mention 缓存语义隔离**：`chat_admins:{chat_id}` 键更换为 `spam_handler_admins:{chat_id}`（过滤策略编入键名）——滚动部署期间新旧进程不再误用旧语义缓存，spam 提示的 mention 推送名额不再浪费在无处置权限的管理员上；函数更名 `get_spam_handler_admins_mention` 消除「全部管理员」误导
+- **批量删除瞬态错误降级**：`TelegramNetworkError`/`TelegramServerError` 由「整批计失败」改为降级逐条删除（网络抖动时保住其余消息的删除）；删除结果文案「成功」改为「已处理」（deleteMessages 幂等口径：不存在/已删的消息也计入，旧措辞失真）；批累积改用 `itertools.batched` 消除双份 flush 逻辑
+
 ## [1.8.4] - 2026-08-25
 
 ### 新增功能

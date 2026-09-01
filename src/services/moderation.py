@@ -1,12 +1,18 @@
 """群管理服务模块"""
 
+import itertools
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramNetworkError,
+    TelegramServerError,
+)
 from aiogram.types import ChatPermissions
 from loguru import logger
 
@@ -595,23 +601,10 @@ class ModerationService:
         """
         success_count = 0
         fail_count = 0
-        batch: list[int] = []
 
-        for message_id in message_ids:
-            batch.append(message_id)
-            if len(batch) < _DELETE_MESSAGES_BATCH_SIZE:
-                continue
-
+        for chunk in itertools.batched(message_ids, _DELETE_MESSAGES_BATCH_SIZE):
             batch_success, batch_fail = await ModerationService._delete_message_batch(
-                bot=bot, chat_id=chat_id, message_ids=batch
-            )
-            success_count += batch_success
-            fail_count += batch_fail
-            batch = []
-
-        if batch:
-            batch_success, batch_fail = await ModerationService._delete_message_batch(
-                bot=bot, chat_id=chat_id, message_ids=batch
+                bot=bot, chat_id=chat_id, message_ids=list(chunk)
             )
             success_count += batch_success
             fail_count += batch_fail
@@ -626,17 +619,23 @@ class ModerationService:
 
         - ``TelegramBadRequest``（400）：通常是批次混入超 48 小时或不可删的
           service message，降级为逐条删除以定位具体失败消息并保住其余删除
-        - 其余 ``TelegramAPIError``（权限不足 / chat 不存在 / 429 重试耗尽等
-          请求级错误）：逐条重试只会复制失败，整批计失败
+        - ``TelegramNetworkError`` / ``TelegramServerError``（瞬态错误）：
+          降级逐条——逐条重试大多能恢复并继续删除其余消息（重试耗尽的 429
+          已由 RetryAfterMiddleware 在 session 层处理，不会走到这里）
+        - 其余 ``TelegramAPIError``（403 权限不足 / chat 不存在等请求级错误）：
+          逐条重试只会复制失败，整批计失败
         - 其他异常：best-effort 降级逐条（与旧实现容错口径一致）
         """
         try:
             await bot.delete_messages(chat_id=chat_id, message_ids=message_ids)
         except TelegramAPIError as e:
-            if not isinstance(e, TelegramBadRequest):
+            if isinstance(e, (TelegramNetworkError, TelegramServerError)):
+                logger.warning(f"批量删除 {len(message_ids)} 条消息遇瞬态错误，降级逐条: {e}")
+            elif not isinstance(e, TelegramBadRequest):
                 logger.warning(f"批量删除 {len(message_ids)} 条消息失败（请求级错误）: {e}")
                 return 0, len(message_ids)
-            logger.debug(f"批量删除 {len(message_ids)} 条消息失败，降级逐条定位: {e}")
+            else:
+                logger.debug(f"批量删除 {len(message_ids)} 条消息失败，降级逐条定位: {e}")
         except Exception as e:
             logger.debug(f"批量删除 {len(message_ids)} 条消息异常，降级逐条: {e}")
         else:

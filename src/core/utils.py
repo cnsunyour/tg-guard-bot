@@ -715,7 +715,7 @@ def _can_handle_spam(admin: ChatMemberOwner | ChatMemberAdministrator) -> bool:
 
 
 @retry_on_network_error(max_retries=3, initial_delay=1.0)
-async def get_chat_administrators_mention(
+async def get_spam_handler_admins_mention(
     bot: Bot,
     chat_id: int,
 ) -> str:
@@ -723,9 +723,10 @@ async def get_chat_administrators_mention(
 
     过滤规则见 :func:`_can_handle_spam`：群主始终计入，普通管理员需同时具备
     删除消息与封禁用户权限，匿名管理员一律排除。过滤后的 ID 列表缓存 5 分钟
-    （键 ``chat_admins:{chat_id}``），减少 Telegram API 调用；权限变更最长
-    延迟 5 分钟生效（与 TTL 一致）。使用 user_id 生成匿名 mention，适用于
-    没有 username 的管理员。
+    （键 ``spam_handler_admins:{chat_id}``，键名含策略语义——过滤条件变更须
+    换键，防滚动部署期间新旧进程共用旧语义缓存），减少 Telegram API 调用；
+    权限变更最长延迟 5 分钟生效（与 TTL 一致）。使用 user_id 生成匿名
+    mention，适用于没有 username 的管理员。
 
     Args:
         bot: Bot 实例
@@ -736,12 +737,12 @@ async def get_chat_administrators_mention(
         的管理员时返回空字符串，调用方据此降级为不带 🔔 前缀的提示。
 
     Example:
-        >>> mentions = await get_chat_administrators_mention(bot, chat_id)
+        >>> mentions = await get_spam_handler_admins_mention(bot, chat_id)
         >>> print(mentions)
         '<a href="tg://user?id=123">👤</a> <a href="tg://user?id=456">👤</a>'
     """
     redis = get_redis()
-    cache_key = RedisKeys.chat_admins(chat_id)
+    cache_key = RedisKeys.spam_handler_admins(chat_id)
 
     # 1. 命中缓存：直接渲染已过滤的 ID 列表
     cached_data = await redis.get(cache_key)

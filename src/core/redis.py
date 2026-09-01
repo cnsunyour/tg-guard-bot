@@ -316,14 +316,25 @@ class RedisKeys:
         return f"cas:lock:{user_id}"
 
     @staticmethod
-    def chat_admins(chat_id: int) -> str:
-        """群组管理员列表缓存键名
+    def spam_handler_admins(chat_id: int) -> str:
+        """具备 spam 处置权限的管理员缓存键名
 
-        用于缓存群组管理员列表，减少 Telegram API 调用
-        存储格式: JSON 数字符串 [{"id": int, "full_name": str}, ...]
-        TTL: 300 秒（5分钟）
+        存 get_spam_handler_admins_mention 过滤后的管理员 ID 列表（非全部管理员），
+        减少 Telegram API 调用。键名含策略语义（spam_handler）：策略过滤条件
+        变更时必须换键，避免滚动部署期间新旧进程共用旧语义缓存。
+        存储格式: JSON 数组 [{"id": int}, ...]（空列表也缓存，避免反复请求 API）
+        TTL: 300 秒（5分钟，权限变更最长延迟与此一致）
         """
-        return f"chat_admins:{chat_id}"
+        return f"spam_handler_admins:{chat_id}"
+
+    @staticmethod
+    def verification_deadline_pattern() -> str:
+        """verification_deadline 键的 SCAN 匹配模式
+
+        与 :func:`verification_deadline` 同前缀——启动恢复扫描经此取模式，
+        键名格式变更时两处同步修改，避免散落硬编码。
+        """
+        return "verification_deadline:*"
 
     @staticmethod
     def curfew_state(chat_id: int) -> str:

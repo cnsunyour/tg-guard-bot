@@ -46,7 +46,7 @@ from src.core.utils import (
     escape_html,
     format_trusted_user_mention,
     format_user_mention,
-    get_chat_administrators_mention,
+    get_spam_handler_admins_mention,
     parse_enabled_arg,
     should_skip_sender,
 )
@@ -590,7 +590,7 @@ async def _handle_spam_with_review(
 
     try:
         offender_mention = format_user_mention(message.from_user)
-        admin_mentions = await get_chat_administrators_mention(bot, message.chat.id)
+        admin_mentions = await get_spam_handler_admins_mention(bot, message.chat.id)
         group_locale = await get_resolver().for_group(message.chat.id)
         localizer = get_translator().for_locale(group_locale)
         prompt = build_review_prompt(localizer, state, offender_mention)
@@ -686,7 +686,7 @@ async def _apply_immediate_punishment(
             sample_text,
         )
 
-        admin_mentions = await get_chat_administrators_mention(bot, message.chat.id)
+        admin_mentions = await get_spam_handler_admins_mention(bot, message.chat.id)
         group_locale = await get_resolver().for_group(message.chat.id)
         localizer = get_translator().for_locale(group_locale)
         text = build_immediate_processed(

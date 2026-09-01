@@ -66,3 +66,35 @@ async def test_cancelled_task_not_logged_as_error(mocker):
 
     assert task not in tasks._background_tasks
     logged.assert_not_called()
+
+
+async def test_cancel_all_background_tasks_cancels_and_waits():
+    """取消全部后台任务并等待退出（进程关闭防任务在依赖关闭后唤醒）"""
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _worker():
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task_a = spawn_background_task(_worker())
+    task_b = spawn_background_task(_worker())
+    await started.wait()
+    assert len(tasks._background_tasks) == 2
+
+    cancelled_count = await tasks.cancel_all_background_tasks()
+
+    assert cancelled_count == 2
+    assert cancelled.is_set()
+    assert not tasks._background_tasks
+    for task in (task_a, task_b):
+        assert task.cancelled()
+
+
+async def test_cancel_all_with_no_tasks_is_noop():
+    """无后台任务时返回 0"""
+    assert await tasks.cancel_all_background_tasks() == 0

@@ -38,6 +38,7 @@ from src.core.config import settings
 from src.core.i18n import get_resolver, get_translator
 from src.core.redis import RedisKeys, get_redis
 from src.core.retry import retry_async_call
+from src.core.tasks import spawn_background_task
 from src.core.utils import (
     anonymous_mentions_html,
     auto_delete_message,
@@ -77,7 +78,9 @@ from src.services.verification_recovery import (
     commit_recovery,
     new_revision_id,
     new_session_id,
+    parse_deadline_value,
     promote_recovery,
+    redis_text,
     release_recovery,
     reserve_initial_recovery,
     reserve_recovery,
@@ -587,6 +590,29 @@ async def send_verification_message(
     )
 
 
+def dispatch_verification_timeout(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    *,
+    flow: str,
+    session_id: str,
+    timeout: int,
+) -> asyncio.Task:
+    """按 flow 选择 handler 并派发验证 timeout 任务（live 与启动恢复共用）。
+
+    经 ``spawn_background_task`` 派发：强引用统一由 core.tasks 持有，
+    进程关闭时 ``cancel_all_background_tasks`` 一并取消（Redis 状态保留，
+    重启后由恢复扫描重新派发）。
+    """
+    timeout_handler = (
+        handle_join_request_timeout if flow == "join_request" else handle_verification_timeout
+    )
+    return spawn_background_task(
+        timeout_handler(bot, chat_id, user_id, session_id=session_id, timeout=timeout)
+    )
+
+
 async def _start_initial_verification(
     bot: Bot,
     group,
@@ -634,11 +660,8 @@ async def _start_initial_verification(
             raise RuntimeError("commit_challenge 失败：reservation 已过期或状态被替换")
 
         # commit 成功即启 timeout（session_id 关联），即使后续 send 卡住也能 claim
-        timeout_handler = (
-            handle_join_request_timeout if flow == "join_request" else handle_verification_timeout
-        )
-        asyncio.create_task(
-            timeout_handler(bot, chat_id, user_id, session_id=session_id, timeout=timeout)
+        dispatch_verification_timeout(
+            bot, chat_id, user_id, flow=flow, session_id=session_id, timeout=timeout
         )
 
         try:
@@ -2636,97 +2659,119 @@ async def handle_join_request_timeout(
         logger.error(f"处理加入请求验证超时失败: {e}")
 
 
-# 启动恢复派发的 timeout 任务在 deadline 前可能长时间 sleep，保留强引用
-# 防止任务在完成前被事件循环的弱引用机制回收（asyncio 官方语义仅持弱引用）
-_resumed_timeout_tasks: set[asyncio.Task] = set()
+# 启动恢复扫描的批大小：每批两次 MGET（deadline 值 + 有效会话的 verification_type），
+# 替代逐键 2 次 GET——500 个会话从 1000 次串行 RTT 降为约 10 次往返
+_RESUME_SCAN_BATCH_SIZE = 100
 
 
-def _redis_text(value: object) -> str | None:
-    """规范化 Redis 返回值为文本；异常类型返回 None 由调用方按脏数据跳过。"""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bytes):
-        with contextlib.suppress(UnicodeDecodeError):
-            return value.decode("utf-8")
-    return None
+def _parse_deadline_entry(key: str, raw_value: object) -> tuple[int, int, str] | None:
+    """解析单个 deadline 键名与值，返回 (chat_id, user_id, session_id)；脏数据返回 None。
 
-
-async def _resume_deadline_session(
-    bot: Bot,
-    redis: Redis,
-    group_repo: GroupRepository,
-    timeout_cache: dict[int, int],
-    key: str,
-) -> bool:
-    """解析单个验证 deadline 键并派发 timeout 协程。
-
-    脏数据（键名/值/flow 非法或键已消失）返回 False 静默跳过；Redis/DB 等
-    依赖故障原样抛出，由调用方补扫重试。
+    值格式的权威解析在 :func:`parse_deadline_value`（verification_recovery），
+    此处只负责键名三段拆分与其对接，防止多处手写校验漂移。
     """
     parts = key.split(":")
     if len(parts) != 3:
         logger.debug(f"跳过格式错误的验证 deadline 键: {key}")
-        return False
+        return None
     try:
         chat_id, user_id = int(parts[1]), int(parts[2])
     except ValueError:
         logger.debug(f"跳过无法解析 ID 的验证 deadline 键: {key}")
-        return False
+        return None
 
-    deadline_raw = _redis_text(await redis.get(key))
-    if deadline_raw is None:
-        # 键在 SCAN 与 GET 之间已自然过期或被成功路径清理
-        return False
+    raw = redis_text(raw_value)
+    if raw is None:
+        # 键在 SCAN 与 MGET 之间已自然过期或被成功路径清理
+        return None
 
-    session_id, sep, deadline_text = deadline_raw.rpartition(":")
-    if not sep or not session_id or ":" in session_id or not deadline_text.isdigit():
+    parsed = parse_deadline_value(raw)
+    if parsed is None:
         logger.debug(f"跳过格式损坏的验证 deadline 值 [群组:{chat_id}] [用户:{user_id}]")
-        return False
+        return None
+    return chat_id, user_id, parsed[0]
 
-    flow = _redis_text(await redis.get(RedisKeys.verification_type(chat_id, user_id)))
-    if flow not in ("join", "join_request"):
-        # fail-safe：宁可不恢复也不错罚
-        logger.warning(
-            f"跳过 flow 缺失或非法的验证会话 [群组:{chat_id}] [用户:{user_id}] [flow:{flow!r}]"
-        )
-        return False
 
-    # timeout 仅用于日志与私聊文案插值（deadline 判断在 Redis），按群组配置
-    # 取值保持文案与原会话一致；扫描内缓存避免同群 N+1 查询
-    if chat_id not in timeout_cache:
-        group_config = await group_repo.get(chat_id)
-        timeout_cache[chat_id] = (
-            group_config.verification_timeout if group_config else settings.verification_timeout
-        )
-    timeout = timeout_cache[chat_id]
+async def _resume_deadline_batch(
+    bot: Bot,
+    redis: Redis,
+    group_repo: GroupRepository,
+    timeout_cache: dict[int, int],
+    keys: list[str],
+) -> tuple[int, list[str]]:
+    """解析并派发一批 deadline 键（每批两次 MGET），返回 (派发数, 失败键列表)。
 
-    timeout_handler = (
-        handle_join_request_timeout if flow == "join_request" else handle_verification_timeout
+    脏数据（键名/值/flow 非法或键已消失）静默跳过；单会话依赖故障（如群配置
+    读取失败）只失败该会话，键计入失败列表待补扫；Redis MGET 级故障抛给
+    调用方按整批失败处理。
+    """
+    resumed = 0
+    failed_keys: list[str] = []
+
+    # 第一轮 MGET：deadline 值
+    raw_values = await redis.mget(keys)
+    entries: list[tuple[str, int, int, str]] = []  # (key, chat_id, user_id, session_id)
+    for key, raw_value in zip(keys, raw_values, strict=True):
+        parsed = _parse_deadline_entry(key, raw_value)
+        if parsed is not None:
+            entries.append((key, *parsed))
+
+    # 第二轮 MGET：verification_type
+    flows = await redis.mget(
+        [RedisKeys.verification_type(chat_id, user_id) for _, chat_id, user_id, _ in entries]
     )
-    task = asyncio.create_task(
-        timeout_handler(bot, chat_id, user_id, session_id=session_id, timeout=timeout)
-    )
-    _resumed_timeout_tasks.add(task)
-    task.add_done_callback(_resumed_timeout_tasks.discard)
-    return True
+    for (key, chat_id, user_id, session_id), raw_flow in zip(entries, flows, strict=True):
+        flow = redis_text(raw_flow)
+        if flow not in ("join", "join_request"):
+            # fail-safe：宁可不恢复也不错罚
+            logger.warning(
+                f"跳过 flow 缺失或非法的验证会话 [群组:{chat_id}] [用户:{user_id}] [flow:{flow!r}]"
+            )
+            continue
+
+        # timeout 仅用于日志与私聊文案插值（deadline 判断在 Redis），按群组配置
+        # 取值保持文案与原会话一致；扫描内缓存避免同群 N+1 查询
+        try:
+            if chat_id not in timeout_cache:
+                group_config = await group_repo.get(chat_id)
+                timeout_cache[chat_id] = (
+                    group_config.verification_timeout
+                    if group_config
+                    else settings.verification_timeout
+                )
+        except Exception as e:
+            logger.warning(f"读取验证超时配置失败，待补扫 [键:{key}] [异常:{e}]")
+            failed_keys.append(key)
+            continue
+
+        dispatch_verification_timeout(
+            bot,
+            chat_id,
+            user_id,
+            flow=flow,
+            session_id=session_id,
+            timeout=timeout_cache[chat_id],
+        )
+        resumed += 1
+
+    return resumed, failed_keys
 
 
 async def resume_pending_verification_timeouts(bot: Bot) -> int:
     """启动时恢复 Redis 中仍在进行的验证会话 timeout 任务。
 
-    进程重启会丢失原 ``asyncio.create_task`` 的内存 timeout 任务，deadline
-    已过的会话将无人处罚（deadline+grace 后 Redis 键过期，沦为僵尸会话）。
-    本函数扫描 ``verification_deadline:*``（前缀唯一无歧义，TTL 与会话对齐，
-    已结束会话的残留键由 claim 状态机按 stale 退出），为每个会话重新派发对应
-    flow 的 timeout 协程；立即处罚、继续等待还是退出仍由 ``claim_timeout``
+    进程重启会丢失原 timeout 任务（内存态），deadline 已过的会话将无人处罚
+    （deadline+grace 后 Redis 键过期，沦为僵尸会话）。本函数扫描
+    ``verification_deadline:*``（模式经 ``RedisKeys.verification_deadline_pattern``），
+    按批 MGET（deadline 值 + verification_type）后为每个会话重新派发对应 flow
+    的 timeout 协程——经 ``dispatch_verification_timeout`` 统一派发，强引用与
+    关闭取消由 core.tasks 管理；立即处罚、继续等待还是退出仍由 ``claim_timeout``
     的 Redis Lua 状态机决定，与 success、/start 恢复、事件补投天然互斥。
 
     Returns:
         成功派发的 timeout 协程数（不代表处罚已完成）
     """
     resumed = 0
-    seen_keys: set[str] = set()
-    # Redis/DB 等依赖瞬时故障的键：扫描结束后补扫一轮，避免启动抖动漏掉会话
     failed_keys: list[str] = []
     timeout_cache: dict[int, int] = {}
 
@@ -2734,30 +2779,50 @@ async def resume_pending_verification_timeouts(bot: Bot) -> int:
         redis = get_redis()
         group_repo = GroupRepository()
 
-        async for raw_key in redis.scan_iter(match="verification_deadline:*", count=100):
-            key = _redis_text(raw_key)
-            if key is None:
-                continue
-
-            # SCAN 在 rehash 等情况下可能返回重复键
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-
+        async def _flush(pending: list[str]) -> None:
+            """处理一批键：批级异常（如 Redis 故障）整批计失败待补扫"""
+            nonlocal resumed
+            if not pending:
+                return
             try:
-                if await _resume_deadline_session(bot, redis, group_repo, timeout_cache, key):
-                    resumed += 1
+                count, failed = await _resume_deadline_batch(
+                    bot, redis, group_repo, timeout_cache, pending
+                )
+                resumed += count
+                failed_keys.extend(failed)
             except Exception as e:
-                logger.warning(f"恢复验证 timeout 条目失败，待补扫 [键:{key}] [异常:{e}]")
-                failed_keys.append(key)
+                logger.warning(f"恢复验证 timeout 批次失败，整批待补扫 [异常:{e}]")
+                failed_keys.extend(pending)
 
-        for key in failed_keys:
-            try:
-                if await _resume_deadline_session(bot, redis, group_repo, timeout_cache, key):
-                    resumed += 1
-            except Exception as e:
-                # 补扫仍失败：接受丢失（Redis 键自然过期），不阻断启动
-                logger.warning(f"补扫恢复验证 timeout 仍失败，放弃该会话 [键:{key}] [异常:{e}]")
+        seen_keys: set[str] = set()
+        batch: list[str] = []
+        try:
+            async for raw_key in redis.scan_iter(
+                match=RedisKeys.verification_deadline_pattern(), count=100
+            ):
+                key = redis_text(raw_key)
+                if key is None:
+                    continue
+                # SCAN 在 rehash 等情况下可能返回重复键
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                batch.append(key)
+                if len(batch) >= _RESUME_SCAN_BATCH_SIZE:
+                    await _flush(batch)
+                    batch = []
+        except Exception as e:
+            # SCAN 中途故障（游标抖动等）：已收集的键不能随异常丢弃，
+            # 继续处理残余批——未扫描到的部分只能留待键自然过期
+            logger.warning(f"SCAN 中途故障，继续处理已收集的 {len(batch)} 个键: {e}")
+        await _flush(batch)
+
+        # 补扫一轮依赖瞬时故障的键（先摘下再清空，避免 _flush 向自身追加）
+        retry_keys, failed_keys = failed_keys, []
+        await _flush(retry_keys)
+        if failed_keys:
+            # 补扫仍失败：接受丢失（Redis 键自然过期），不阻断启动
+            logger.warning(f"补扫恢复验证 timeout 仍失败，放弃 {len(failed_keys)} 个会话")
 
     except Exception as e:
         # 扫描级失败不影响 Bot 启动

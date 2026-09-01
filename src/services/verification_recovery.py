@@ -34,6 +34,7 @@ deadline 由 reserve Lua 用 Redis ``TIME`` 计算，避免应用节点与 Redis
 
 from __future__ import annotations
 
+import contextlib
 import secrets
 from dataclasses import dataclass
 from typing import Literal
@@ -66,6 +67,38 @@ def _as_text(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8")
     raise TypeError("Redis 返回值不是字符串")
+
+
+def redis_text(value: object) -> str | None:
+    """宽松版 Redis 返回值规范化：脏数据返回 None（由调用方跳过）。
+
+    与 :func:`_as_text` 的区别：不抛异常——适用于启动恢复扫描这类
+    「坏一个键跳过一个键」的容错场景（_as_text 用于状态机断言路径）。
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        with contextlib.suppress(UnicodeDecodeError):
+            return value.decode("utf-8")
+    return None
+
+
+def parse_deadline_value(raw: str) -> tuple[str, int] | None:
+    """解析 deadline 值 ``{session}:{deadline_ms}``，非法返回 None。
+
+    deadline 值格式的唯一权威解析入口（写入方为 reserve Lua 与 commit 路径）：
+    session 段非空且不含冒号（最后一个 ``:`` 拆分），deadline 段全数字。
+    启动恢复扫描与 :func:`get_deadline_ms` 必须经此解析，防止多处手写
+    校验逻辑漂移。
+    """
+    session_id, sep, deadline_text = raw.rpartition(":")
+    if not sep or not session_id or ":" in session_id or not deadline_text.isdigit():
+        return None
+    try:
+        return session_id, int(deadline_text)
+    except ValueError:
+        # isdigit() 对部分 Unicode 数字（如上标 ²）为 True 但 int() 拒绝——脏值按 None 跳过
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -847,15 +880,10 @@ async def claim_timeout(
 
 
 async def get_deadline_ms(chat_id: int, user_id: int) -> int | None:
-    """读取原始 deadline epoch ms（/start 恢复据此算剩余时间）。返回 None 表示无记录。
-
-    deadline 值格式 ``{session}:{deadline_ms}``；session 段无冒号，按最后一个 ``:`` 拆分。
-    """
+    """读取原始 deadline epoch ms（/start 恢复据此算剩余时间）。返回 None 表示无记录。"""
     redis = get_redis()
     raw = await redis.get(RedisKeys.verification_deadline(chat_id, user_id))
     if raw is None:
         return None
-    _, sep, ms_part = raw.rpartition(":")
-    if not sep or not ms_part.isdigit():
-        return None
-    return int(ms_part)
+    parsed = parse_deadline_value(raw)
+    return parsed[1] if parsed else None

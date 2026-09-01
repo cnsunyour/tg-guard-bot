@@ -25,7 +25,7 @@ JOIN_REQUEST_USER_ID = 43
 
 
 def _patch_redis(mocker, keys, values):
-    """构造只实现 scan_iter/get 的 Redis mock。"""
+    """构造只实现 scan_iter/get/mget 的 Redis mock。"""
     redis = MagicMock()
 
     async def _scan_iter(**_kwargs):
@@ -34,6 +34,7 @@ def _patch_redis(mocker, keys, values):
 
     redis.scan_iter = MagicMock(side_effect=_scan_iter)
     redis.get = AsyncMock(side_effect=lambda key: values.get(key))
+    redis.mget = AsyncMock(side_effect=lambda ks: [values.get(k) for k in ks])
     mocker.patch.object(handler, "get_redis", return_value=redis)
     return redis
 
@@ -83,7 +84,9 @@ async def test_resume_dispatches_join_and_join_request_with_group_timeout(mocker
     await asyncio.gather(*created)
 
     assert resumed == 2
-    redis.scan_iter.assert_called_once_with(match="verification_deadline:*", count=100)
+    redis.scan_iter.assert_called_once_with(
+        match=RedisKeys.verification_deadline_pattern(), count=100
+    )
     join_timeout.assert_awaited_once_with(
         bot, CHAT_ID, JOIN_USER_ID, session_id="session-join", timeout=77
     )
@@ -235,7 +238,9 @@ async def test_resume_empty_scan_returns_zero(mocker) -> None:
 
     assert resumed == 0
     assert created == []
-    redis.scan_iter.assert_called_once_with(match="verification_deadline:*", count=100)
+    redis.scan_iter.assert_called_once_with(
+        match=RedisKeys.verification_deadline_pattern(), count=100
+    )
 
 
 async def test_resume_survives_scan_level_failure(mocker) -> None:
@@ -249,8 +254,57 @@ async def test_resume_survives_scan_level_failure(mocker) -> None:
     assert resumed == 0
 
 
+async def test_resume_flushes_collected_keys_when_scan_breaks(mocker) -> None:
+    """SCAN 中途故障时已收集的键仍被处理，不随异常丢弃。"""
+    join_timeout = mocker.patch.object(handler, "handle_verification_timeout", new=AsyncMock())
+
+    join_key = RedisKeys.verification_deadline(CHAT_ID, JOIN_USER_ID)
+    type_key = RedisKeys.verification_type(CHAT_ID, JOIN_USER_ID)
+    values = {
+        join_key: "session-join:9999999999999",
+        type_key: "join",
+    }
+
+    redis = MagicMock()
+
+    async def _scan_iter_breaks(**_kwargs):
+        yield join_key
+        raise RuntimeError("cursor lost")
+
+    redis.scan_iter = MagicMock(side_effect=_scan_iter_breaks)
+    redis.mget = AsyncMock(side_effect=lambda ks: [values.get(k) for k in ks])
+    mocker.patch.object(handler, "get_redis", return_value=redis)
+    _patch_group_repo(mocker, None)
+    created = _patch_task_runner(mocker)
+
+    resumed = await handler.resume_pending_verification_timeouts(MagicMock())
+    await asyncio.gather(*created)
+
+    assert resumed == 1
+    join_timeout.assert_awaited_once()
+
+
+async def test_resume_skips_unicode_digit_deadline_value(mocker) -> None:
+    """deadline 值的数字段是 Unicode 数字（如 ²）时按脏数据跳过，不炸整批。"""
+    join_timeout = mocker.patch.object(handler, "handle_verification_timeout", new=AsyncMock())
+
+    join_key = RedisKeys.verification_deadline(CHAT_ID, JOIN_USER_ID)
+    type_key = RedisKeys.verification_type(CHAT_ID, JOIN_USER_ID)
+    values = {
+        join_key: "session-join:²",  # isdigit() 为 True 但 int() 拒绝
+        type_key: "join",
+    }
+    _patch_redis(mocker, [join_key], values)
+    _patch_task_runner(mocker)
+
+    resumed = await handler.resume_pending_verification_timeouts(MagicMock())
+
+    assert resumed == 0
+    join_timeout.assert_not_awaited()
+
+
 async def test_resume_retries_transient_dependency_failure(mocker) -> None:
-    """依赖瞬时故障（Redis GET 抖动）经补扫恢复，不丢会话。"""
+    """依赖瞬时故障（Redis MGET 抖动）经补扫恢复，不丢会话。"""
     join_timeout = mocker.patch.object(handler, "handle_verification_timeout", new=AsyncMock())
 
     join_key = RedisKeys.verification_deadline(CHAT_ID, JOIN_USER_ID)
@@ -262,12 +316,12 @@ async def test_resume_retries_transient_dependency_failure(mocker) -> None:
 
     call_count = {"n": 0}
 
-    async def _flaky_get(key):
-        # 首次访问抛错模拟启动抖动，补扫时恢复
+    async def _flaky_mget(ks):
+        # 首次批调用抛错模拟启动抖动，补扫时恢复
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise RuntimeError("connection reset")
-        return values.get(key)
+        return [values.get(k) for k in ks]
 
     redis = MagicMock()
 
@@ -275,7 +329,7 @@ async def test_resume_retries_transient_dependency_failure(mocker) -> None:
         yield join_key
 
     redis.scan_iter = MagicMock(side_effect=_scan_iter)
-    redis.get = _flaky_get
+    redis.mget = _flaky_mget
     mocker.patch.object(handler, "get_redis", return_value=redis)
     _patch_group_repo(mocker, None)
     created = _patch_task_runner(mocker)

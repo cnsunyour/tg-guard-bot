@@ -305,6 +305,19 @@ async def on_shutdown() -> None:
     """关闭时执行"""
     logger.info("Bot 正在关闭...")
 
+    # ✅ 取消全部后台任务并等待退出（置于一切依赖关闭之前）：验证 timeout 等
+    # 后台任务可能在长 sleep 后唤醒并访问 Redis/DB/Bot session，若任由其
+    # 在依赖关闭后唤醒，会触发连接懒重建与竞态。被取消会话的 Redis 状态
+    # 保留，下次启动由恢复扫描重新派发
+    try:
+        from src.core.tasks import cancel_all_background_tasks
+
+        cancelled = await cancel_all_background_tasks()
+        if cancelled:
+            logger.info(f"✅ 已取消 {cancelled} 个后台任务")
+    except Exception as e:
+        logger.warning(f"取消后台任务失败: {e}")
+
     # ✅ 关闭 AI 检测器（修复 Event loop is closed 错误）
     try:
         from src.ml.ai_detector import get_ai_detector

@@ -356,7 +356,7 @@ async def test_cmd_spam_prompt_replies_original_without_copying_content() -> Non
         ),
         patch.object(
             moderation,
-            "get_chat_administrators_mention",
+            "get_spam_handler_admins_mention",
             new=AsyncMock(return_value=""),
         ),
         patch.object(moderation, "auto_delete_message", new=auto_delete),
