@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.17.0-dev.0">
-  <title>tg-guard-bot 入群与消息处理流程</title>
+  <title>tg-guard-bot 用户活跃度机制</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -4955,7 +4955,7 @@
            data-preset-badge-blueprint="蓝图 / 修订 01"
            data-preset-badge-editorial="编辑风格 / 现场笔记">
         <div class="pulse-dot"></div>
-        <h1>tg-guard-bot 入群与消息处理流程</h1>
+        <h1>tg-guard-bot 用户活跃度机制</h1>
       </div>
     </div>
 
@@ -5004,9 +5004,9 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1001 534" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard">
-        <title id="archify-diagram-title">tg-guard-bot 入群与消息处理流程</title>
-        <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
+      <svg viewBox="0 0 980 600" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="archify-diagram-title">tg-guard-bot 用户活跃度机制</title>
+        <desc id="archify-diagram-description">由 Archify 生成的生命周期图。</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5029,330 +5029,138 @@
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)" />
 
-        <!-- Swimlanes -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="945" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 入群管线</text>
+        <!-- Lifecycle bands -->
+        <path d="M 72 112 L 908 112" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
+        <text x="72" y="100" class="t-dim" font-size="10" font-weight="600">01 / 活跃度区间</text>
+        <path d="M 72 264 L 908 264" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
+        <text x="72" y="252" class="t-dim" font-size="10" font-weight="600">02 / 各区间的待遇（日常 · 宵禁）</text>
+        <path d="M 72 436 L 908 436" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
+        <text x="72" y="424" class="t-dim" font-size="10" font-weight="600">03 / Outcomes</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="178" width="945" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-1-exception" x="46" y="184" width="933" height="94" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="200" class="t-security" font-size="10" font-weight="600">EX / 分支 · 限制 · 封禁</text>
+        <!-- Primary lifecycle rail -->
+        <path d="M 154 157 L 748 157" class="a-emphasis" stroke-width="2.2" marker-end="url(#arrowhead-emphasis)"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="304" width="945" height="106" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="326" class="t-dim" font-size="10" font-weight="600">03 / 消息管线</text>
+        <!-- Transition paths -->
+        <path data-edge-from="newcomer" data-edge-to="low" data-edge-label="+1" data-edge-key="0" data-edge-id="t-first-text" data-composition-points="461,157;497,157" d="M 461 157 L 497 157" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="low" data-edge-to="core" data-edge-label="≥10" data-edge-key="1" data-edge-id="t-reach-core" data-composition-points="615,157;651,157" d="M 615 157 L 651 157" class="a-emphasis" stroke-width="2" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="newcomer" data-edge-to="u_zero" data-edge-key="2" data-edge-id="t-u-zero" data-composition-points="402,188;402,278" d="M 402 188 L 402 278" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="low" data-edge-to="u_low" data-edge-key="3" data-edge-id="t-u-low" data-composition-points="556,188;556,278" d="M 556 188 L 556 278" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="core" data-edge-to="u_core" data-edge-key="4" data-edge-id="t-u-core" data-composition-points="710,188;710,278" d="M 710 188 L 710 278" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
 
-        <!-- Phase headers -->
-        <line x1="48" y1="35" x2="298.4" y2="35" class="a-default" stroke-width="1.1"/>
-        <rect x="48" y="27" width="250.39999999999998" height="16" rx="4" class="c-mask"/>
-        <text x="173.2" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">事件与前置</text>
-        <line x1="371.80000000000007" y1="35" x2="623.6000000000001" y2="35" class="a-emphasis" stroke-width="1.1"/>
-        <rect x="371.80000000000007" y="27" width="251.8" height="16" rx="4" class="c-mask"/>
-        <text x="497.70000000000005" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">检测与挑战</text>
-        <line x1="696" y1="35" x2="961.4" y2="35" class="a-default" stroke-width="1.1"/>
-        <rect x="696" y="27" width="265.4" height="16" rx="4" class="c-mask"/>
-        <text x="828.7" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">判定与处置</text>
+        <!-- States -->
+        <g id="node-newcomer" data-node-id="newcomer" data-node-label="新人 · 0" tabindex="0" role="button" aria-label="聚焦新人 · 0，从未发言 · 发非文本保持 0, 活跃度区间" aria-pressed="false" data-node-kind="start" data-node-sublabel="从未发言 · 发非文本保持 0" data-node-tag="初始" data-node-context="活跃度区间">
+          <title>新人 · 0 · 从未发言 · 发非文本保持 0 · 活跃度区间 · 初始</title>
+          <rect x="343" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="343" y="126" width="118" height="62" rx="7" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="start" class="semantic-sigil s-frontend" transform="translate(444 132) scale(0.6875)">
+            <circle cx="8" cy="8" r="5"/>
+            <path d="m7 5.4 3.6 2.6L7 10.6Z" class="sigil-fill"/>
+          </g>
+        <text data-detail="fine" x="353" y="140" class="t-frontend" font-size="7" font-weight="700">01</text>
+          <text data-node-label="" data-detail-anchor="" x="402" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">新人 · 0</text>
+          <text data-detail="context" x="402" y="163" class="t-muted" font-size="7" text-anchor="middle">从未发言 · 发非文本保持 0</text>
+        <text data-detail="fine" x="402" y="177" class="t-frontend" font-size="7" text-anchor="middle">初始</text>
+        </g>
 
-        <!-- Workflow groups -->
+        <g id="node-low" data-node-id="low" data-node-label="波动区 · 1-9" tabindex="0" role="button" aria-label="聚焦波动区 · 1-9，每日 -1 衰减 · 最低保留 1, 活跃度区间" aria-pressed="false" data-node-kind="active" data-node-sublabel="每日 -1 衰减 · 最低保留 1" data-node-tag="会衰减" data-node-context="活跃度区间">
+          <title>波动区 · 1-9 · 每日 -1 衰减 · 最低保留 1 · 活跃度区间 · 会衰减</title>
+          <rect x="497" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="497" y="126" width="118" height="62" rx="7" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(598 132) scale(0.6875)">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
+          </g>
+        <text data-detail="fine" x="507" y="140" class="t-backend" font-size="7" font-weight="700">02</text>
+          <text data-node-label="" data-detail-anchor="" x="556" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">波动区 · 1-9</text>
+          <text data-detail="context" x="556" y="163" class="t-muted" font-size="7" text-anchor="middle">每日 -1 衰减 · 最低保留 1</text>
+        <text data-detail="fine" x="556" y="177" class="t-backend" font-size="7" text-anchor="middle">会衰减</text>
+        </g>
 
+        <g id="node-core" data-node-id="core" data-node-label="稳定区 · ≥10" tabindex="0" role="button" aria-label="聚焦稳定区 · ≥10，免衰减护城河 · 只增不减, 活跃度区间" aria-pressed="false" data-node-kind="success" data-node-sublabel="免衰减护城河 · 只增不减" data-node-tag="稳定" data-node-context="活跃度区间">
+          <title>稳定区 · ≥10 · 免衰减护城河 · 只增不减 · 活跃度区间 · 稳定</title>
+          <rect x="651" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="651" y="126" width="118" height="62" rx="7" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-database" transform="translate(752 132) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.2 8 1.8 1.8 3.8-4"/>
+          </g>
+        <text data-detail="fine" x="661" y="140" class="t-database" font-size="7" font-weight="700">03</text>
+          <text data-node-label="" data-detail-anchor="" x="710" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">稳定区 · ≥10</text>
+          <text data-detail="context" x="710" y="163" class="t-muted" font-size="7" text-anchor="middle">免衰减护城河 · 只增不减</text>
+        <text data-detail="fine" x="710" y="177" class="t-database" font-size="7" text-anchor="middle">稳定</text>
+        </g>
 
-        <!-- Edge paths -->
-        <path data-edge-from="challenge" data-edge-to="not_started" data-edge-label="私聊失败" data-edge-key="0" data-edge-id="e-ch-ns" data-composition-points="635.6,120;651.6,120;651.6,168;570.6,168;570.6,220" d="M 635.6 120 L 651.6 120 L 651.6 168 L 570.6 168 L 570.6 220" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="challenge" data-edge-to="passed" data-edge-label="答题正确" data-edge-key="1" data-edge-id="e-ch-passed" data-composition-points="577.6,94;577.6,78;742,78;742,94" d="M 577.6 94 L 577.6 78 L 742 78 L 742 94" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="challenge" data-edge-to="timeout" data-edge-label="超时" data-edge-key="2" data-edge-id="e-ch-timeout" data-composition-points="635.6,130;665.8,130;665.8,246;696,246" d="M 635.6 130 L 665.8 130 L 665.8 246 L 696 246" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="dedup" data-edge-to="riskcheck" data-edge-label="首次处理" data-edge-key="3" data-edge-id="e-dedup-risk" data-composition-points="252.4,154;252.4,174;417.8,174;417.8,146" d="M 252.4 154 L 252.4 174 L 417.8 174 L 417.8 146" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="detect" data-edge-to="clean" data-edge-label="&lt; 阈值" data-edge-key="4" data-edge-id="e-detect-clean" data-composition-points="417.8,346;417.8,330;577.6,330;577.6,346" d="M 417.8 346 L 417.8 330 L 577.6 330 L 577.6 346" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="detect" data-edge-to="punish" data-edge-label="≥ 阈值 · 立即" data-edge-key="5" data-edge-id="e-detect-punish" data-composition-points="417.8,398;417.8,426;915.4,426;915.4,398" d="M 417.8 398 L 417.8 426 L 915.4 426 L 915.4 398" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="detect" data-edge-to="review" data-edge-label="≥ 阈值 · 确认模式" data-edge-key="6" data-edge-id="e-detect-review" data-composition-points="417.8,398;417.8,426;742,426;742,398" d="M 417.8 398 L 417.8 426 L 742 426 L 742 398" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="join_request" data-edge-to="dedup" data-edge-label="批准入群" data-edge-key="7" data-edge-id="e-jr-dedup" data-composition-points="140,120;196.4,120" d="M 140 120 L 196.4 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="msg_ev" data-edge-to="precheck" data-edge-key="8" data-edge-id="e-msg-pre" data-composition-points="140,372;183.4,372" d="M 140 372 L 183.4 372" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="not_started" data-edge-to="challenge" data-edge-label="/start 重试" data-edge-key="9" data-edge-id="e-ns-ch" data-composition-points="577.6,272;577.6,300;651.6,300;651.6,120;635.6,120" d="M 577.6 272 L 577.6 300 L 651.6 300 L 651.6 120 L 635.6 120" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="precheck" data-edge-to="act_block" data-edge-label="非文本 · 群开启" data-edge-key="10" data-edge-id="e-pre-actblock" data-composition-points="252.4,346;252.4,272" d="M 252.4 346 L 252.4 272" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="review" data-edge-to="clean" data-edge-label="误报放行" data-edge-key="11" data-edge-id="e-review-clean" data-composition-points="742,346;742,330;577.6,330;577.6,346" d="M 742 346 L 742 330 L 577.6 330 L 577.6 346" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="review" data-edge-to="punish" data-edge-label="确认封禁" data-edge-key="12" data-edge-id="e-review-punish" data-composition-points="742,398;742,414;915.4,414;915.4,398" d="M 742 398 L 742 414 L 915.4 414 L 915.4 398" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="riskcheck" data-edge-to="ban" data-edge-label="黑名单命中" data-edge-key="13" data-edge-id="e-risk-ban" data-composition-points="470.8,120;486.8,120;486.8,300;915.4,300;915.4,272" d="M 470.8 120 L 486.8 120 L 486.8 300 L 915.4 300 L 915.4 272" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="riskcheck" data-edge-to="challenge" data-edge-label="放行" data-edge-key="14" data-edge-id="e-risk-challenge" data-composition-points="417.8,94;417.8,78;577.6,78;577.6,94" d="M 417.8 94 L 417.8 78 L 577.6 78 L 577.6 94" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="timeout" data-edge-to="ban" data-edge-key="15" data-edge-id="e-timeout-ban" data-composition-points="742,272;742,288;915.4,288;915.4,272" d="M 742 272 L 742 288 L 915.4 288 L 915.4 272" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="user_join" data-edge-to="dedup" data-edge-key="16" data-edge-id="e-uj-dedup" data-composition-points="48,246;32,246;32,168;180.4,168;180.4,120;196.4,120" d="M 48 246 L 32 246 L 32 168 L 180.4 168 L 180.4 120 L 196.4 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-
-        <!-- Nodes -->
-        <g id="node-join_request" data-node-id="join_request" data-node-label="加入请求" tabindex="0" role="button" aria-label="聚焦加入请求，join_request 事件, 入群管线 › 事件与前置" aria-pressed="false" data-node-kind="external" data-node-sublabel="join_request 事件" data-node-context="入群管线 › 事件与前置">
-          <title>加入请求 · join_request 事件 · 入群管线 › 事件与前置</title>
-          <rect x="48" y="94" width="92" height="52" rx="6" class="c-mask"/>
-          <rect x="48" y="94" width="92" height="52" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 100) scale(0.6875)">
+        <g id="node-u_zero" data-node-id="u_zero" data-node-label="= 0 的待遇" tabindex="0" role="button" aria-label="聚焦= 0 的待遇，日常禁非文本 · 宵禁禁言, 各区间的待遇（日常 · 宵禁）" aria-pressed="false" data-node-kind="external" data-node-sublabel="日常禁非文本 · 宵禁禁言" data-node-tag="最严格" data-node-context="各区间的待遇（日常 · 宵禁）">
+          <title>= 0 的待遇 · 日常禁非文本 · 宵禁禁言 · 各区间的待遇（日常 · 宵禁） · 最严格</title>
+          <rect x="337" y="278" width="130" height="58" rx="7" class="c-mask"/>
+          <rect x="337" y="278" width="130" height="58" rx="7" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(450 284) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="94" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">加入请求</text>
-          <text data-detail="context" x="94" y="132" class="t-muted" font-size="8" text-anchor="middle">join_request 事件</text>
+          <text data-node-label="" data-detail-anchor="" x="402" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">= 0 的待遇</text>
+          <text data-detail="context" x="402" y="315" class="t-muted" font-size="7" text-anchor="middle">日常禁非文本 · 宵禁禁言</text>
+        <text data-detail="fine" x="402" y="325" class="t-muted" font-size="7" text-anchor="middle">最严格</text>
         </g>
 
-        <g id="node-dedup" data-node-id="dedup" data-node-label="三层去重" tabindex="0" role="button" aria-label="聚焦三层去重，去抖 · inflight · pending, 入群管线 › 事件与前置" aria-pressed="false" data-node-kind="backend" data-node-sublabel="去抖 · inflight · pending" data-node-tag="Redis" data-node-context="入群管线 › 事件与前置">
-          <title>三层去重 · 去抖 · inflight · pending · 入群管线 › 事件与前置 · Redis</title>
-          <rect x="196.4" y="86" width="112" height="68" rx="6" class="c-mask"/>
-          <rect x="196.4" y="86" width="112" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(202.4 92) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+        <g id="node-u_low" data-node-id="u_low" data-node-label="1-9 的待遇" tabindex="0" role="button" aria-label="聚焦1-9 的待遇，宵禁限非文本 · 检测可豁免, 各区间的待遇（日常 · 宵禁）" aria-pressed="false" data-node-kind="waiting" data-node-sublabel="宵禁限非文本 · 检测可豁免" data-node-tag="过渡" data-node-context="各区间的待遇（日常 · 宵禁）">
+          <title>1-9 的待遇 · 宵禁限非文本 · 检测可豁免 · 各区间的待遇（日常 · 宵禁） · 过渡</title>
+          <rect x="491" y="278" width="130" height="58" rx="7" class="c-mask"/>
+          <rect x="491" y="278" width="130" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="waiting" class="semantic-sigil s-cloud" transform="translate(604 284) scale(0.6875)">
+            <path d="M4 2.5h8M4 13.5h8M5 3c0 2.8 2 3.2 3 5-1 1.8-3 2.2-3 5M11 3c0 2.8-2 3.2-3 5 1 1.8 3 2.2 3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="252.4" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">三层去重</text>
-          <text data-detail="context" x="252.4" y="124" class="t-muted" font-size="6.9" text-anchor="middle">去抖 · inflight · pending</text>
-        <text data-detail="fine" x="252.4" y="142" class="t-backend" font-size="7" text-anchor="middle">Redis</text>
+          <text data-node-label="" data-detail-anchor="" x="556" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">1-9 的待遇</text>
+          <text data-detail="context" x="556" y="315" class="t-muted" font-size="7" text-anchor="middle">宵禁限非文本 · 检测可豁免</text>
+        <text data-detail="fine" x="556" y="325" class="t-cloud" font-size="7" text-anchor="middle">过渡</text>
         </g>
 
-        <g id="node-riskcheck" data-node-id="riskcheck" data-node-label="入群风控" tabindex="0" role="button" aria-label="聚焦入群风控，CAS · 用户状态 · 信息 AI, 入群管线 › 检测与挑战" aria-pressed="false" data-node-kind="security" data-node-sublabel="CAS · 用户状态 · 信息 AI" data-node-context="入群管线 › 检测与挑战">
-          <title>入群风控 · CAS · 用户状态 · 信息 AI · 入群管线 › 检测与挑战</title>
-          <rect x="364.8" y="94" width="106" height="52" rx="6" class="c-mask"/>
-          <rect x="364.8" y="94" width="106" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(370.8 100) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
+        <g id="node-u_core" data-node-id="u_core" data-node-label="≥ 10 的待遇" tabindex="0" role="button" aria-label="聚焦≥ 10 的待遇，置信度下调 · 宵禁全放, 各区间的待遇（日常 · 宵禁）" aria-pressed="false" data-node-kind="active" data-node-sublabel="置信度下调 · 宵禁全放" data-node-tag="信任" data-node-context="各区间的待遇（日常 · 宵禁）">
+          <title>≥ 10 的待遇 · 置信度下调 · 宵禁全放 · 各区间的待遇（日常 · 宵禁） · 信任</title>
+          <rect x="647" y="278" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="647" y="278" width="126" height="58" rx="7" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(756 284) scale(0.6875)">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="417.8" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">入群风控</text>
-          <text data-detail="context" x="417.8" y="132" class="t-muted" font-size="6.8" text-anchor="middle">CAS · 用户状态 · 信息 AI</text>
+          <text data-node-label="" data-detail-anchor="" x="710" y="299" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">≥ 10 的待遇</text>
+          <text data-detail="context" x="710" y="315" class="t-muted" font-size="7" text-anchor="middle">置信度下调 · 宵禁全放</text>
+        <text data-detail="fine" x="710" y="325" class="t-backend" font-size="7" text-anchor="middle">信任</text>
         </g>
 
-        <g id="node-challenge" data-node-id="challenge" data-node-label="限权 + 私聊挑战" tabindex="0" role="button" aria-label="聚焦限权 + 私聊挑战，六类题 · 验证码 WebApp, 入群管线 › 检测与挑战" aria-pressed="false" data-node-kind="backend" data-node-sublabel="六类题 · 验证码 WebApp" data-node-context="入群管线 › 检测与挑战">
-          <title>限权 + 私聊挑战 · 六类题 · 验证码 WebApp · 入群管线 › 检测与挑战</title>
-          <rect x="519.6" y="94" width="116" height="52" rx="6" class="c-mask"/>
-          <rect x="519.6" y="94" width="116" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(525.6 100) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="577.6" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">限权 + 私聊挑战</text>
-          <text data-detail="context" x="577.6" y="132" class="t-muted" font-size="8" text-anchor="middle">六类题 · 验证码 WebApp</text>
+        <!-- Transition labels -->
+        <g data-detail="context" data-edge-from="newcomer" data-edge-to="low" data-edge-label="+1" data-edge-key="0" data-edge-id="t-first-text">
+          <rect x="463" y="136" width="32" height="16" rx="4" class="c-mask"/>
+          <text x="479" y="147" class="t-backend" font-size="8" text-anchor="middle">+1</text>
+        </g>
+        <g data-detail="context" data-edge-from="low" data-edge-to="core" data-edge-label="≥10" data-edge-key="1" data-edge-id="t-reach-core">
+          <rect x="617" y="136" width="32" height="16" rx="4" class="c-mask"/>
+          <text x="633" y="147" class="t-backend" font-size="8" text-anchor="middle">≥10</text>
         </g>
 
-        <g id="node-passed" data-node-id="passed" data-node-label="验证通过" tabindex="0" role="button" aria-label="聚焦验证通过，恢复权限 + 群欢迎, 入群管线 › 判定与处置" aria-pressed="false" data-node-kind="database" data-node-sublabel="恢复权限 + 群欢迎" data-node-context="入群管线 › 判定与处置">
-          <title>验证通过 · 恢复权限 + 群欢迎 · 入群管线 › 判定与处置</title>
-          <rect x="692" y="94" width="100" height="52" rx="6" class="c-mask"/>
-          <rect x="692" y="94" width="100" height="52" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(698 100) scale(0.6875)">
-            <ellipse cx="8" cy="4" rx="5" ry="2"/>
-            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="742" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">验证通过</text>
-          <text data-detail="context" x="742" y="132" class="t-muted" font-size="8" text-anchor="middle">恢复权限 + 群欢迎</text>
-        </g>
-
-        <g id="node-user_join" data-node-id="user_join" data-node-label="直接入群" tabindex="0" role="button" aria-label="聚焦直接入群，chat_member 事件, 分支 · 限制 · 封禁 › 事件与前置" aria-pressed="false" data-node-kind="external" data-node-sublabel="chat_member 事件" data-node-context="分支 · 限制 · 封禁 › 事件与前置">
-          <title>直接入群 · chat_member 事件 · 分支 · 限制 · 封禁 › 事件与前置</title>
-          <rect x="48" y="220" width="92" height="52" rx="6" class="c-mask"/>
-          <rect x="48" y="220" width="92" height="52" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 226) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="94" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">直接入群</text>
-          <text data-detail="context" x="94" y="258" class="t-muted" font-size="8" text-anchor="middle">chat_member 事件</text>
-        </g>
-
-        <g id="node-act_block" data-node-id="act_block" data-node-label="非文本限制" tabindex="0" role="button" aria-label="聚焦非文本限制，活跃度 ≤ 0 · 删除 + 私聊通知, 分支 · 限制 · 封禁 › 事件与前置" aria-pressed="false" data-node-kind="security" data-node-sublabel="活跃度 ≤ 0 · 删除 + 私聊通知" data-node-context="分支 · 限制 · 封禁 › 事件与前置">
-          <title>非文本限制 · 活跃度 ≤ 0 · 删除 + 私聊通知 · 分支 · 限制 · 封禁 › 事件与前置</title>
-          <rect x="188.4" y="220" width="128" height="52" rx="6" class="c-mask"/>
-          <rect x="188.4" y="220" width="128" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(194.4 226) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="252.4" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">非文本限制</text>
-          <text data-detail="context" x="252.4" y="258" class="t-muted" font-size="7.1" text-anchor="middle">活跃度 ≤ 0 · 删除 + 私聊通知</text>
-        </g>
-
-        <g id="node-not_started" data-node-id="not_started" data-node-label="未启动 Bot" tabindex="0" role="button" aria-label="聚焦未启动 Bot，共享引导 · 30s 聚合 mention, 分支 · 限制 · 封禁 › 检测与挑战" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="共享引导 · 30s 聚合 mention" data-node-context="分支 · 限制 · 封禁 › 检测与挑战">
-          <title>未启动 Bot · 共享引导 · 30s 聚合 mention · 分支 · 限制 · 封禁 › 检测与挑战</title>
-          <rect x="519.6" y="220" width="116" height="52" rx="6" class="c-mask"/>
-          <rect x="519.6" y="220" width="116" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(525.6 226) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="577.6" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">未启动 Bot</text>
-          <text data-detail="context" x="577.6" y="258" class="t-muted" font-size="6.6" text-anchor="middle">共享引导 · 30s 聚合 mention</text>
-        </g>
-
-        <g id="node-timeout" data-node-id="timeout" data-node-label="超时未验证" tabindex="0" role="button" aria-label="聚焦超时未验证，超过验证时限, 分支 · 限制 · 封禁 › 判定与处置" aria-pressed="false" data-node-kind="security" data-node-sublabel="超过验证时限" data-node-context="分支 · 限制 · 封禁 › 判定与处置">
-          <title>超时未验证 · 超过验证时限 · 分支 · 限制 · 封禁 › 判定与处置</title>
-          <rect x="696" y="220" width="92" height="52" rx="6" class="c-mask"/>
-          <rect x="696" y="220" width="92" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(702 226) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="742" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">超时未验证</text>
-          <text data-detail="context" x="742" y="258" class="t-muted" font-size="8" text-anchor="middle">超过验证时限</text>
-        </g>
-
-        <g id="node-ban" data-node-id="ban" data-node-label="封禁踢出" tabindex="0" role="button" aria-label="聚焦封禁踢出，CAS · 状态 · 超时, 分支 · 限制 · 封禁 › 判定与处置" aria-pressed="false" data-node-kind="security" data-node-sublabel="CAS · 状态 · 超时" data-node-context="分支 · 限制 · 封禁 › 判定与处置">
-          <title>封禁踢出 · CAS · 状态 · 超时 · 分支 · 限制 · 封禁 › 判定与处置</title>
-          <rect x="869.4" y="220" width="92" height="52" rx="6" class="c-mask"/>
-          <rect x="869.4" y="220" width="92" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(875.4 226) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="915.4" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">封禁踢出</text>
-          <text data-detail="context" x="915.4" y="258" class="t-muted" font-size="8" text-anchor="middle">CAS · 状态 · 超时</text>
-        </g>
-
-        <g id="node-msg_ev" data-node-id="msg_ev" data-node-label="群消息" tabindex="0" role="button" aria-label="聚焦群消息，文本 / 图片 / 编辑, 消息管线 › 事件与前置" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="文本 / 图片 / 编辑" data-node-context="消息管线 › 事件与前置">
-          <title>群消息 · 文本 / 图片 / 编辑 · 消息管线 › 事件与前置</title>
-          <rect x="48" y="346" width="92" height="52" rx="6" class="c-mask"/>
-          <rect x="48" y="346" width="92" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(54 352) scale(0.6875)">
-            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
-            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
-            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
-            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="94" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">群消息</text>
-          <text data-detail="context" x="94" y="384" class="t-muted" font-size="7.7" text-anchor="middle">文本 / 图片 / 编辑</text>
-        </g>
-
-        <g id="node-precheck" data-node-id="precheck" data-node-label="前置检查" tabindex="0" role="button" aria-label="聚焦前置检查，白名单 · 命令 · 马甲 · 活跃度豁免, 消息管线 › 事件与前置" aria-pressed="false" data-node-kind="backend" data-node-sublabel="白名单 · 命令 · 马甲 · 活跃度豁免" data-node-context="消息管线 › 事件与前置">
-          <title>前置检查 · 白名单 · 命令 · 马甲 · 活跃度豁免 · 消息管线 › 事件与前置</title>
-          <rect x="183.4" y="346" width="138" height="52" rx="6" class="c-mask"/>
-          <rect x="183.4" y="346" width="138" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(189.4 352) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="252.4" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">前置检查</text>
-          <text data-detail="context" x="252.4" y="384" class="t-muted" font-size="6.5" text-anchor="middle">白名单 · 命令 · 马甲 · 活跃度豁免</text>
-        </g>
-
-        <g id="node-detect" data-node-id="detect" data-node-label="多层检测" tabindex="0" role="button" aria-label="聚焦多层检测，规则→ML→Embedding ∥ AI · 降误判, 消息管线 › 检测与挑战" aria-pressed="false" data-node-kind="backend" data-node-sublabel="规则→ML→Embedding ∥ AI · 降误判" data-node-context="消息管线 › 检测与挑战">
-          <title>多层检测 · 规则→ML→Embedding ∥ AI · 降误判 · 消息管线 › 检测与挑战</title>
-          <rect x="350.8" y="346" width="134" height="52" rx="6" class="c-mask"/>
-          <rect x="350.8" y="346" width="134" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(356.8 352) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="417.8" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">多层检测</text>
-          <text data-detail="context" x="417.8" y="384" class="t-muted" font-size="6.7" text-anchor="middle">规则→ML→Embedding ∥ AI · 降误判</text>
-        </g>
-
-        <g id="node-clean" data-node-id="clean" data-node-label="判定正常" tabindex="0" role="button" aria-label="聚焦判定正常，记录上下文缓存, 消息管线 › 检测与挑战" aria-pressed="false" data-node-kind="database" data-node-sublabel="记录上下文缓存" data-node-context="消息管线 › 检测与挑战">
-          <title>判定正常 · 记录上下文缓存 · 消息管线 › 检测与挑战</title>
-          <rect x="531.6" y="346" width="92" height="52" rx="6" class="c-mask"/>
-          <rect x="531.6" y="346" width="92" height="52" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(537.6 352) scale(0.6875)">
-            <ellipse cx="8" cy="4" rx="5" ry="2"/>
-            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="577.6" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">判定正常</text>
-          <text data-detail="context" x="577.6" y="384" class="t-muted" font-size="8" text-anchor="middle">记录上下文缓存</text>
-        </g>
-
-        <g id="node-review" data-node-id="review" data-node-label="人工复核" tabindex="0" role="button" aria-label="聚焦人工复核，spam_confirm · 管理员确认, 消息管线 › 判定与处置" aria-pressed="false" data-node-kind="backend" data-node-sublabel="spam_confirm · 管理员确认" data-node-context="消息管线 › 判定与处置">
-          <title>人工复核 · spam_confirm · 管理员确认 · 消息管线 › 判定与处置</title>
-          <rect x="686" y="346" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="686" y="346" width="112" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(692 352) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="742" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工复核</text>
-          <text data-detail="context" x="742" y="384" class="t-muted" font-size="6.9" text-anchor="middle">spam_confirm · 管理员确认</text>
-        </g>
-
-        <g id="node-punish" data-node-id="punish" data-node-label="删除 + 处罚" tabindex="0" role="button" aria-label="聚焦删除 + 处罚，高置信封禁 / 禁言 · 样本入库, 消息管线 › 判定与处置" aria-pressed="false" data-node-kind="security" data-node-sublabel="高置信封禁 / 禁言 · 样本入库" data-node-context="消息管线 › 判定与处置">
-          <title>删除 + 处罚 · 高置信封禁 / 禁言 · 样本入库 · 消息管线 › 判定与处置</title>
-          <rect x="854.4" y="346" width="122" height="52" rx="6" class="c-mask"/>
-          <rect x="854.4" y="346" width="122" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(860.4 352) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="915.4" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">删除 + 处罚</text>
-          <text data-detail="context" x="915.4" y="384" class="t-muted" font-size="6.7" text-anchor="middle">高置信封禁 / 禁言 · 样本入库</text>
-        </g>
-
-        <!-- Edge labels -->
-        <g data-detail="context" data-edge-from="challenge" data-edge-to="not_started" data-edge-label="私聊失败" data-edge-key="0" data-edge-id="e-ch-ns">
-          <rect x="586.9" y="148" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="611.1" y="158" class="t-database" font-size="8" text-anchor="middle">私聊失败</text>
-        </g>
-        <g data-detail="context" data-edge-from="challenge" data-edge-to="passed" data-edge-label="答题正确" data-edge-key="1" data-edge-id="e-ch-passed">
-          <rect x="635.5999999999999" y="58" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="659.8" y="68" class="t-muted" font-size="8" text-anchor="middle">答题正确</text>
-        </g>
-        <g data-detail="context" data-edge-from="challenge" data-edge-to="timeout" data-edge-label="超时" data-edge-key="2" data-edge-id="e-ch-timeout">
-          <rect x="665.9" y="226" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="680.9" y="236" class="t-security" font-size="8" text-anchor="middle">超时</text>
-        </g>
-        <g data-detail="context" data-edge-from="dedup" data-edge-to="riskcheck" data-edge-label="首次处理" data-edge-key="3" data-edge-id="e-dedup-risk">
-          <rect x="310.90000000000003" y="154" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="335.1" y="164" class="t-muted" font-size="8" text-anchor="middle">首次处理</text>
-        </g>
-        <g data-detail="context" data-edge-from="detect" data-edge-to="clean" data-edge-label="&lt; 阈值" data-edge-key="4" data-edge-id="e-detect-clean">
-          <rect x="478.30000000000007" y="310" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="497.70000000000005" y="320" class="t-muted" font-size="8" text-anchor="middle">&lt; 阈值</text>
-        </g>
-        <g data-detail="context" data-edge-from="detect" data-edge-to="punish" data-edge-label="≥ 阈值 · 立即" data-edge-key="5" data-edge-id="e-detect-punish">
-          <rect x="630.4" y="406" width="72.4" height="14" rx="3" class="c-mask"/>
-          <text x="666.6" y="416" class="t-security" font-size="8" text-anchor="middle">≥ 阈值 · 立即</text>
-        </g>
-        <g data-detail="context" data-edge-from="detect" data-edge-to="review" data-edge-label="≥ 阈值 · 确认模式" data-edge-key="6" data-edge-id="e-detect-review">
-          <rect x="534.1" y="406" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="579.9" y="416" class="t-database" font-size="8" text-anchor="middle">≥ 阈值 · 确认模式</text>
-        </g>
-        <g data-detail="context" data-edge-from="join_request" data-edge-to="dedup" data-edge-label="批准入群" data-edge-key="7" data-edge-id="e-jr-dedup">
-          <rect x="144" y="100" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="168.2" y="110" class="t-muted" font-size="8" text-anchor="middle">批准入群</text>
-        </g>
-
-        <g data-detail="context" data-edge-from="not_started" data-edge-to="challenge" data-edge-label="/start 重试" data-edge-key="9" data-edge-id="e-ns-ch">
-          <rect x="583.2" y="280" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="614.6" y="290" class="t-database" font-size="8" text-anchor="middle">/start 重试</text>
-        </g>
-        <g data-detail="context" data-edge-from="precheck" data-edge-to="act_block" data-edge-label="非文本 · 群开启" data-edge-key="10" data-edge-id="e-pre-actblock">
-          <rect x="211.4" y="326" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="252.4" y="336" class="t-database" font-size="8" text-anchor="middle">非文本 · 群开启</text>
-        </g>
-        <g data-detail="context" data-edge-from="review" data-edge-to="clean" data-edge-label="误报放行" data-edge-key="11" data-edge-id="e-review-clean">
-          <rect x="635.5999999999999" y="310" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="659.8" y="320" class="t-database" font-size="8" text-anchor="middle">误报放行</text>
-        </g>
-        <g data-detail="context" data-edge-from="review" data-edge-to="punish" data-edge-label="确认封禁" data-edge-key="12" data-edge-id="e-review-punish">
-          <rect x="804.5" y="394" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="828.7" y="404" class="t-security" font-size="8" text-anchor="middle">确认封禁</text>
-        </g>
-        <g data-detail="context" data-edge-from="riskcheck" data-edge-to="ban" data-edge-label="黑名单命中" data-edge-key="13" data-edge-id="e-risk-ban">
-          <rect x="672.1" y="280" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="701.1" y="290" class="t-security" font-size="8" text-anchor="middle">黑名单命中</text>
-        </g>
-        <g data-detail="context" data-edge-from="riskcheck" data-edge-to="challenge" data-edge-label="放行" data-edge-key="14" data-edge-id="e-risk-challenge">
-          <rect x="482.70000000000005" y="58" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="497.70000000000005" y="68" class="t-muted" font-size="8" text-anchor="middle">放行</text>
-        </g>
 
 
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
-          <text x="20" y="434" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="用户界面" data-legend-x="20" data-legend-baseline="454" data-legend-width="78">
-            <rect x="20" y="446" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-            <text x="42" y="454" class="t-muted" font-size="7.5" font-weight="500">用户界面</text>
+          <text x="40" y="544" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="start" data-legend-kind="start" data-legend-label="开始" data-legend-x="40" data-legend-baseline="564" data-legend-width="63">
+            <rect x="40" y="556" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="564" class="t-muted" font-size="10" font-weight="500">开始</text>
           </g>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="105" data-legend-baseline="454" data-legend-width="87">
-            <rect x="105" y="446" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="127" y="454" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
+          <g data-legend-semantic-kind="active" data-legend-kind="active" data-legend-label="活动状态" data-legend-x="125" data-legend-baseline="564" data-legend-width="83">
+            <rect x="125" y="556" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="147" y="564" class="t-muted" font-size="10" font-weight="500">活动状态</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="199" data-legend-baseline="454" data-legend-width="61">
-            <rect x="199" y="446" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="221" y="454" class="t-muted" font-size="7.5" font-weight="500">策略</text>
+          <g data-legend-semantic-kind="waiting" data-legend-kind="waiting" data-legend-label="等待" data-legend-x="230" data-legend-baseline="564" data-legend-width="63">
+            <rect x="230" y="556" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+            <text x="252" y="564" class="t-muted" font-size="10" font-weight="500">等待</text>
           </g>
-          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="工具操作" data-legend-x="267" data-legend-baseline="454" data-legend-width="78">
-            <rect x="267" y="446" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-            <text x="289" y="454" class="t-muted" font-size="7.5" font-weight="500">工具操作</text>
+          <g data-legend-semantic-kind="success" data-legend-kind="success" data-legend-label="成功终态" data-legend-x="315" data-legend-baseline="564" data-legend-width="83">
+            <rect x="315" y="556" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="337" y="564" class="t-muted" font-size="10" font-weight="500">成功终态</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="上下文 / 追踪" data-legend-x="352" data-legend-baseline="454" data-legend-width="100">
-            <rect x="352" y="446" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-            <text x="374" y="454" class="t-muted" font-size="7.5" font-weight="500">上下文 / 追踪</text>
-          </g>
-          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="459" data-legend-baseline="454" data-legend-width="78">
-            <rect x="459" y="446" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-            <text x="481" y="454" class="t-muted" font-size="7.5" font-weight="500">外部系统</text>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部状态" data-legend-x="420" data-legend-baseline="564" data-legend-width="83">
+            <rect x="420" y="556" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="442" y="564" class="t-muted" font-size="10" font-weight="500">外部状态</text>
           </g>
         </g>
       </svg>
@@ -5544,27 +5352,36 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>入群管线</h3>
+          <h3>记分规则</h3>
         </div>
         <ul>
-          <li>&bull; join_request 由 Bot 批准后检测；直接入群先限权（全权限禁用）再检测；管理员邀请跳过验证</li>
-          <li>&bull; 三层去重：60s 事件去抖 → inflight 互斥锁（owner token + Lua 释放）→ 进行中验证直接跳过</li>
-          <li>&bull; 入群风控命中（CAS / 用户状态 / 信息 AI）直接封禁踢出</li>
-          <li>&bull; 未启动 Bot → 共享引导消息（30s 窗口聚合 mention），/start 后重试</li>
+          <li>&bull; 文本消息 +1；非文本消息 0 分（不扣分）</li>
+          <li>&bull; 新人发非文本不建立记录，保持 0 维持拦截</li>
+          <li>&bull; 懒惰衰减：读取时按最后发言日期计算，不跑定时任务</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot rose"></div>
-          <h3>消息检测</h3>
+          <div class="card-dot emerald"></div>
+          <h3>护城河设计</h3>
         </div>
         <ul>
-          <li>&bull; 非文本消息（图片/贴纸/视频）：群开启活跃度限制且活跃度 ≤ 0 时直接删除并私聊通知</li>
-          <li>&bull; 未开启确认：立即删除 + 处罚（高置信临时封禁 60 分钟 / 低置信禁言）</li>
-          <li>&bull; 开启 spam_confirm：发管理员复核提示（24h 快照），确认后处罚，误报放行</li>
-          <li>&bull; 样本入库用于再训练；正常消息记入上下文缓存</li>
-          <li>&bull; 降误判双保险：活跃度 + 回复链/话题一致性下调置信度，只降不升</li>
+          <li>&bull; ≥ 10 免衰减：老用户活跃度只增不减（单向门）</li>
+          <li>&bull; &lt; 10 每日 -1，最低保留 floor（默认 1）</li>
+          <li>&bull; 10 是置信度修正与宵禁非文本门槛的共同分界</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>消费场景与配置</h3>
+        </div>
+        <ul>
+          <li>&bull; 置信度修正：0.05·log₂(a/10)，上限 0.15，始终生效</li>
+          <li>&bull; 检测豁免：阈值全局 + 群组两级（默认 0 关闭）</li>
+          <li>&bull; Redis 双键存储：user_activity + activity_last_date</li>
         </ul>
       </div>
     </div>
