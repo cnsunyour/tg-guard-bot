@@ -16,7 +16,7 @@
 
 ![系统架构图](docs/images/architecture.svg)
 
-> 📐 **交互版**：[在线打开](https://sunyour.org/tg-guard-bot/architecture.html) · [本地文件](docs/architecture.html) —— 支持缩放、聚焦、明暗主题
+> 📐 **交互版**：[在线打开](https://cnsunyour.github.io/tg-guard-bot/architecture.html) · [本地文件](docs/architecture.html) —— 支持缩放、聚焦、明暗主题
 
 ## ✨ 核心特性
 
@@ -45,7 +45,7 @@
 
 ![入群与消息处理流程图](docs/images/join-message-flow.svg)
 
-> 📐 **交互版**：[在线打开](https://sunyour.org/tg-guard-bot/join-message-flow.html) · [本地文件](docs/join-message-flow.html) —— join_request / 直接入群双入口验证管线 + 消息检测双管线（含人工复核、非文本限制分支）
+> 📐 **交互版**：[在线打开](https://cnsunyour.github.io/tg-guard-bot/join-message-flow.html) · [本地文件](docs/join-message-flow.html) —— join_request / 直接入群双入口验证管线 + 消息检测双管线（含人工复核、非文本限制分支）
 
 ### 👮 群管理
 - **踢人** `/kick` - 移出群组
@@ -100,7 +100,7 @@
 
 ![用户活跃度机制图](docs/images/activity-system.svg)
 
-> 📐 **交互版**：[在线打开](https://sunyour.org/tg-guard-bot/activity-system.html) · [本地文件](docs/activity-system.html) —— 活跃度区间状态转移与各区间待遇（日常 · 宵禁）、≥10 护城河设计
+> 📐 **交互版**：[在线打开](https://cnsunyour.github.io/tg-guard-bot/activity-system.html) · [本地文件](docs/activity-system.html) —— 活跃度区间状态转移与各区间待遇（日常 · 宵禁）、≥10 护城河设计
 
 - **非文本消息限制**（可选，群主可通过 `/activity` 控制）：
   - 启用时：活跃度 ≤ 0 的用户无法发送图片、贴纸、视频等
@@ -249,9 +249,9 @@ make train-model    # 训练模型
 | [DEPLOYMENT.md](DEPLOYMENT.md) | 生产环境部署指南 |
 | [SECURITY.md](SECURITY.md) | 安全说明与建议 |
 | [docs/backup-strategy.md](docs/backup-strategy.md) | 备份策略说明 |
-| [系统架构交互图](https://sunyour.org/tg-guard-bot/architecture.html) | 分层架构总览（在线交互 / [本地文件](docs/architecture.html)） |
-| [入群与消息处理流程图](https://sunyour.org/tg-guard-bot/join-message-flow.html) | 双管线流程（在线交互 / [本地文件](docs/join-message-flow.html)） |
-| [用户活跃度机制图](https://sunyour.org/tg-guard-bot/activity-system.html) | 活跃度状态与待遇（在线交互 / [本地文件](docs/activity-system.html)） |
+| [系统架构交互图](https://cnsunyour.github.io/tg-guard-bot/architecture.html) | 分层架构总览（在线交互 / [本地文件](docs/architecture.html)） |
+| [入群与消息处理流程图](https://cnsunyour.github.io/tg-guard-bot/join-message-flow.html) | 双管线流程（在线交互 / [本地文件](docs/join-message-flow.html)） |
+| [用户活跃度机制图](https://cnsunyour.github.io/tg-guard-bot/activity-system.html) | 活跃度状态与待遇（在线交互 / [本地文件](docs/activity-system.html)） |
 | [captcha-webapp/README.md](captcha-webapp/README.md) | 统一 CAPTCHA WebApp 部署指南 |
 | [altcha-backend/README.md](altcha-backend/README.md) | ALTCHA PHP 后端部署指南 |
 
