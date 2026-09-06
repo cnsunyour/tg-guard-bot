@@ -296,8 +296,27 @@ class TestHybridAIDetector:
     """测试 HybridAIDetector 的熔断与切换逻辑"""
 
     @pytest.fixture
-    def detector(self):
-        """创建 HybridAIDetector 实例"""
+    def detector(self, monkeypatch):
+        """创建 HybridAIDetector 实例（显式启用主服务商，不依赖本机 .env 的 AI 配置）"""
+        from src.core.config import settings as app_settings
+
+        monkeypatch.setattr(app_settings, "ai_spam_enabled", True)
+        monkeypatch.setattr(app_settings, "ai_spam_api_key", "test-api-key")
+        return HybridAIDetector(circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5)
+
+    @pytest.fixture
+    def detector_with_backup(self, monkeypatch):
+        """主备服务商均启用的实例（failover 类测试需要 backup.is_available 为 True）。
+
+        仅适用于已 mock backup.detect 的测试——真实 detect 会拿测试假 key 发请求。
+        配置须在构造前 patch（provider 在 __init__ 读 settings）。
+        """
+        from src.core.config import settings as app_settings
+
+        monkeypatch.setattr(app_settings, "ai_spam_enabled", True)
+        monkeypatch.setattr(app_settings, "ai_spam_api_key", "test-api-key")
+        monkeypatch.setattr(app_settings, "ai_spam_backup_enabled", True)
+        monkeypatch.setattr(app_settings, "ai_spam_backup_api_key", "test-api-key")
         return HybridAIDetector(circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5)
 
     @pytest.mark.asyncio
@@ -349,20 +368,22 @@ class TestHybridAIDetector:
         assert detector.primary._client_rebuild_reason == "cooldown_ended"
 
     @pytest.mark.asyncio
-    async def test_failover_closes_primary_immediately(self, detector):
+    async def test_failover_closes_primary_immediately(self, detector_with_backup):
         """测试切换到 backup 时会立即关闭 primary client"""
         # 确保 primary 有 client（mock）
         mock_client = MagicMock()
         mock_client.aclose = AsyncMock()
-        detector.primary.client = mock_client
+        detector_with_backup.primary.client = mock_client
 
         # Mock primary 失败、backup 成功
         with (
             patch.object(
-                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+                detector_with_backup.primary,
+                "detect",
+                side_effect=AIServiceError("primary", "test error"),
             ),
             patch.object(
-                detector.backup,
+                detector_with_backup.backup,
                 "detect",
                 return_value=MagicMock(
                     is_spam=False,
@@ -375,15 +396,15 @@ class TestHybridAIDetector:
                 ),
             ),
         ):
-            result = await detector.detect("test text")
+            result = await detector_with_backup.detect("test text")
 
         # 验证 primary client 被关闭
-        assert detector.primary.client is None
+        assert detector_with_backup.primary.client is None
         # 标记应该是 provider_failure（首次失败时标记），而不是 switching_to_backup
         # 因为 switching_to_backup 不会覆盖 provider_failure
-        assert detector.primary._client_rebuild_pending is True
+        assert detector_with_backup.primary._client_rebuild_pending is True
         # 实际的 reason 可能是 provider_failure 或 circuit_breaker_tripped，只要标记了就行
-        assert detector.primary._client_rebuild_reason in [
+        assert detector_with_backup.primary._client_rebuild_reason in [
             "provider_failure",
             "circuit_breaker_tripped",
         ]
@@ -393,20 +414,22 @@ class TestHybridAIDetector:
         assert result["details"]["provider"] == "backup"
 
     @pytest.mark.asyncio
-    async def test_failover_does_not_close_backup(self, detector):
+    async def test_failover_does_not_close_backup(self, detector_with_backup):
         """测试切换时不会关闭 backup client"""
         # 确保 backup 有 client
         mock_client = MagicMock()
         mock_client.aclose = AsyncMock()
-        detector.backup.client = mock_client
+        detector_with_backup.backup.client = mock_client
 
         # Mock primary 失败、backup 成功
         with (
             patch.object(
-                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+                detector_with_backup.primary,
+                "detect",
+                side_effect=AIServiceError("primary", "test error"),
             ),
             patch.object(
-                detector.backup,
+                detector_with_backup.backup,
                 "detect",
                 return_value=MagicMock(
                     is_spam=False,
@@ -419,28 +442,30 @@ class TestHybridAIDetector:
                 ),
             ),
         ):
-            await detector.detect("test text")
+            await detector_with_backup.detect("test text")
 
         # 验证 backup client 没有被关闭
-        assert detector.backup.client is mock_client
-        assert detector.backup._client_rebuild_pending is False
+        assert detector_with_backup.backup.client is mock_client
+        assert detector_with_backup.backup._client_rebuild_pending is False
         mock_client.aclose.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_primary_rebuilds_on_next_use_after_failover(self, detector):
+    async def test_primary_rebuilds_on_next_use_after_failover(self, detector_with_backup):
         """测试 failover 后下一次 primary 调用会重建 client"""
         # 创建旧的 primary client（mock）
         old_client = MagicMock()
         old_client.aclose = AsyncMock()
-        detector.primary.client = old_client
+        detector_with_backup.primary.client = old_client
 
         # 模拟切换到 backup
         with (
             patch.object(
-                detector.primary, "detect", side_effect=AIServiceError("primary", "test error")
+                detector_with_backup.primary,
+                "detect",
+                side_effect=AIServiceError("primary", "test error"),
             ),
             patch.object(
-                detector.backup,
+                detector_with_backup.backup,
                 "detect",
                 return_value=MagicMock(
                     is_spam=False,
@@ -453,10 +478,10 @@ class TestHybridAIDetector:
                 ),
             ),
         ):
-            await detector.detect("test text")
+            await detector_with_backup.detect("test text")
 
         # 验证标记已设置
-        assert detector.primary._client_rebuild_pending is True
+        assert detector_with_backup.primary._client_rebuild_pending is True
 
         # 创建新的 client
         new_client = MagicMock()
@@ -467,14 +492,14 @@ class TestHybridAIDetector:
             return {"is_spam": False, "confidence": 0.1, "reason": "测试"}
 
         with (
-            patch.object(detector.primary, "_call_api", side_effect=mock_call_api),
-            patch.object(detector.primary, "_create_client", return_value=new_client),
+            patch.object(detector_with_backup.primary, "_call_api", side_effect=mock_call_api),
+            patch.object(detector_with_backup.primary, "_create_client", return_value=new_client),
         ):
             # 先调用 _ensure_client 来消费重建标记
-            await detector.primary._ensure_client()
+            await detector_with_backup.primary._ensure_client()
 
         # 验证重建标记已被清除（因为 _ensure_client() 创建了新 client）
-        assert detector.primary._client_rebuild_pending is False
+        assert detector_with_backup.primary._client_rebuild_pending is False
 
     @pytest.mark.asyncio
     async def test_get_stats_includes_client_lifecycle_fields(self, detector):
@@ -504,13 +529,21 @@ class TestBackupProvider:
     """测试 BackupAIServiceProvider 的重建逻辑"""
 
     @pytest.mark.asyncio
-    async def test_backup_failure_also_marks_for_rebuild(self):
+    async def test_backup_failure_also_marks_for_rebuild(self, monkeypatch):
         """测试 backup 失败也会标记待重建
 
         必须在同一次 detect 内同时注入主备失败：只 mock backup 时，primary 会
-        真实调用成功并直接返回，根本走不到 backup 分支（本机配置了可用 API key
-        时该测试曾因此失败，在无 key 环境下则靠 primary 恰好失败而侥幸通过）。
+        真实调用成功并直接返回，根本走不到 backup 分支。显式启用主备服务商，
+        不依赖本机 .env 是否配置了可用的 AI key（无 key 环境曾靠 primary
+        恰好失败而侥幸通过）。
         """
+        from src.core.config import settings as app_settings
+
+        monkeypatch.setattr(app_settings, "ai_spam_enabled", True)
+        monkeypatch.setattr(app_settings, "ai_spam_api_key", "test-api-key")
+        monkeypatch.setattr(app_settings, "ai_spam_backup_enabled", True)
+        monkeypatch.setattr(app_settings, "ai_spam_backup_api_key", "test-api-key")
+
         detector = HybridAIDetector(circuit_breaker_threshold=3, circuit_breaker_cooldown_minutes=5)
 
         with (

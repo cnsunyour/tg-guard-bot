@@ -77,6 +77,10 @@ def test_config_default_values(monkeypatch):
     monkeypatch.setenv("DB_PASSWORD", "test_password")
     monkeypatch.setenv("REDIS_PASSWORD", "redis_password")
     monkeypatch.setenv("MODEL_SIGNATURE_KEY", "a" * 64)
+    # 断言涉及的部署值显式注入（历史上隐式依赖本地 .env，无 .env 的 CI 环境会挂）
+    monkeypatch.setenv("DB_HOST", "postgres")
+    monkeypatch.setenv("REDIS_HOST", "redis")
+    monkeypatch.setenv("VERIFICATION_TIMEOUT", "60")
 
     from src.core.config import Settings
 
