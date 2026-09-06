@@ -6,20 +6,36 @@ on:
   pull_request:
     branches: [ main, dev ]
   schedule:
-    # 每周一凌晨 2 点运行
-    - cron: '0 2 * * 1'
+    # 每周一 02:10 UTC（北京时间周一上午 10:10）运行
+    - cron: '10 2 * * 1'
+  workflow_dispatch:
+
+# 最小权限默认值；security-scan job 因需上传 SARIF 覆盖追加 security-events: write
+permissions:
+  contents: read
+
+# 同一分支的新推送取消仍在跑的旧扫描
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   security-scan:
     name: 安全扫描
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v4
+      # v7.0.1
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
     - name: 设置 Python 3.12
-      uses: actions/setup-python@v5
+      # v7.0.0
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
         cache: 'pip'
@@ -29,100 +45,129 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
-    # Bandit - Python 代码安全扫描
+    # Bandit - Python 代码安全扫描（阻断；-c 使 pyproject 的 [tool.bandit] skips 生效）
     - name: 运行 Bandit 安全扫描
       run: |
-        bandit -r src/ -f json -o bandit-report.json || true
-        bandit -r src/ -f txt
-      continue-on-error: true
+        set -o pipefail
+        bandit -c pyproject.toml -r src 2>&1 | tee bandit-report.txt
 
-    # Safety - 依赖漏洞检查
+    # Safety - 依赖漏洞检查（非阻断：依赖阻断职责由 dependency-review job 承担）
     - name: 运行 Safety 依赖检查
       run: |
-        set +e
-        safety scan --output json > safety-report.json
-        rc1=$?
-        safety scan
-        rc2=$?
-        exit $((rc1 > rc2 ? rc1 : rc2))
+        set -o pipefail
+        safety scan 2>&1 | tee safety-report.txt
       continue-on-error: true
 
-    # pip-audit - Python 官方依赖漏洞扫描
+    # pip-audit - Python 官方依赖漏洞扫描（非阻断，同上）
     - name: 运行 pip-audit 依赖扫描
       run: |
-        set +e
-        pip-audit --format json --output pip-audit-report.json
-        rc1=$?
-        pip-audit --desc
-        rc2=$?
-        exit $((rc1 > rc2 ? rc1 : rc2))
+        set -o pipefail
+        pip-audit --desc 2>&1 | tee pip-audit-report.txt
       continue-on-error: true
 
-    # Semgrep - 静态代码分析
+    # Semgrep - 静态代码分析（阻断；semgrep-action@v1 已弃用归档，改为 CLI 直跑）
+    - name: 安装 Semgrep
+      run: python -m pip install semgrep==1.176.1
+
     - name: 运行 Semgrep 扫描
-      uses: semgrep/semgrep-action@v1
-      with:
-        config: >-
-          p/python
-          p/security-audit
-          p/owasp-top-ten
-      continue-on-error: true
+      run: |
+        semgrep scan \
+          --config p/python \
+          --config p/security-audit \
+          --config p/owasp-top-ten \
+          --error \
+          --metrics=off \
+          --sarif \
+          --output semgrep-results.sarif
 
     # Trivy - 容器镜像扫描
+    # 策略：HIGH 不阻断——python:3.13-slim + ffmpeg 媒体链的 debian 基础包
+    # 常年 ~150+ HIGH（有修复版但需重建基础镜像），与项目代码无关；
+    # 两个扫描均 ignore-unfixed（无修复版漏洞挡 CI 只会永久红，等上游即可）：
+    # - SARIF 报告（有修复版的 HIGH/CRITICAL）上传 Security tab 保持可见
+    # - 门禁仅阻断「有修复版的 CRITICAL」——可行动且严重
+    - name: 设置 Docker Buildx
+      # v4.3.0
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+
     - name: 构建 Docker 镜像
-      run: |
-        docker build -t tg-guard-bot:test .
-
-    - name: 运行 Trivy 容器扫描
-      uses: aquasecurity/trivy-action@master
+      # v7.3.0
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
       with:
-        image-ref: 'tg-guard-bot:test'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-      continue-on-error: true
+        context: .
+        tags: tg-guard-bot:test
+        load: true
+        cache-from: type=gha,ignore-error=true
+        cache-to: type=gha,mode=max,ignore-error=true
 
+    - name: Trivy 扫描（SARIF 报告）
+      # v0.36.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      with:
+        image-ref: tg-guard-bot:test
+        format: sarif
+        output: trivy-results.sarif
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+
+    - name: Trivy 严重漏洞门禁（有修复版的 CRITICAL 阻断）
+      # v0.36.0（同上一扫描，DB 已就绪，秒级完成）
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      with:
+        image-ref: tg-guard-bot:test
+        format: table
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: 1
+
+    # continue-on-error：fork/Dependabot PR 的 GITHUB_TOKEN 强制只读，上传会失败，
+    # 但上传属锦上添花，不应反噬扫描结论
     - name: 上传 Trivy 结果到 GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
+      # v4.37.9
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938
+      if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
       with:
-        sarif_file: 'trivy-results.sarif'
+        sarif_file: trivy-results.sarif
       continue-on-error: true
 
-    # 上传报告为 artifacts
+    - name: 上传 Semgrep 结果到 GitHub Security
+      # v4.37.9
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938
+      if: ${{ always() && hashFiles('semgrep-results.sarif') != '' }}
+      with:
+        sarif_file: semgrep-results.sarif
+      continue-on-error: true
+
+    # 上传报告为 artifacts（供人工审查，缺失文件仅警告）
     - name: 上传安全扫描报告
-      uses: actions/upload-artifact@v4
+      # v7.0.1
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
         name: security-reports
         path: |
-          bandit-report.json
-          safety-report.json
-          pip-audit-report.json
+          bandit-report.txt
+          safety-report.txt
+          pip-audit-report.txt
+          semgrep-results.sarif
           trivy-results.sarif
         retention-days: 30
-
-    # 代码质量检查
-    - name: 运行 Ruff Linter
-      run: |
-        ruff check src/ --output-format=github
-      continue-on-error: true
-
-    - name: 运行 MyPy 类型检查
-      run: |
-        mypy src/ --ignore-missing-imports
-      continue-on-error: true
+        if-no-files-found: warn
 
   dependency-review:
     name: 依赖审查
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event_name == 'pull_request'
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v4
+      # v7.0.1
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
     - name: 依赖审查
-      uses: actions/dependency-review-action@v4
+      # v5.0.0
+      uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
       with:
         fail-on-severity: moderate
         deny-licenses: GPL-3.0, AGPL-3.0
@@ -130,14 +175,19 @@ jobs:
   secret-scan:
     name: 密钥扫描
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v4
+      # v7.0.1
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         fetch-depth: 0
 
     - name: GitLeaks 密钥扫描
-      uses: gitleaks/gitleaks-action@v2
+      # v3.0.0（v2 基于 Node 20，2026-09-16 起从托管 runner 移除）
+      uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 关闭 PR 评论（可省 pull-requests: write 权限，也规避 fork PR 只读 token 失败）
+        GITLEAKS_ENABLE_COMMENTS: false

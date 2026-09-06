@@ -1,0 +1,69 @@
+name: 质量检查 (CI)
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一分支的新推送取消仍在跑的旧检查
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: 质量门
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # 真实 Redis 集成测试：tests/conftest.py 探测 localhost:6379 后直接复用
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 检出代码
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: 设置 Python 3.12
+        # v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # 以下检查与 Makefile 的 lint/format-check/test 行为对齐；
+      # ruff/格式/测试阻断，mypy 与本地一致保持非阻断观察
+      - name: 运行 Ruff
+        run: ruff check src tests --output-format=github
+
+      - name: 检查 isort
+        run: isort --check-only src tests
+
+      - name: 检查 Black
+        run: black --check src tests
+
+      - name: 运行 MyPy
+        run: mypy src
+        continue-on-error: true
+
+      - name: 运行测试
+        run: pytest

@@ -89,15 +89,13 @@ class CASService:
         if not lock_acquired and not lock_error:
             # 有其他协程在查，稍等后读缓存
             await asyncio.sleep(0.5)
-            try:
+            with contextlib.suppress(Exception):
                 cached = await redis.get(cache_key)
                 if cached is not None:
                     data = json.loads(cached)
                     result = self._parse_response(user_id, data)
                     result.cached = True
                     return result
-            except Exception:
-                pass
 
             return CASCheckResult(is_banned=False, user_id=user_id, error="concurrent")
 
