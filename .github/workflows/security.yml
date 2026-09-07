@@ -106,7 +106,7 @@ jobs:
         ignore-unfixed: true
 
     - name: Trivy 严重漏洞门禁（有修复版的 CRITICAL 阻断）
-      （同上一扫描，DB 已就绪，秒级完成）
+      # 同上一扫描，DB 已就绪，秒级完成
       uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: tg-guard-bot:test
