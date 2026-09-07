@@ -30,12 +30,10 @@ jobs:
 
     steps:
     - name: 检出代码
-      # v7.0.1
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      uses: actions/checkout@v7
 
     - name: 设置 Python 3.12
-      # v7.0.0
-      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      uses: actions/setup-python@v7
       with:
         python-version: '3.12'
         cache: 'pip'
@@ -87,12 +85,10 @@ jobs:
     # - SARIF 报告（有修复版的 HIGH/CRITICAL）上传 Security tab 保持可见
     # - 门禁仅阻断「有修复版的 CRITICAL」——可行动且严重
     - name: 设置 Docker Buildx
-      # v4.3.0
-      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      uses: docker/setup-buildx-action@v4
 
     - name: 构建 Docker 镜像
-      # v7.3.0
-      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+      uses: docker/build-push-action@v7
       with:
         context: .
         tags: tg-guard-bot:test
@@ -101,8 +97,7 @@ jobs:
         cache-to: type=gha,mode=max,ignore-error=true
 
     - name: Trivy 扫描（SARIF 报告）
-      # v0.36.0
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: tg-guard-bot:test
         format: sarif
@@ -111,8 +106,8 @@ jobs:
         ignore-unfixed: true
 
     - name: Trivy 严重漏洞门禁（有修复版的 CRITICAL 阻断）
-      # v0.36.0（同上一扫描，DB 已就绪，秒级完成）
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      （同上一扫描，DB 已就绪，秒级完成）
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: tg-guard-bot:test
         format: table
@@ -123,16 +118,14 @@ jobs:
     # continue-on-error：fork/Dependabot PR 的 GITHUB_TOKEN 强制只读，上传会失败，
     # 但上传属锦上添花，不应反噬扫描结论
     - name: 上传 Trivy 结果到 GitHub Security
-      # v4.37.9
-      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938
+      uses: github/codeql-action/upload-sarif@v4
       if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
       with:
         sarif_file: trivy-results.sarif
       continue-on-error: true
 
     - name: 上传 Semgrep 结果到 GitHub Security
-      # v4.37.9
-      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938
+      uses: github/codeql-action/upload-sarif@v4
       if: ${{ always() && hashFiles('semgrep-results.sarif') != '' }}
       with:
         sarif_file: semgrep-results.sarif
@@ -140,8 +133,7 @@ jobs:
 
     # 上传报告为 artifacts（供人工审查，缺失文件仅警告）
     - name: 上传安全扫描报告
-      # v7.0.1
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: security-reports
@@ -162,12 +154,10 @@ jobs:
 
     steps:
     - name: 检出代码
-      # v7.0.1
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      uses: actions/checkout@v7
 
     - name: 依赖审查
-      # v5.0.0
-      uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+      uses: actions/dependency-review-action@v5.0.0
       with:
         fail-on-severity: moderate
         deny-licenses: GPL-3.0, AGPL-3.0
@@ -179,14 +169,13 @@ jobs:
 
     steps:
     - name: 检出代码
-      # v7.0.1
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
     - name: GitLeaks 密钥扫描
-      # v3.0.0（v2 基于 Node 20，2026-09-16 起从托管 runner 移除）
-      uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
+      # v3（v2 基于 Node 20，2026-09-16 起从托管 runner 移除）
+      uses: gitleaks/gitleaks-action@v3
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # 关闭 PR 评论（可省 pull-requests: write 权限，也规避 fork PR 只读 token 失败）
