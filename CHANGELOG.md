@@ -15,7 +15,7 @@
 - **阈值判定**：单向票数达 `SPAM_VOTE_THRESHOLD`（默认 5，会话创建时快照）自动处理——确认垃圾：永久封禁 + 删原消息 + 正样本 + 审计（`spam_vote_ban`）+ 同消息 pending 举报批量置 approved；确认误报：保留原消息 + 负样本 + 举报置 rejected（`spam_vote_false_positive`），处置语义与管理员确认链路完全一致
 - **并发安全**：单 Redis HASH 会话（`_meta`/票数/计数/提示定位同键同 TTL，固定 1h 窗口投票不续期，杜绝多键过期错位与过期键复活）；`vote_id` 身份绑定防旧按钮向重建会话投票；投票终局 / review 三按钮 / 举报处理共用 `review_lock`（升级为同消息处置互斥）；Lua get-match-del 原子消费全局至多一次（at-most-once，宁可漏罚不可双罚）；管理员全部终局路径（review 三分支、举报三分支、/spam 直达 ban、/notspam 训练）无条件关闭投票
 - **投票资格**：管理员不参与投票（同样操作对管理员已是直达处理，toast 引导）；被举报者本人禁止；匿名管理员（GroupAnonymousBot）视为管理员；群级开关 `spam_vote_enabled`（/groupset 子菜单，关闭 = 冻结在途投票，1h 自然消亡）
-- **/unspam 双语义**：自管理员负样本训练命令拆分——管理员 = 原训练语义不变（/notspam /nospam 别名保留），普通成员 = 投误报票，与 /spam 双语义同构；unspam 加入群成员命令菜单
+- **/notspam、/nospam、/unspam 三词统一双语义**：三命令行为完全一致（沿用既有别名规则），按使用者身份分流——管理员 = 负样本训练（预防性训练/误报修正，语义不变），普通成员 = 对待确认投票会话投「误报 -1」，与 /spam（/report）的双语义同构；三个命令词均加入群成员命令菜单
 - **数据库迁移** `428bc0004879`：groups 表新增 `spam_vote_enabled`（boolean 默认 true）
 
 ### 代码质量

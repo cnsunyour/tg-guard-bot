@@ -51,8 +51,8 @@ DEFAULT_COMMANDS = _specs("start", "help", "lang")
 # 私聊命令（普通用户 + 超级管理员）
 PRIVATE_COMMANDS = _specs("start", "help", "lang", "health", "stats", "whitelist")
 
-# 群组普通成员命令（仅基础功能）
-GROUP_MEMBER_COMMANDS = _specs("help", "spam", "report", "unspam")
+# 群组普通成员命令（仅基础功能；notspam/nospam/unspam 三词一致：成员投票误报）
+GROUP_MEMBER_COMMANDS = _specs("help", "spam", "report", "notspam", "nospam", "unspam")
 
 # 群组管理员命令（完整管理功能；lang 供管理员切换群语言）
 GROUP_ADMIN_COMMANDS = _specs(

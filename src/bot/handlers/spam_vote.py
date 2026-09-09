@@ -387,7 +387,7 @@ async def handle_vote_command(
     分开维护文案；达阈值时复用 ``finalize_vote_if_ready`` 保证与按钮路径同一
     互斥语义。
     """
-    assert message.from_user  # 调用方（cmd_spam / cmd_unspam）已保证
+    assert message.from_user  # 调用方（cmd_spam / cmd_notspam）已保证
     chat_id = message.chat.id
 
     session = await get_vote_session(chat_id, target_message_id)

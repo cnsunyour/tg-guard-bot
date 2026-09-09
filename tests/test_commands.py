@@ -59,8 +59,15 @@ def test_command_groups_contain_expected_commands() -> None:
     assert "lang" in [s.name for s in PRIVATE_COMMANDS]
     assert "reject" in [s.name for s in GROUP_ADMIN_COMMANDS]  # codex 发现的遗漏命令
     assert "lang" in [s.name for s in GROUP_ADMIN_COMMANDS]  # 管理员可切换群语言
-    # 群成员仅基础命令（unspam 双语义：成员投票误报）
-    assert [s.name for s in GROUP_MEMBER_COMMANDS] == ["help", "spam", "report", "unspam"]
+    # 群成员仅基础命令（notspam/nospam/unspam 三词一致：成员投票误报）
+    assert [s.name for s in GROUP_MEMBER_COMMANDS] == [
+        "help",
+        "spam",
+        "report",
+        "notspam",
+        "nospam",
+        "unspam",
+    ]
 
 
 # ===== build_commands 渲染 =====

@@ -1697,21 +1697,13 @@ async def _process_notspam_training(message: Message, bot: Bot, localizer: Bound
             await auto_delete_message(reply)
 
 
-@router.message(Command("notspam", "nospam"))
+@router.message(Command("notspam", "nospam", "unspam"))
 async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """标记为非垃圾消息（管理员负样本训练）。
+    """标记非垃圾消息（/notspam、/nospam、/unspam 三者完全一致，双语义）。
 
-    别名：/nospam。/unspam 已拆分为双语义命令（见 ``cmd_unspam``）。
-    """
-    await _process_notspam_training(message, bot, localizer)
-
-
-@router.message(Command("unspam"))
-async def cmd_unspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """双语义：管理员负样本训练 / 普通成员对投票会话投「误报 -1」。
-
-    与 /spam 的双语义模式一致——同样的指令对管理员是直达处理、对普通成员
-    是集体投票动作，成员的直达语义不越权。
+    与 /spam（/report）的双语义模式同构——三个别名词行为完全相同：
+    - 管理员：负样本训练（预防性训练 / 误报修正，见 ``_process_notspam_training``）；
+    - 普通成员：对待确认投票会话投「误报 -1」（集体决策）。
     """
     if not message.from_user:
         return
@@ -1721,7 +1713,7 @@ async def cmd_unspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> N
         await message.answer(localizer.t("common.error.group_only"))
         return
 
-    # 管理员：负样本训练（与 /notspam 完全一致）
+    # 管理员：负样本训练（含回复消息与 message_id 两种场景）
     if await check_admin_permission_strict_message(message, bot):
         await _process_notspam_training(message, bot, localizer)
         return
