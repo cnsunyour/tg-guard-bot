@@ -1632,67 +1632,69 @@ async def _process_notspam_training(message: Message, bot: Bot, localizer: Bound
         usage_type = localizer.t("moderation.notspam.mode.false_positive.label")
 
     # ==================== 通用处理：添加到训练库 ====================
-    try:
-        # ✅ 修复 bug：先查找并删除之前的正样本记录（如果存在）
-        # 当消息被自动检测为垃圾时，已经调用 add_feedback(is_spam=True) 标记为正样本
-        # 现在管理员标记为非垃圾，需要删除之前的正样本，避免数据冲突
-        existing_sample = await SpamRepository.find_sample_by_text(message_text, is_spam=True)
+    # 与投票终局同消息互斥（复用举报处置守卫：同锁 + 获锁处置后关闭投票）：
+    # 管理员已终局表态非垃圾，训练期间成员投票达阈不得并发执行相悖的处罚
+    async with _report_decision_guard(message.chat.id, target_message_id) as guarded:
+        if not guarded:
+            reply = await message.answer(localizer.t("moderation.report.process.busy.message"))
+            await auto_delete_message(reply)
+            return
 
-        if existing_sample:
-            # 删除之前的正样本记录
-            deleted = await SpamRepository.delete_sample(existing_sample.id)
-            if deleted:
-                logger.info(
-                    f"notspam 命令：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
-                    f"[文本长度:{len(message_text)}] [{usage_type}]"
-                )
-
-        # 添加负样本
-        await SpamRepository.add_sample(
-            text=message_text,
-            is_spam=False,  # 标记为非垃圾
-            confidence=1.0,  # 管理员标注，置信度为1.0
-            labeled_by=message.from_user.id,
-        )
-        logger.info(
-            f"非垃圾样本已添加到训练库 [{usage_type}] "
-            f"[标注者:{message.from_user.id}] "
-            f"[文本长度:{len(message_text)}] [备注:{note}]"
-        )
-
-        # 检查是否需要自动训练
         try:
-            from src.services.spam_detector import get_detector
+            # ✅ 修复 bug：先查找并删除之前的正样本记录（如果存在）
+            # 当消息被自动检测为垃圾时，已经调用 add_feedback(is_spam=True) 标记为正样本
+            # 现在管理员标记为非垃圾，需要删除之前的正样本，避免数据冲突
+            existing_sample = await SpamRepository.find_sample_by_text(message_text, is_spam=True)
 
-            detector = get_detector()
-            train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
-            if train_result is not None:
-                logger.info(f"样本添加后触发自动训练 [结果:{train_result.code.value}]")
-        except Exception as e:
-            logger.error(f"检查自动训练失败: {e}")
+            if existing_sample:
+                # 删除之前的正样本记录
+                deleted = await SpamRepository.delete_sample(existing_sample.id)
+                if deleted:
+                    logger.info(
+                        f"notspam 命令：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
+                        f"[文本长度:{len(message_text)}] [{usage_type}]"
+                    )
 
-        note_line = (
-            localizer.t("moderation.notspam.note.line", note=escape_html(note)) if note else ""
-        )
-        reply = await message.answer(
-            localizer.t(
-                "moderation.notspam.success.message",
-                usage_type=usage_type,
-                note_line=note_line,
+            # 添加负样本
+            await SpamRepository.add_sample(
+                text=message_text,
+                is_spam=False,  # 标记为非垃圾
+                confidence=1.0,  # 管理员标注，置信度为1.0
+                labeled_by=message.from_user.id,
             )
-        )
-        await auto_delete_message(reply)
+            logger.info(
+                f"非垃圾样本已添加到训练库 [{usage_type}] "
+                f"[标注者:{message.from_user.id}] "
+                f"[文本长度:{len(message_text)}] [备注:{note}]"
+            )
 
-    except Exception as e:
-        logger.error(f"添加非垃圾样本失败: {e}")
-        reply = await message.answer(localizer.t("moderation.notspam.failed.message"))
-        await auto_delete_message(reply)
-    finally:
-        # 管理员已把消息标为非垃圾（终局表态，无论训练成败）：关闭针对该消息的
-        # 集体投票——否则训练失败后投票继续 +阈会执行与管理员判断相悖的处罚
-        if target_message_id is not None:
-            with contextlib.suppress(Exception):
-                await discard_vote_session(message.chat.id, target_message_id)
+            # 检查是否需要自动训练
+            try:
+                from src.services.spam_detector import get_detector
+
+                detector = get_detector()
+                train_result = await detector.check_and_auto_train(admin_ids=settings.admin_ids)
+                if train_result is not None:
+                    logger.info(f"样本添加后触发自动训练 [结果:{train_result.code.value}]")
+            except Exception as e:
+                logger.error(f"检查自动训练失败: {e}")
+
+            note_line = (
+                localizer.t("moderation.notspam.note.line", note=escape_html(note)) if note else ""
+            )
+            reply = await message.answer(
+                localizer.t(
+                    "moderation.notspam.success.message",
+                    usage_type=usage_type,
+                    note_line=note_line,
+                )
+            )
+            await auto_delete_message(reply)
+
+        except Exception as e:
+            logger.error(f"添加非垃圾样本失败: {e}")
+            reply = await message.answer(localizer.t("moderation.notspam.failed.message"))
+            await auto_delete_message(reply)
 
 
 @router.message(Command("notspam", "nospam"))
