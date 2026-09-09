@@ -52,7 +52,7 @@ DEFAULT_COMMANDS = _specs("start", "help", "lang")
 PRIVATE_COMMANDS = _specs("start", "help", "lang", "health", "stats", "whitelist")
 
 # 群组普通成员命令（仅基础功能）
-GROUP_MEMBER_COMMANDS = _specs("help", "spam", "report")
+GROUP_MEMBER_COMMANDS = _specs("help", "spam", "report", "unspam")
 
 # 群组管理员命令（完整管理功能；lang 供管理员切换群语言）
 GROUP_ADMIN_COMMANDS = _specs(

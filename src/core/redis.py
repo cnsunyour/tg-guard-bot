@@ -126,6 +126,17 @@ class RedisKeys:
         return f"spam_review_lock:{chat_id}:{orig_msg_id}"
 
     @staticmethod
+    def spam_vote(chat_id: int, orig_msg_id: int) -> str:
+        """群成员集体投票会话键名（单 HASH，见 src/services/spam_vote.py）
+
+        字段布局：``_meta``（SpamVoteSession JSON）、``u<user_id>``（"1"/"-1" 一人一票）、
+        ``_up``/``_down``（分向计数，Lua HINCRBY 维护）、``_prompt_id``/``_prompt_base``
+        （提示消息定位与进度重建，发送后补写）。TTL 与 spam_review 提示一致，固定窗口
+        不随投票续期。
+        """
+        return f"spam_vote:{chat_id}:{orig_msg_id}"
+
+    @staticmethod
     def verification_hint(chat_id: int, flow: str) -> str:
         """验证引导消息记录键名（join / join_request 各自独立状态）。
 

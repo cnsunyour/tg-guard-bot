@@ -1,19 +1,24 @@
 """群管理命令处理器"""
 
 import contextlib
+from collections.abc import AsyncIterator
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     InaccessibleMessage,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
     ReplyParameters,
 )
 from loguru import logger
 
+from src.bot.handlers.antispam_render import (
+    build_report_keyboard,
+    build_vote_progress,
+    build_vote_row,
+)
+from src.bot.handlers.spam_vote import handle_vote_command
 from src.core.config import settings
 from src.core.i18n import BoundLocalizer
 from src.core.redis import RedisKeys, get_redis
@@ -29,12 +34,45 @@ from src.core.utils import (
     parse_time_to_seconds,
     utcnow_naive,
 )
+from src.repositories.group_repo import GroupRepository
 from src.repositories.report_repo import ReportRepository
 from src.repositories.spam_repo import SpamRepository
 from src.repositories.user_repo import UserRepository
 from src.services.moderation import ModerationErrorCode, ModerationService
+from src.services.spam_review import review_lock
+from src.services.spam_vote import (
+    SpamVoteSession,
+    SpamVoteSource,
+    cast_vote,
+    create_vote_session,
+    discard_vote_session,
+    get_vote_session,
+    record_vote_prompt,
+)
 
 router = Router(name="moderation")
+
+
+@contextlib.asynccontextmanager
+async def _report_decision_guard(chat_id: int, message_id: int | None) -> AsyncIterator[bool]:
+    """举报处置与集体投票终局的同消息互斥守卫。
+
+    与投票终局（``finalize_vote_if_ready``）、review callback 共用 ``review_lock``
+    （语义：同一条原消息的处置互斥），锁内重读举报状态即可看到投票终局刚推进的
+    终态；退出时无条件关闭该消息的成员投票——管理员对举报做出终局表态（含
+    ignore）即终止投票，防旧按钮继续计票触发二次处罚。``message_id`` 缺失的
+    历史举报无投票会话，恒 yield True（无锁，维持原行为）。
+    """
+    if message_id is None:
+        yield True
+        return
+
+    async with review_lock(chat_id, message_id) as acquired:
+        try:
+            yield acquired
+        finally:
+            with contextlib.suppress(Exception):
+                await discard_vote_session(chat_id, message_id)
 
 
 def _render_moderation_error(
@@ -1224,6 +1262,10 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             revoke_messages=delete_all,
             allow_left=True,
         )
+        # 管理员直达 /spam 即终局表态：无论封禁成败（后续仍删消息+入样本），
+        # 关闭该消息的成员投票，防旧按钮继续计票触发二次处罚
+        with contextlib.suppress(Exception):
+            await discard_vote_session(message.chat.id, message.reply_to_message.message_id)
 
         ban_error_text: str | None = None
         if not result.success:
@@ -1305,6 +1347,21 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
         reply = await message.answer(response_text)
         await auto_delete_message(reply)
     else:
+        # 普通用户模式：已有活跃投票会话时 /spam 即投「垃圾 +1」（成员集体决策），
+        # 不重复创建举报记录、不重发提示；无会话才走下方「落库 + 建会话」首报路径
+        existing_session = await get_vote_session(
+            message.chat.id, message.reply_to_message.message_id
+        )
+        if existing_session is not None:
+            await handle_vote_command(
+                bot, message, localizer, message.reply_to_message.message_id, "up"
+            )
+            return
+
+        # 首报即第一票：举报者本人投「垃圾 +1」（举报者==offender 时跳过——
+        # cmd_spam 顶部守卫已排除频道消息，但理论上仍可能是自己举报自己的消息）
+        vote_session: SpamVoteSession | None = None
+
         # 普通用户模式：创建举报记录
         try:
             # 检查举报频率限制（防止滥用）
@@ -1328,6 +1385,31 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 message_text=spam_text,
                 reason=reason_value,
             )
+
+            # 群开关开启时创建集体投票会话（NX：已有会话——如检测先行——不覆盖，
+            # 提示不带投票行）
+            group_config = await GroupRepository.get(message.chat.id)
+            if group_config is None or group_config.spam_vote_enabled:
+                vote_session = await create_vote_session(
+                    SpamVoteSession(
+                        source=SpamVoteSource.report,
+                        offender_user_id=target_user_id,
+                        report_id=report.id,
+                        threshold=settings.spam_vote_threshold,
+                        sample_text=spam_text,
+                    ),
+                    message.chat.id,
+                    message.reply_to_message.message_id,
+                    ttl=settings.spam_review_prompt_auto_delete_seconds,
+                )
+                if vote_session is not None and message.from_user.id != target_user_id:
+                    await cast_vote(
+                        message.chat.id,
+                        message.reply_to_message.message_id,
+                        message.from_user.id,
+                        "up",
+                        expected_vote_id=vote_session.vote_id,
+                    )
 
             # 统计待处理举报数量
             pending_count = await ReportRepository.count_pending_reports(message.chat.id)
@@ -1358,42 +1440,53 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 )
                 admin_mentions = ""
 
-            # 创建管理员操作按钮（approve/reject 同行，ignore 独立一行——移动端三按钮同行过窄）
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=localizer.t("moderation.spam.button.approve.label"),
-                            callback_data=f"report_approve:{report.id}",
-                        ),
-                        InlineKeyboardButton(
-                            text=localizer.t("moderation.spam.button.reject.label"),
-                            callback_data=f"report_reject:{report.id}",
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text=localizer.t("moderation.spam.button.ignore.label"),
-                            callback_data=f"report_ignore:{report.id}",
-                        ),
-                    ],
-                ]
+            # 管理员操作按钮（approve/reject 同行，ignore 独立一行——移动端三按钮同行过窄）；
+            # 有投票会话时投票行置顶
+            keyboard = (
+                build_report_keyboard(
+                    localizer,
+                    report.id,
+                    vote_row=build_vote_row(
+                        localizer,
+                        message.reply_to_message.message_id,
+                        vote_session.vote_id,
+                    ),
+                )
+                if vote_session is not None
+                else build_report_keyboard(localizer, report.id)
             )
 
             # 构建消息 header（包含管理员 mention）
             report_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
 
+            submitted_text = localizer.t(
+                "moderation.spam.report.submitted.message",
+                report_id=report.id,
+                reason=_render_report_reason(localizer, reason_value),
+                pending_count=pending_count,
+            )
+            # 投票进度行（首票已计入：举报者≠offender 时 1/阈值）
+            progress_line = (
+                "\n\n"
+                + build_vote_progress(
+                    localizer,
+                    up=(
+                        1
+                        if vote_session is not None and message.from_user.id != target_user_id
+                        else 0
+                    ),
+                    down=0,
+                    threshold=vote_session.threshold,
+                )
+                if vote_session is not None
+                else ""
+            )
+
             # 提示消息只回复被举报消息（管理员点开引用即可定位），正文不复制原文。
             # allow_sending_without_reply 保证被举报消息已删除时仍能发出降级普通提示。
             # 举报原因为举报者自由文本，可能含链接，关闭网页预览。
             reply = await message.answer(
-                report_header
-                + localizer.t(
-                    "moderation.spam.report.submitted.message",
-                    report_id=report.id,
-                    reason=_render_report_reason(localizer, reason_value),
-                    pending_count=pending_count,
-                ),
+                report_header + submitted_text + progress_line,
                 reply_parameters=ReplyParameters(
                     message_id=message.reply_to_message.message_id,
                     allow_sending_without_reply=True,
@@ -1401,6 +1494,15 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 reply_markup=keyboard,
                 disable_web_page_preview=True,
             )
+            if vote_session is not None:
+                # 提示定位存入会话：投票进度更新据此重建正文；会话已过期则拒绝写入
+                with contextlib.suppress(Exception):
+                    await record_vote_prompt(
+                        message.chat.id,
+                        message.reply_to_message.message_id,
+                        reply.message_id,
+                        report_header + submitted_text,
+                    )
             await auto_delete_message(
                 reply,
                 delay=settings.spam_review_prompt_auto_delete_seconds,
@@ -1412,11 +1514,8 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             )
 
 
-@router.message(Command("notspam", "nospam", "unspam"))
-async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
-    """标记为非垃圾消息（误报修正 + 预防性训练）
-
-    支持的命令：/notspam, /nospam, /unspam
+async def _process_notspam_training(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
+    """管理员负样本训练核心（/notspam、/nospam 与管理员 /unspam 共用）。
 
     支持两种使用方式：
     1. 回复消息：/notspam [备注] - 预防性训练，将正常消息标记为负样本
@@ -1444,6 +1543,9 @@ async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
 
     args = message.text.split(maxsplit=2)
 
+    # 投票会话的目标消息（两个场景统一：回复消息取其 ID，message_id 场景解析参数）
+    target_message_id: int | None = None
+
     # 场景判断：回复消息 vs 指定 message_id
     if message.reply_to_message:
         # ==================== 场景A：预防性训练 ====================
@@ -1452,6 +1554,8 @@ async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
             reply = await message.answer(localizer.t("moderation.notspam.channel_message.message"))
             await auto_delete_message(reply)
             return
+
+        target_message_id = message.reply_to_message.message_id
 
         # 解析备注（args[1] 是备注）
         note = args[1] if len(args) > 1 else ""
@@ -1560,10 +1664,54 @@ async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> 
         )
         await auto_delete_message(reply)
 
+        # 管理员已把消息标为非垃圾（终局表态）：关闭针对该消息的集体投票，
+        # 防旧按钮继续计票触发处罚
+        if target_message_id is not None:
+            with contextlib.suppress(Exception):
+                await discard_vote_session(message.chat.id, target_message_id)
+
     except Exception as e:
         logger.error(f"添加非垃圾样本失败: {e}")
         reply = await message.answer(localizer.t("moderation.notspam.failed.message"))
         await auto_delete_message(reply)
+
+
+@router.message(Command("notspam", "nospam"))
+async def cmd_notspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
+    """标记为非垃圾消息（管理员负样本训练）。
+
+    别名：/nospam。/unspam 已拆分为双语义命令（见 ``cmd_unspam``）。
+    """
+    await _process_notspam_training(message, bot, localizer)
+
+
+@router.message(Command("unspam"))
+async def cmd_unspam(message: Message, bot: Bot, localizer: BoundLocalizer) -> None:
+    """双语义：管理员负样本训练 / 普通成员对投票会话投「误报 -1」。
+
+    与 /spam 的双语义模式一致——同样的指令对管理员是直达处理、对普通成员
+    是集体投票动作，成员的直达语义不越权。
+    """
+    if not message.from_user:
+        return
+
+    # 检查是否在群组中
+    if message.chat.type == "private":
+        await message.answer(localizer.t("common.error.group_only"))
+        return
+
+    # 管理员：负样本训练（与 /notspam 完全一致）
+    if await check_admin_permission_strict_message(message, bot):
+        await _process_notspam_training(message, bot, localizer)
+        return
+
+    # 普通成员：投票路径（必须回复待确认消息）
+    if not message.reply_to_message:
+        reply = await message.answer(localizer.t("spam_vote.command.usage.message"))
+        await auto_delete_message(reply)
+        return
+
+    await handle_vote_command(bot, message, localizer, message.reply_to_message.message_id, "down")
 
 
 # ========== 举报处理辅助函数 ==========
@@ -1600,65 +1748,76 @@ async def _process_report_approval(
         if report.group_id != chat_id:
             return False, localizer.t("moderation.report.process.wrong_group.message")
 
-        # 检查状态
-        if report.status != "pending":
-            return False, localizer.t(
-                "moderation.report.process.already_processed.message",
-                status=_report_status_label(localizer, report.status),
+        # 与集体投票终局互斥（同消息处置锁）：锁内重读状态，投票达阈刚推进的
+        # 终态在此可见；退出时关闭成员投票
+        async with _report_decision_guard(chat_id, report.message_id) as guarded:
+            if not guarded:
+                return False, localizer.t("moderation.report.process.busy.message")
+
+            fresh = await ReportRepository.get_report_by_id(report_id)
+            if fresh is not None:
+                report = fresh
+
+            # 检查状态
+            if report.status != "pending":
+                return False, localizer.t(
+                    "moderation.report.process.already_processed.message",
+                    status=_report_status_label(localizer, report.status),
+                )
+
+            # 执行封禁
+            result = await ModerationService.ban_user(
+                bot=bot,
+                chat_id=chat_id,
+                user_id=report.reported_user_id,
+                operator_id=operator_id,
+                reason=f"举报#{report_id}: {report.reason}",
+                revoke_messages=False,
+                allow_left=True,
             )
 
-        # 执行封禁
-        result = await ModerationService.ban_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=report.reported_user_id,
-            operator_id=operator_id,
-            reason=f"举报#{report_id}: {report.reason}",
-            revoke_messages=False,
-            allow_left=True,
-        )
+            if not result.success:
+                assert result.code is not None
+                return False, localizer.t(
+                    "moderation.report.approval.ban_failed.message",
+                    error=escape_html(_render_moderation_error(localizer, result.code)),
+                )
 
-        if not result.success:
-            assert result.code is not None
-            return False, localizer.t(
-                "moderation.report.approval.ban_failed.message",
-                error=escape_html(_render_moderation_error(localizer, result.code)),
-            )
-
-        # 删除被举报的消息
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=report.message_id)
-            logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
-        except Exception as e:
-            logger.debug(f"删除被举报的消息失败: {e}")
-
-        # 添加到反垃圾训练库
-        if report.message_text:
+            # 删除被举报的消息
             try:
-                await SpamRepository.add_sample(
-                    text=report.message_text,
-                    is_spam=True,
-                    confidence=1.0,
-                    labeled_by=operator_id,
-                )
-                logger.info(
-                    f"举报#{report_id}的内容已添加到训练库 [文本长度:{len(report.message_text)}]"
-                )
+                await bot.delete_message(chat_id=chat_id, message_id=report.message_id)
+                logger.debug(f"已删除被举报的消息 [消息ID:{report.message_id}]")
             except Exception as e:
-                logger.error(f"添加训练样本失败: {e}")
+                logger.debug(f"删除被举报的消息失败: {e}")
 
-        # 更新举报状态
-        updated = await ReportRepository.update_report_status(
-            report_id=report_id,
-            status="approved",
-            handled_by=operator_id,
-        )
-        if not updated:
-            logger.warning(
-                f"更新举报状态失败 [举报:{report_id}] " f"[状态:approved] [操作者:{operator_id}]"
+            # 添加到反垃圾训练库
+            if report.message_text:
+                try:
+                    await SpamRepository.add_sample(
+                        text=report.message_text,
+                        is_spam=True,
+                        confidence=1.0,
+                        labeled_by=operator_id,
+                    )
+                    logger.info(
+                        f"举报#{report_id}的内容已添加到训练库 [文本长度:{len(report.message_text)}]"
+                    )
+                except Exception as e:
+                    logger.error(f"添加训练样本失败: {e}")
+
+            # 更新举报状态
+            updated = await ReportRepository.update_report_status(
+                report_id=report_id,
+                status="approved",
+                handled_by=operator_id,
             )
+            if not updated:
+                logger.warning(
+                    f"更新举报状态失败 [举报:{report_id}] "
+                    f"[状态:approved] [操作者:{operator_id}]"
+                )
 
-        return True, ""
+            return True, ""
 
     except Exception as e:
         logger.error(f"处理举报接受失败: {e}")
@@ -1689,25 +1848,35 @@ async def _process_report_rejection(
         if report.group_id != chat_id:
             return False, localizer.t("moderation.report.process.wrong_group.message")
 
-        # 检查状态
-        if report.status != "pending":
-            return False, localizer.t(
-                "moderation.report.process.already_processed.message",
-                status=_report_status_label(localizer, report.status),
-            )
+        # 与集体投票终局互斥（同消息处置锁），语义同 _process_report_approval
+        async with _report_decision_guard(chat_id, report.message_id) as guarded:
+            if not guarded:
+                return False, localizer.t("moderation.report.process.busy.message")
 
-        # 更新举报状态
-        updated = await ReportRepository.update_report_status(
-            report_id=report_id,
-            status="rejected",
-            handled_by=operator_id,
-        )
-        if not updated:
-            logger.warning(
-                f"更新举报状态失败 [举报:{report_id}] " f"[状态:rejected] [操作者:{operator_id}]"
-            )
+            fresh = await ReportRepository.get_report_by_id(report_id)
+            if fresh is not None:
+                report = fresh
 
-        return True, ""
+            # 检查状态
+            if report.status != "pending":
+                return False, localizer.t(
+                    "moderation.report.process.already_processed.message",
+                    status=_report_status_label(localizer, report.status),
+                )
+
+            # 更新举报状态
+            updated = await ReportRepository.update_report_status(
+                report_id=report_id,
+                status="rejected",
+                handled_by=operator_id,
+            )
+            if not updated:
+                logger.warning(
+                    f"更新举报状态失败 [举报:{report_id}] "
+                    f"[状态:rejected] [操作者:{operator_id}]"
+                )
+
+            return True, ""
 
     except Exception as e:
         logger.error(f"处理举报拒绝失败: {e}")
@@ -1733,23 +1902,32 @@ async def _process_report_ignore(
         if report.group_id != chat_id:
             return False, localizer.t("moderation.report.process.wrong_group.message")
 
-        if report.status != "pending":
-            return False, localizer.t(
-                "moderation.report.process.already_processed.message",
-                status=_report_status_label(localizer, report.status),
-            )
+        # 与集体投票终局互斥（同消息处置锁），语义同 _process_report_approval
+        async with _report_decision_guard(chat_id, report.message_id) as guarded:
+            if not guarded:
+                return False, localizer.t("moderation.report.process.busy.message")
 
-        updated = await ReportRepository.update_report_status(
-            report_id=report_id,
-            status="ignored",
-            handled_by=operator_id,
-        )
-        if not updated:
-            logger.warning(
-                f"更新举报状态失败 [举报:{report_id}] " f"[状态:ignored] [操作者:{operator_id}]"
-            )
+            fresh = await ReportRepository.get_report_by_id(report_id)
+            if fresh is not None:
+                report = fresh
 
-        return True, ""
+            if report.status != "pending":
+                return False, localizer.t(
+                    "moderation.report.process.already_processed.message",
+                    status=_report_status_label(localizer, report.status),
+                )
+
+            updated = await ReportRepository.update_report_status(
+                report_id=report_id,
+                status="ignored",
+                handled_by=operator_id,
+            )
+            if not updated:
+                logger.warning(
+                    f"更新举报状态失败 [举报:{report_id}] " f"[状态:ignored] [操作者:{operator_id}]"
+                )
+
+            return True, ""
 
     except Exception as e:
         logger.error(f"处理举报忽略失败: {e}")

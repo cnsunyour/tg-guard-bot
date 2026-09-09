@@ -74,6 +74,13 @@ class Settings(BaseSettings):
         "state 同步过期；管理员未处理则两者一起清理，不处罚、不入库。"
         "prompt 与 state TTL 必须一致，否则旧 state 会因 SET NX 阻止同一消息重建 review。",
     )
+    spam_vote_threshold: int = Field(
+        default=5,
+        ge=2,
+        le=50,
+        description="群成员集体投票判定阈值（分向绝对票数）：确认垃圾或误报的单向票数"
+        "达到该值即自动执行处置。会话创建时快照，运行期改配置只影响新会话。",
+    )
 
     # ========== 高级正则规则引擎配置 ==========
     regex_rules_enabled: bool = Field(default=True, description="是否启用高级正则规则引擎")

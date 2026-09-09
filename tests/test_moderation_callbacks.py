@@ -10,6 +10,7 @@
 - 举报提示只回复被举报消息，正文不复制原文（对齐 antispam review 提示）
 """
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -272,9 +273,15 @@ async def test_report_callback_preflight_failure_does_not_clean_prompt(
 @pytest.mark.unit
 async def test_process_report_ignore_marks_report_ignored() -> None:
     """忽略举报仅写 status=ignored，不触发封禁/训练。"""
+
+    @asynccontextmanager
+    async def fake_guard(chat_id: int, message_id: int | None):
+        yield True
+
     report = SimpleNamespace(
         group_id=-1001234567890,
         status="pending",
+        message_id=77,
     )
     get_report = AsyncMock(return_value=report)
     update_status = AsyncMock(return_value=True)
@@ -282,6 +289,7 @@ async def test_process_report_ignore_marks_report_ignored() -> None:
     with (
         patch.object(moderation.ReportRepository, "get_report_by_id", new=get_report),
         patch.object(moderation.ReportRepository, "update_report_status", new=update_status),
+        patch.object(moderation, "_report_decision_guard", new=fake_guard),
     ):
         success, error = await moderation._process_report_ignore(
             report_id=123,
@@ -354,6 +362,10 @@ async def test_cmd_spam_prompt_replies_original_without_copying_content() -> Non
             "count_pending_reports",
             new=AsyncMock(return_value=1),
         ),
+        # 集体投票服务隔离：无活跃会话 + 群开关查询 + 建会话返回 None（提示不带投票行）
+        patch.object(moderation, "get_vote_session", new=AsyncMock(return_value=None)),
+        patch.object(moderation.GroupRepository, "get", new=AsyncMock(return_value=None)),
+        patch.object(moderation, "create_vote_session", new=AsyncMock(return_value=None)),
         patch.object(
             moderation,
             "get_spam_handler_admins_mention",

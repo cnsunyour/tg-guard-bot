@@ -203,15 +203,21 @@ def build_review_keyboard(
     localizer: BoundLocalizer,
     orig_msg_id: int,
     review_id: str,
+    *,
+    vote_row: list[InlineKeyboardButton] | None = None,
 ) -> InlineKeyboardMarkup:
     """渲染确认模式的操作按钮（ban / false_positive 同行，ignore 单独一行）。
 
     忽略按钮单独成行，避免移动端三按钮同行过窄。callback_data 携带 ``review_id``，
     consumer 据此按快照身份消费，防止旧提示按钮在 state 被重建后误消费新快照
-    （codex 3b-2 review P2）。
+    （codex 3b-2 review P2）。``vote_row`` 提供时插在管理员按钮**之前**——
+    成员投票是主要使用路径，置顶更醒目。
     """
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows: list[list[InlineKeyboardButton]] = []
+    if vote_row:
+        rows.append(vote_row)
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text=localizer.t("antispam.review.ban.button"),
@@ -230,6 +236,86 @@ def build_review_keyboard(
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_vote_row(
+    localizer: BoundLocalizer,
+    orig_msg_id: int,
+    vote_id: str,
+) -> list[InlineKeyboardButton]:
+    """渲染成员集体投票按钮行（确认垃圾 +1 / 误报 -1，同行）。
+
+    callback_data 携带 ``vote_id`` 按会话身份消费，与 review 键盘的 review_id
+    绑定先例一致，防旧按钮向重建后的新会话投票。
+    """
+    return [
+        InlineKeyboardButton(
+            text=localizer.t("spam_vote.up.button"),
+            callback_data=f"spam_vote:up:{orig_msg_id}:{vote_id}",
+        ),
+        InlineKeyboardButton(
+            text=localizer.t("spam_vote.down.button"),
+            callback_data=f"spam_vote:down:{orig_msg_id}:{vote_id}",
+        ),
+    ]
+
+
+def build_report_keyboard(
+    localizer: BoundLocalizer,
+    report_id: int,
+    *,
+    vote_row: list[InlineKeyboardButton] | None = None,
+) -> InlineKeyboardMarkup:
+    """渲染举报提示的管理员按钮（approve / reject 同行，ignore 单独一行）。
+
+    抽自 ``moderation.cmd_spam`` 的内联键盘，供首条举报提示与投票进度重建共用；
+    ``vote_row`` 语义同 ``build_review_keyboard``。
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    if vote_row:
+        rows.append(vote_row)
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("moderation.spam.button.approve.label"),
+                    callback_data=f"report_approve:{report_id}",
+                ),
+                InlineKeyboardButton(
+                    text=localizer.t("moderation.spam.button.reject.label"),
+                    callback_data=f"report_reject:{report_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("moderation.spam.button.ignore.label"),
+                    callback_data=f"report_ignore:{report_id}",
+                ),
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_vote_progress(
+    localizer: BoundLocalizer,
+    up: int,
+    down: int,
+    threshold: int,
+) -> str:
+    """渲染投票进度行（追加到提示正文，进度更新时整体重建）。"""
+    return localizer.t("spam_vote.progress.message", up=up, down=down, threshold=threshold)
+
+
+def build_vote_spam_result(localizer: BoundLocalizer, up: int, threshold: int) -> str:
+    """渲染投票确认垃圾的结果段（追加到原提示并移除按钮）。"""
+    return localizer.t("spam_vote.spam.completed.message", count=up, threshold=threshold)
+
+
+def build_vote_ham_result(localizer: BoundLocalizer, down: int, threshold: int) -> str:
+    """渲染投票确认误报的结果段（追加到原提示并移除按钮，保留原消息）。"""
+    return localizer.t("spam_vote.ham.completed.message", count=down, threshold=threshold)
 
 
 def build_review_ban_result(

@@ -38,6 +38,12 @@ class Group(Base):
         server_default=text("true"),
         comment="是否启用管理员确认模式（检测到垃圾后等待管理员确认再处罚）",
     )
+    spam_vote_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        comment="是否启用群成员集体投票（待确认垃圾/被举报消息由成员投票判定）",
+    )
 
     # 反频道马甲配置
     anti_channel_enabled: Mapped[bool] = mapped_column(

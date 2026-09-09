@@ -34,6 +34,7 @@ from src.bot.handlers.antispam_render import (
     build_review_ignore_result,
     build_review_keyboard,
     build_review_prompt,
+    build_vote_row,
 )
 from src.core.cache import PermissionCache  # ✅ P1-10: 导入权限缓存
 from src.core.config import settings
@@ -65,6 +66,13 @@ from src.services.spam_review import (
     delete_review_state_if_match,
     get_review_state,
     review_lock,
+)
+from src.services.spam_vote import (
+    SpamVoteSession,
+    SpamVoteSource,
+    create_vote_session,
+    discard_vote_session,
+    record_vote_prompt,
 )
 from src.services.username_mapping import UsernameMappingService  # ✅ username 映射服务
 
@@ -550,17 +558,20 @@ async def _handle_spam_with_review(
     *,
     message_type: SpamMessageType,
     recognized_text: str | None = None,
+    group: Group | None = None,
 ) -> None:
-    """创建不可变复核快照并发送管理员审核提示。
+    """创建不可变复核快照并发送管理员审核提示（启用时附带成员集体投票）。
 
     流程：
     1. 构造 ``SpamReviewState``，``create_review_state`` 以 ``SET NX EX`` 写入；键已
        存在（同消息重复 update / 编辑再次命中）则直接返回，保留首快照、不重复发提示。
-    2. 按群 locale 渲染 prompt + 按钮，以 ``reply_parameters`` 回复被检测消息发送：
+    2. 群开关 ``spam_vote_enabled`` 开启时同步创建投票会话（同样 NX 语义：已有会话
+       ——如举报先行——则不覆盖，提示不带投票行，成员经举报提示投票）。
+    3. 按群 locale 渲染 prompt + 按钮，以 ``reply_parameters`` 回复被检测消息发送：
        原文由 Telegram 回复引用展示，不复制进提示正文；原消息已被删除时
        ``allow_sending_without_reply`` 降级为同 topic 普通消息，不阻断复核。
-    3. admin lookup / locale / 渲染 / 发送任一失败，则按 ``review_id`` CAS 删除刚写入
-       的 state，避免遗留 24h 无法触达的 review（codex 3b-3 review P2）。
+    4. admin lookup / locale / 渲染 / 发送任一失败，则按 ``review_id`` CAS 删除刚写入
+       的 state 与投票会话，避免遗留 24h 无法触达的 review（codex 3b-3 review P2）。
     """
     if not message.from_user:
         logger.warning("消息缺少发送者信息，跳过处理")
@@ -588,6 +599,21 @@ async def _handle_spam_with_review(
     if created is None:
         return  # 已有 review 快照，不覆盖、不重复发提示
 
+    vote_session: SpamVoteSession | None = None
+    if group is None or group.spam_vote_enabled:
+        vote_session = await create_vote_session(
+            SpamVoteSession(
+                source=SpamVoteSource.review,
+                offender_user_id=state.offender_user_id,
+                report_id=None,
+                threshold=settings.spam_vote_threshold,
+                sample_text=state.sample_text,
+            ),
+            message.chat.id,
+            message.message_id,
+            ttl=review_ttl,
+        )
+
     try:
         offender_mention = format_user_mention(message.from_user)
         admin_mentions = await get_spam_handler_admins_mention(bot, message.chat.id)
@@ -595,6 +621,11 @@ async def _handle_spam_with_review(
         localizer = get_translator().for_locale(group_locale)
         prompt = build_review_prompt(localizer, state, offender_mention)
         header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+        vote_row = (
+            build_vote_row(localizer, message.message_id, vote_session.vote_id)
+            if vote_session
+            else None
+        )
         # 回复被检测消息：管理员经回复引用查看原文。检测原因可能含可疑域名，
         # 关闭网页预览避免在群内渲染垃圾站点卡片（与 /report 提示一致）。
         prompt_message = await message.answer(
@@ -603,9 +634,20 @@ async def _handle_spam_with_review(
                 message_id=message.message_id,
                 allow_sending_without_reply=True,
             ),
-            reply_markup=build_review_keyboard(localizer, message.message_id, state.review_id),
+            reply_markup=build_review_keyboard(
+                localizer, message.message_id, state.review_id, vote_row=vote_row
+            ),
             disable_web_page_preview=True,
         )
+        if vote_session is not None:
+            # 提示定位存入会话（消息 ID + 基础文案）：投票进度更新据此重建正文；
+            # 会话已过期时拒绝写入（防复活）
+            await record_vote_prompt(
+                message.chat.id,
+                message.message_id,
+                prompt_message.message_id,
+                header + prompt,
+            )
         # prompt 与 state 共用 review_ttl：到期自动删 prompt，state 同步过期；
         # 管理员未处理则两者一起清理（不处罚、不入库）。
         # 已知限制（deliberate）：auto_delete_message 为进程内 asyncio task，bot 重启
@@ -616,6 +658,8 @@ async def _handle_spam_with_review(
     except Exception:
         # 准备或发送失败：清理刚写入的 state，避免遗留无法触达的 review
         await delete_review_state_if_match(message.chat.id, message.message_id, state.review_id)
+        if vote_session is not None:
+            await discard_vote_session(message.chat.id, message.message_id)
         raise
 
     logger.info(
@@ -735,6 +779,7 @@ async def _route_spam_detection(
             result,
             message_type=message_type,
             recognized_text=recognized_text,
+            group=group,
         )
     else:
         await _apply_immediate_punishment(
@@ -2660,6 +2705,10 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
             # 始终消费 state + 清理 prompt（成功追加结果、失败追加原因），杜绝残留
             with contextlib.suppress(Exception):
                 await consume_review_state(message.chat.id, orig_msg_id, review_id)
+            # 管理员已对消息终局表态（含 ignore）：无条件关闭成员投票，防止旧按钮
+            # 在管理员处置后继续计票触发二次处罚（同 orig_msg_id 至多一个会话）
+            with contextlib.suppress(Exception):
+                await discard_vote_session(message.chat.id, orig_msg_id)
             if completed_text is not None:
                 with contextlib.suppress(Exception):
                     # 与发送时一致关闭网页预览：编辑会按新正文重新生成预览，

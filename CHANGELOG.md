@@ -5,6 +5,25 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 新增功能
+
+#### 垃圾待确认消息的群成员集体投票 🗳
+- **背景**：检测命中（确认模式）或成员举报的消息此前只能等管理员处理，管理员不在线时举报积压、垃圾消息持续曝光
+- **投票入口（等价）**：待确认消息在管理员按钮之上新增投票行（投垃圾票 +1 / 投误报票 -1）；`/spam` 回复原消息 = +1、`/unspam` = -1；每人每条消息仅一票且方向固定（Lua `HEXISTS` 先行，投后不可改向），重复操作仅提示已投过
+- **阈值判定**：单向票数达 `SPAM_VOTE_THRESHOLD`（默认 5，会话创建时快照）自动处理——确认垃圾：永久封禁 + 删原消息 + 正样本 + 审计（`spam_vote_ban`）+ 同消息 pending 举报批量置 approved；确认误报：保留原消息 + 负样本 + 举报置 rejected（`spam_vote_false_positive`），处置语义与管理员确认链路完全一致
+- **并发安全**：单 Redis HASH 会话（`_meta`/票数/计数/提示定位同键同 TTL，固定 1h 窗口投票不续期，杜绝多键过期错位与过期键复活）；`vote_id` 身份绑定防旧按钮向重建会话投票；投票终局 / review 三按钮 / 举报处理共用 `review_lock`（升级为同消息处置互斥）；Lua get-match-del 原子消费全局至多一次（at-most-once，宁可漏罚不可双罚）；管理员全部终局路径（review 三分支、举报三分支、/spam 直达 ban、/notspam 训练）无条件关闭投票
+- **投票资格**：管理员不参与投票（同样操作对管理员已是直达处理，toast 引导）；被举报者本人禁止；匿名管理员（GroupAnonymousBot）视为管理员；群级开关 `spam_vote_enabled`（/groupset 子菜单，关闭 = 冻结在途投票，1h 自然消亡）
+- **/unspam 双语义**：自管理员负样本训练命令拆分——管理员 = 原训练语义不变（/notspam /nospam 别名保留），普通成员 = 投误报票，与 /spam 双语义同构；unspam 加入群成员命令菜单
+- **数据库迁移** `428bc0004879`：groups 表新增 `spam_vote_enabled`（boolean 默认 true）
+
+### 代码质量
+
+- 举报处理核心 `_process_report_approval/rejection/ignore` 进入同消息处置锁：命令（/approve /reject）与按钮两入口均在锁内重读举报状态，消除与投票终局的双罚窗口；`ReportRepository` 新增按消息批量条件更新（`WHERE status='pending'` 防并发覆盖）
+- 举报提示键盘抽取为 `antispam_render.build_report_keyboard`（首条举报与投票进度重建共用）；review 键盘支持可选投票行参数
+- 测试 +43：服务层 23（`_FakeRedis` 模拟 Lua 语义：一人一票方向固定、消费三态、防复活、TTL 不续期）+ 真实 Redis 集成 7（RESP 多值编码、并发投票串行化 1..10、并发消费单胜者、过期不复活）+ handler 13（资格校验/toast/终态处置/指令路径）
+
 ## [1.9.0] - 2026-09-02
 
 ### 新增功能

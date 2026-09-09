@@ -9,6 +9,7 @@
 - catalog 三语 parity(5 error + 1 report ban_failed)
 """
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -268,8 +269,21 @@ async def test_cmd_ban_renders_operation_failed(mocker) -> None:
 
 
 # ===== _process_report_approval 封禁失败 =====
+
+
+def _fake_report_decision_guard(mocker) -> None:
+    """隔离同消息处置锁（review_lock 依赖真实 Redis）。"""
+
+    @asynccontextmanager
+    async def fake_guard(chat_id: int, message_id: int | None):
+        yield True
+
+    mocker.patch.object(moderation_handler, "_report_decision_guard", new=fake_guard)
+
+
 async def test_report_approval_ban_failure_localizes_and_escapes_error(mocker) -> None:
     """ban 失败 → moderation.report.approval.ban_failed.message,error 注入 escape 后的 code 文案。"""
+    _fake_report_decision_guard(mocker)
     report = SimpleNamespace(
         group_id=CHAT_ID,
         status="pending",
@@ -329,6 +343,7 @@ async def test_report_approval_ban_failure_localizes_and_escapes_error(mocker) -
 
 async def test_report_approval_ban_failure_escapes_html_in_error(mocker) -> None:
     """moderation code 文案若含 HTML 字符(未来扩展),注入前 escape_html。"""
+    _fake_report_decision_guard(mocker)
     report = SimpleNamespace(
         group_id=CHAT_ID,
         status="pending",
