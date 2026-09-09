@@ -377,3 +377,57 @@ async def test_handle_vote_command_admin_redirected(mocker, localizer) -> None:
     await handler.handle_vote_command(MagicMock(), message, localizer, ORIG_MSG_ID, "up")
 
     message.answer.assert_awaited_once_with("spam_vote.command.admin_direct.message")
+
+
+async def test_finalize_aborts_when_consumed_session_rebuilt(mocker, localizer) -> None:
+    """消费身份不匹配（窗口边缘过期后被重建为新会话）放弃处置——防旧参数终局。
+
+    回归契约（codex review High）：consume 不匹配时不删除并返回当前新会话，
+    finalize 必须校验 vote_id 一致才继续，否则新会话残留可再次触发终局（双罚）。
+    """
+    _patch_lock(mocker)
+    _patch_group(mocker)
+    session = _session()
+    rebuilt = _session()  # vote_id 相同的工厂默认值——显式改为不同 ID
+    object.__setattr__(rebuilt, "vote_id", "fedcba9876543210")
+    mocker.patch.object(handler, "consume_vote_session", new=AsyncMock(return_value=rebuilt))
+    mocker.patch.object(handler, "get_vote_prompt", new=AsyncMock(return_value=None))
+    ban = mocker.patch.object(handler.ModerationService, "ban_user", new=AsyncMock())
+    bot = MagicMock()
+    bot.edit_message_text = AsyncMock()
+
+    finalized = await handler.finalize_vote_if_ready(
+        bot, CHAT_ID, ORIG_MSG_ID, session, VOTER_ID, "up", 5, 0
+    )
+
+    assert finalized is True
+    ban.assert_not_awaited()
+    bot.edit_message_text.assert_not_awaited()
+
+
+async def test_finalize_aborts_when_group_disabled_in_lock(mocker, localizer) -> None:
+    """锁内复查开关：资格校验后管理员关闭投票，达阈请求放弃终局（会话冻结不消费）。
+
+    回归契约（codex review Medium）：开关检查与 cast_vote 存在毫秒级窗口，
+    关闭后的在途达阈请求不得执行处罚。
+    """
+    _patch_lock(mocker)
+    session = _session()
+    # 直接调 finalize 模拟"资格校验已过、锁内复查时开关已关"的窗口翻转
+    group_off = SimpleNamespace(spam_vote_enabled=False)
+    mocker.patch.object(handler.GroupRepository, "get", new=AsyncMock(return_value=group_off))
+    mocker.patch.object(handler, "get_vote_prompt", new=AsyncMock(return_value=None))
+    consume = mocker.patch.object(
+        handler, "consume_vote_session", new=AsyncMock(return_value=session)
+    )
+    ban = mocker.patch.object(handler.ModerationService, "ban_user", new=AsyncMock())
+    bot = MagicMock()
+
+    finalized = await handler.finalize_vote_if_ready(
+        bot, CHAT_ID, ORIG_MSG_ID, session, VOTER_ID, "up", 5, 0
+    )
+
+    assert finalized is True
+    # 会话未被消费（保持冻结态）、处罚未执行
+    consume.assert_not_awaited()
+    ban.assert_not_awaited()

@@ -25,6 +25,7 @@ from src.services.spam_vote import (
     consume_vote_session,
     create_vote_session,
     discard_vote_session,
+    get_vote_prompt,
     record_vote_prompt,
 )
 
@@ -162,3 +163,21 @@ async def test_discard_and_consume_mismatch_semantics(redis_client) -> None:
 
     await discard_vote_session(CHAT_ID, ORIG_MSG_ID)
     assert await redis_client.exists(VOTE_KEY) == 0
+
+
+async def test_consume_removes_prompt_location_read_before(redis_client) -> None:
+    """consume 整键删除含提示定位——终局路径必须在消费**前**读取 _prompt 字段。
+
+    回归契约：finalize_vote_if_ready 曾在消费后才读 get_vote_prompt，导致
+    结果文案永远无法编辑进提示消息。
+    """
+    session = _session()
+    await create_vote_session(session, CHAT_ID, ORIG_MSG_ID, ttl=60)
+    await record_vote_prompt(CHAT_ID, ORIG_MSG_ID, 555, "🔔 提示正文")
+
+    # 消费前可读
+    assert await get_vote_prompt(CHAT_ID, ORIG_MSG_ID) == (555, "🔔 提示正文")
+
+    await consume_vote_session(CHAT_ID, ORIG_MSG_ID, session.vote_id)
+    # 消费后整键消失（含提示定位）
+    assert await get_vote_prompt(CHAT_ID, ORIG_MSG_ID) is None

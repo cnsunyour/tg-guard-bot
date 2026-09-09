@@ -328,9 +328,19 @@ async def finalize_vote_if_ready(
         if not acquired:
             return True  # 管理员或另一投票终局正在处理，本协程放弃
 
+        # 锁内复查群开关：资格校验与写票之间存在毫秒级窗口，管理员关闭投票后
+        # 在途的达阈请求放弃终局（会话保持冻结态，不消费）
+        if not await vote_enabled(chat_id):
+            return True
+
+        # 提示定位必须在消费前读取：consume 会整键删除（含 _prompt_id/_prompt_base）
+        prompt = await get_vote_prompt(chat_id, orig_msg_id)
+
         consumed = await consume_vote_session(chat_id, orig_msg_id, session.vote_id)
-        if consumed is None:
-            return True  # 会话已被他方消费（或已过期重建），本协程放弃
+        if consumed is None or consumed.vote_id != session.vote_id:
+            # 会话已被他方消费，或窗口边缘过期后被重建为新会话（consume 按身份
+            # 匹配不删除）——均按"本协程放弃"处理，防旧参数处置新会话
+            return True
 
         with contextlib.suppress(Exception):
             review_state = await get_review_state(chat_id, orig_msg_id)
@@ -348,7 +358,6 @@ async def finalize_vote_if_ready(
             down,
         )
 
-    prompt = await get_vote_prompt(chat_id, orig_msg_id)
     if prompt is not None:
         prompt_message_id, prompt_base = prompt
         with contextlib.suppress(Exception):

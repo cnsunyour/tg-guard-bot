@@ -10,6 +10,7 @@
 - 自动训练仅在样本成功入库后触发
 """
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,17 @@ from aiogram.types import Message
 
 from src.bot.handlers import moderation
 from src.services.moderation import ModerationErrorCode, ModerationResult
+
+
+@pytest.fixture(autouse=True)
+def _fake_review_lock(mocker):
+    """隔离管理员直达 /spam 的同消息处置锁（review_lock 依赖真实 Redis）。"""
+
+    @asynccontextmanager
+    async def fake_lock(chat_id: int, message_id: int):
+        yield True
+
+    mocker.patch.object(moderation, "review_lock", new=fake_lock)
 
 
 def _make_message(text: str = "/spam") -> Message:
