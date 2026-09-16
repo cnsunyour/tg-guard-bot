@@ -1602,8 +1602,10 @@ async def on_message(message: Message, bot: Bot) -> None:
         # 活跃度足够，已扣除，继续垃圾检测
         activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
     else:
-        # 普通文本消息：增加活跃度（+1）
-        activity = await ActivityService.record_text_message(message.chat.id, message.from_user.id)
+        # 普通文本消息：增加活跃度（+1；标准化长度低于 SPAM_MIN_TEXT_LENGTH 的超短消息不计）
+        activity = await ActivityService.record_text_message(
+            message.chat.id, message.from_user.id, text=message.text
+        )
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
     if activity is not None:

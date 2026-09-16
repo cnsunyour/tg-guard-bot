@@ -132,3 +132,114 @@ async def test_activity_above_floor_decays_to_floor():
         mock_get.return_value = _mock_redis(["2", old_date])
         # 2 - 3 天 = -1，max(-1, floor=1) = 1
         assert await ActivityService.get_activity(1, 100) == 1
+
+
+# ===== 超短消息不增加活跃度（与垃圾检测共用 SPAM_MIN_TEXT_LENGTH 阈值）=====
+
+# 标准化长度低于默认阈值 10 的消息（占位探活/极短互动典型形态）
+SHORT_TEXTS = [".", "。", "...", "？", "1", "666", "ok", "你好", "👍", "   "]
+
+# 标准化长度达到默认阈值 10 的消息（13 汉字 / 31 半角字符）
+LONG_TEXTS = ["这是一条足够长的测试消息哈", "hello world this is a test message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", SHORT_TEXTS)
+async def test_record_text_message_skips_short(text):
+    """超短消息不加活跃度、不写任何 key（保持新人 0 状态）"""
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        mock_redis.get.return_value = None  # 新用户无 activity key
+        assert await ActivityService.record_text_message(1, 100, text=text) == 0
+        mock_redis.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", SHORT_TEXTS)
+async def test_record_text_message_short_keeps_current(text):
+    """已发言用户发超短消息：返回当前值不加分"""
+    today = date.today().isoformat()
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        # get 顺序：get_activity 的 activity、last_date
+        mock_redis.get.side_effect = ["3", today]
+        assert await ActivityService.record_text_message(1, 100, text=text) == 3
+        mock_redis.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", LONG_TEXTS)
+async def test_record_text_message_counts_long(text):
+    """达到最小文本长度的消息照常 +1 并刷新日期"""
+    today = date.today().isoformat()
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        mock_redis.get.side_effect = ["3", today]
+        assert await ActivityService.record_text_message(1, 100, text=text) == 4
+        assert mock_redis.set.call_count == 2  # activity + last_date
+
+
+@pytest.mark.asyncio
+async def test_record_text_message_threshold_boundary(monkeypatch):
+    """阈值边界：标准化长度恰等于阈值计分、低于阈值不计（含 0=禁用语义）"""
+    today = date.today().isoformat()
+    monkeypatch.setattr("src.services.activity.settings.spam_min_text_length", 2)
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        # get 顺序：超短分支 get_activity 第 1 个 get 即 None 早退（仅耗 1 个）；
+        # 有效分支 get_activity 耗 2 个（activity + last_date）
+        mock_redis.get.side_effect = [None, "3", today]
+        assert await ActivityService.record_text_message(1, 100, text="好") == 0  # 长度 1 < 2
+        assert await ActivityService.record_text_message(1, 100, text="你好") == 4  # 长度 2 >= 2
+        assert mock_redis.set.call_count == 2
+
+    # 阈值 0 = 禁用过滤（与检测侧「设为 0 禁用」语义一致），任何文本都计
+    monkeypatch.setattr("src.services.activity.settings.spam_min_text_length", 0)
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        mock_redis.get.side_effect = ["3", today]
+        assert await ActivityService.record_text_message(1, 100, text=".") == 4
+
+
+@pytest.mark.asyncio
+async def test_record_text_message_short_does_not_reset_decay_clock():
+    """超短消息不重置衰减时钟：懒惰衰减结果返回但不写回 Redis"""
+    old_date = (date.today() - timedelta(days=20)).isoformat()
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        mock_redis.get.side_effect = ["5", old_date]
+        # 衰减到 floor=1 的值返回给调用方，但 set 不写回（下次读取重复计算同样结果，幂等）
+        assert await ActivityService.record_text_message(1, 100, text=".") == 1
+        mock_redis.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_consecutive_short_reads_are_idempotent():
+    """连续多条超短消息：均按原值衰减计算（未到下限），不累计多扣"""
+    old_date = (date.today() - timedelta(days=2)).isoformat()
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        # stored=5、2 天未发言 → 每次读取都从原值算：5-2=3（不写回故不累计）
+        mock_redis.get.side_effect = ["5", old_date] * 3
+        for _ in range(3):
+            assert await ActivityService.record_text_message(1, 100, text=".") == 3
+        mock_redis.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_record_text_message_none_keeps_legacy_behavior():
+    """text=None 保持旧行为（无条件 +1，兼容未知文本的调用方）"""
+    today = date.today().isoformat()
+    with patch("src.services.activity.get_redis") as mock_get:
+        mock_redis = AsyncMock()
+        mock_get.return_value = mock_redis
+        mock_redis.get.side_effect = ["3", today]
+        assert await ActivityService.record_text_message(1, 100) == 4
+        assert mock_redis.set.call_count == 2
