@@ -896,6 +896,11 @@ class SpamDetector:
         Returns:
             是否添加成功
         """
+        # 空文本不入库（如无文本无引用的跨聊天回复媒体消息）——空文档无训练价值
+        # 且干扰 retrain 语料
+        if not text.strip():
+            logger.debug("跳过空文本反馈样本入库（无可训练内容）")
+            return False
         try:
             await SpamRepository.add_sample(
                 text=text,

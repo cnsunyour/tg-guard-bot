@@ -78,6 +78,15 @@ class RedisKeys:
         return f"group_config:{chat_id}"
 
     @staticmethod
+    def chat_linked_channel(chat_id: int) -> str:
+        """群组关联频道 ID 缓存键名
+
+        存 linked_chat_id 十进制串；无关联频道时存空串（None 哨兵，与 miss 区分）。
+        TTL 由调用方设置（跨聊天回复防护用 600s），miss 时调 bot.get_chat 回填。
+        """
+        return f"chat_meta:linked:{chat_id}"
+
+    @staticmethod
     def locale_group(chat_id: int) -> str:
         """群组语言缓存键名
 

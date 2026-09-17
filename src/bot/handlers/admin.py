@@ -39,7 +39,16 @@ _VALID_VERIFICATION_TYPES = frozenset(_VERIFICATION_TYPES)
 
 # /groupset 子菜单类型白名单(校验 callback_data)
 _GROUPSET_MENU_TYPES = frozenset(
-    {"verify", "timeout", "antispam", "antichannel", "activity", "activityskip", "spamvote"}
+    {
+        "verify",
+        "timeout",
+        "antispam",
+        "antichannel",
+        "antiextreply",
+        "activity",
+        "activityskip",
+        "spamvote",
+    }
 )
 
 
@@ -129,10 +138,11 @@ def _render_groupset_main_menu(
     *,
     antispam_enabled: bool,
     antichannel_enabled: bool,
+    antiextreply_enabled: bool,
     activity_enabled: bool,
     spamvote_enabled: bool,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """渲染 groupset 主菜单(状态报告 + 7 配置入口按钮)。
+    """渲染 groupset 主菜单(状态报告 + 8 配置入口按钮)。
 
     verification_type 非白名单值(含 None)统一回退到 unknown 短标签。
     """
@@ -171,6 +181,12 @@ def _render_groupset_main_menu(
             ],
             [
                 InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.antiextreply.button"),
+                    callback_data=f"groupset_menu:{chat_id}:antiextreply",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=localizer.t("admin.groupset.menu.activity.button"),
                     callback_data=f"groupset_menu:{chat_id}:activity",
                 )
@@ -196,6 +212,7 @@ def _render_groupset_main_menu(
             verification_type=verification_label,
             antispam_status=_groupset_status_label(localizer, antispam_enabled),
             antichannel_status=_groupset_status_label(localizer, antichannel_enabled),
+            antiextreply_status=_groupset_status_label(localizer, antiextreply_enabled),
             activity_status=_groupset_status_label(localizer, activity_enabled),
             spamvote_status=_groupset_status_label(localizer, spamvote_enabled),
         ),
@@ -319,6 +336,7 @@ async def cmd_groupset(message: Message, bot: Bot, localizer: BoundLocalizer) ->
         group.verification_type,
         antispam_enabled=group.antispam_enabled,
         antichannel_enabled=group.anti_channel_enabled,
+        antiextreply_enabled=group.anti_external_reply_enabled,
         activity_enabled=group.activity_enabled,
         spamvote_enabled=group.spam_vote_enabled,
     )
@@ -440,6 +458,31 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot, localizer: BoundLo
                 localizer.t(
                     "admin.groupset.menu.antichannel.message",
                     status=_groupset_status_label(localizer, group.anti_channel_enabled),
+                ),
+                reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard),
+            )
+
+        elif menu_type == "antiextreply":
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=localizer.t("admin.groupset.menu.antiextreply.enable.button"),
+                            callback_data=f"antiextreply_toggle:{chat_id}:on",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=localizer.t("admin.groupset.menu.antiextreply.disable.button"),
+                            callback_data=f"antiextreply_toggle:{chat_id}:off",
+                        )
+                    ],
+                ]
+            )
+            await message.edit_text(
+                localizer.t(
+                    "admin.groupset.menu.antiextreply.message",
+                    status=_groupset_status_label(localizer, group.anti_external_reply_enabled),
                 ),
                 reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard),
             )
@@ -569,6 +612,7 @@ async def on_groupset_back(callback: CallbackQuery, bot: Bot, localizer: BoundLo
             group.verification_type,
             antispam_enabled=group.antispam_enabled,
             antichannel_enabled=group.anti_channel_enabled,
+            antiextreply_enabled=group.anti_external_reply_enabled,
             activity_enabled=group.activity_enabled,
             spamvote_enabled=group.spam_vote_enabled,
         )

@@ -43,6 +43,7 @@ class SpamMessageType(StrEnum):
     sticker = "sticker"
     edited_text = "edited_text"
     edited_photo = "edited_photo"
+    external_reply = "external_reply"
 
 
 # review_id 格式：secrets.token_hex(8) 生成 16 位小写十六进制；反序列化宽容大小写

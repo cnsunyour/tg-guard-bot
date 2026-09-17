@@ -41,6 +41,7 @@ def _group(
     verification_type: str = "math",
     antispam: bool = True,
     antichannel: bool = False,
+    antiextreply: bool = True,
     activity: bool = True,
     timeout: int = 120,
     activity_skip_threshold: int = 50,
@@ -49,6 +50,7 @@ def _group(
     g.verification_type = verification_type
     g.antispam_enabled = antispam
     g.anti_channel_enabled = antichannel
+    g.anti_external_reply_enabled = antiextreply
     g.activity_enabled = activity
     g.verification_timeout = timeout
     g.activity_skip_threshold = activity_skip_threshold
@@ -123,12 +125,13 @@ async def test_command_renders_main_menu_with_6_buttons(mocker) -> None:
 
     main = next(c for c in localizer.t.call_args_list if c.args == ("admin.groupset.main.message",))
     assert main is not None
-    # 7 menu button key
+    # 8 menu button key
     button_keys = [
         "admin.groupset.menu.verify.button",
         "admin.groupset.menu.timeout.button",
         "admin.groupset.menu.antispam.button",
         "admin.groupset.menu.antichannel.button",
+        "admin.groupset.menu.antiextreply.button",
         "admin.groupset.menu.activity.button",
         "admin.groupset.menu.activityskip.button",
         "admin.groupset.menu.spamvote.button",
@@ -149,6 +152,7 @@ async def test_renderer_unknown_verification_type_falls_back(mocker) -> None:
         group.verification_type,
         antispam_enabled=True,
         antichannel_enabled=False,
+        antiextreply_enabled=True,
         activity_enabled=True,
         spamvote_enabled=True,
     )
@@ -170,18 +174,19 @@ async def test_renderer_status_uses_common_injection(mocker) -> None:
         "math",
         antispam_enabled=True,
         antichannel_enabled=False,
+        antiextreply_enabled=True,
         activity_enabled=False,
         spamvote_enabled=True,
     )
 
-    # common.enabled + common.disabled 各出现（两个 enabled 两个 disabled）
+    # common.enabled + common.disabled 各出现（三个 enabled 两个 disabled）
     enabled_common = [
         c for c in localizer.t.call_args_list if c.args == ("admin.common.status.enabled.label",)
     ]
     disabled_common = [
         c for c in localizer.t.call_args_list if c.args == ("admin.common.status.disabled.label",)
     ]
-    assert len(enabled_common) == 2
+    assert len(enabled_common) == 3
     assert len(disabled_common) == 2
     # groupset.status.enabled.label 注入 common status
     gset_enabled = next(
@@ -201,6 +206,7 @@ async def test_renderer_13_known_verify_types(mocker) -> None:
             vt,
             antispam_enabled=True,
             antichannel_enabled=True,
+            antiextreply_enabled=True,
             activity_enabled=True,
             spamvote_enabled=True,
         )

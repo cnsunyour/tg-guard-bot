@@ -118,6 +118,7 @@ def test_spam_message_type_values() -> None:
         "sticker",
         "edited_text",
         "edited_photo",
+        "external_reply",
     ]
 
 

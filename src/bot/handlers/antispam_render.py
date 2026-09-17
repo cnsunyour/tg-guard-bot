@@ -80,6 +80,7 @@ _KNOWN_REASON_CODES = frozenset(
         "all_detectors_failed",
         "reply_relevant",
         "topic_consistent",
+        "external_reply",
     }
 )
 
