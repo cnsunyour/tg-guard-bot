@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.10.0] - 2026-09-17
 
 ### 新增功能
 
@@ -18,11 +18,18 @@
 - **/notspam、/nospam、/unspam 三词统一双语义**：三命令行为完全一致（沿用既有别名规则），按使用者身份分流——管理员 = 负样本训练（预防性训练/误报修正，语义不变），普通成员 = 对待确认投票会话投「误报 -1」，与 /spam（/report）的双语义同构；三个命令词均加入群成员命令菜单
 - **数据库迁移** `428bc0004879`：groups 表新增 `spam_vote_enabled`（boolean 默认 true）
 
+### Bug 修复
+
+#### 超短消息不再计入活跃度 🚫
+- 标准化长度低于 `SPAM_MIN_TEXT_LENGTH`（与垃圾检测共用阈值）的文本消息不再 +1 活跃度、不刷新衰减时钟，堵住垃圾占位号发一个「.」就把活跃度从 0 抬到 1、解锁新人非文本消息限制的漏洞
+- 活跃度读取路径不再因仅读取就重置懒惰衰减结果（连续读取幂等）；阈值 0 = 禁用过滤（与检测侧语义一致）
+
 ### 代码质量
 
 - 举报处理核心 `_process_report_approval/rejection/ignore` 进入同消息处置锁：命令（/approve /reject）与按钮两入口均在锁内重读举报状态，消除与投票终局的双罚窗口；`ReportRepository` 新增按消息批量条件更新（`WHERE status='pending'` 防并发覆盖）
 - 举报提示键盘抽取为 `antispam_render.build_report_keyboard`（首条举报与投票进度重建共用）；review 键盘支持可选投票行参数
 - 测试 +43：服务层 23（`_FakeRedis` 模拟 Lua 语义：一人一票方向固定、消费三态、防复活、TTL 不续期）+ 真实 Redis 集成 7（RESP 多值编码、并发投票串行化 1..10、并发消费单胜者、过期不复活）+ handler 13（资格校验/toast/终态处置/指令路径）
+- CI 全面加固：GitHub Actions 迁移 Node 24、引入阻断性质量门（lint/测试不通过即失败）、工作流最小权限；测试套件去 .env 依赖，无 .env 环境（CI）可独立运行；semgrep 排除 .github（mutable-action-tag 规则与 action tag 引用决策冲突）
 
 ## [1.9.0] - 2026-09-02
 
