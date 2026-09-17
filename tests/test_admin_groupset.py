@@ -123,7 +123,7 @@ async def test_command_renders_main_menu_with_6_buttons(mocker) -> None:
 
     main = next(c for c in localizer.t.call_args_list if c.args == ("admin.groupset.main.message",))
     assert main is not None
-    # 6 menu button key
+    # 7 menu button key
     button_keys = [
         "admin.groupset.menu.verify.button",
         "admin.groupset.menu.timeout.button",
@@ -131,6 +131,7 @@ async def test_command_renders_main_menu_with_6_buttons(mocker) -> None:
         "admin.groupset.menu.antichannel.button",
         "admin.groupset.menu.activity.button",
         "admin.groupset.menu.activityskip.button",
+        "admin.groupset.menu.spamvote.button",
     ]
     for k in button_keys:
         assert next(c for c in localizer.t.call_args_list if c.args == (k,))
@@ -149,6 +150,7 @@ async def test_renderer_unknown_verification_type_falls_back(mocker) -> None:
         antispam_enabled=True,
         antichannel_enabled=False,
         activity_enabled=True,
+        spamvote_enabled=True,
     )
 
     assert next(
@@ -159,7 +161,7 @@ async def test_renderer_unknown_verification_type_falls_back(mocker) -> None:
 
 
 async def test_renderer_status_uses_common_injection(mocker) -> None:
-    """antispam/antichannel/activity 三态用 common.status 注入 groupset.status。"""
+    """antispam/antichannel/activity/spamvote 四态用 common.status 注入 groupset.status。"""
     localizer = _localizer()
 
     handler._render_groupset_main_menu(
@@ -169,16 +171,17 @@ async def test_renderer_status_uses_common_injection(mocker) -> None:
         antispam_enabled=True,
         antichannel_enabled=False,
         activity_enabled=False,
+        spamvote_enabled=True,
     )
 
-    # common.enabled + common.disabled 各出现（一个 enabled 两个 disabled）
+    # common.enabled + common.disabled 各出现（两个 enabled 两个 disabled）
     enabled_common = [
         c for c in localizer.t.call_args_list if c.args == ("admin.common.status.enabled.label",)
     ]
     disabled_common = [
         c for c in localizer.t.call_args_list if c.args == ("admin.common.status.disabled.label",)
     ]
-    assert len(enabled_common) == 1
+    assert len(enabled_common) == 2
     assert len(disabled_common) == 2
     # groupset.status.enabled.label 注入 common status
     gset_enabled = next(
@@ -199,6 +202,7 @@ async def test_renderer_13_known_verify_types(mocker) -> None:
             antispam_enabled=True,
             antichannel_enabled=True,
             activity_enabled=True,
+            spamvote_enabled=True,
         )
         assert next(
             c

@@ -64,6 +64,7 @@ class Settings(BaseSettings):
         ge=0,
         le=1000,
         description="垃圾检测的最小标准化文本长度，低于此长度的消息跳过检测，设为0禁用。"
+        "同时作为活跃度门槛：低于此长度的文本消息不增加活跃度也不刷新衰减时钟。"
         "标准化长度计算：1个汉字/全角字符=1标准长度，2个英文字符=1标准长度。"
         "推荐值：10（中文10个汉字，英文20个字符）",
     )
@@ -73,6 +74,13 @@ class Settings(BaseSettings):
         description="确认模式 review prompt 与 Redis state 的有效期（秒）：prompt 到期自动删除，"
         "state 同步过期；管理员未处理则两者一起清理，不处罚、不入库。"
         "prompt 与 state TTL 必须一致，否则旧 state 会因 SET NX 阻止同一消息重建 review。",
+    )
+    spam_vote_threshold: int = Field(
+        default=5,
+        ge=2,
+        le=50,
+        description="群成员集体投票判定阈值（分向绝对票数）：确认垃圾或误报的单向票数"
+        "达到该值即自动执行处置。会话创建时快照，运行期改配置只影响新会话。",
     )
 
     # ========== 高级正则规则引擎配置 ==========
@@ -580,9 +588,7 @@ class Settings(BaseSettings):
         """
         if not self.debug:
             # 检查数据库密码
-            if (
-                self.db_password == "postgres"
-            ):  # nosec B105 - 这是检查默认密码的安全检查,非硬编码密码
+            if self.db_password == "postgres":  # nosec B105 - 检查是否使用默认密码，非硬编码密码
                 raise ValueError(
                     "🔒 生产环境禁止使用默认数据库密码！\n"
                     "请在 .env 文件中设置安全的 DB_PASSWORD\n"

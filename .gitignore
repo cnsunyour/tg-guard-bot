@@ -40,6 +40,7 @@ ENV/
 .serena/
 .tool-versions
 .zed/
+.codegraph/
 
 # AI 助手规则文件（个人配置，非项目必需）
 CLAUDE.md

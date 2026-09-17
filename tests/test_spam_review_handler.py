@@ -100,6 +100,17 @@ def _patch_lock(mocker, acquired: bool) -> None:
     mocker.patch.object(antispam, "review_lock", new=fake_review_lock)
 
 
+def _patch_vote_services(mocker, created: bool = True) -> None:
+    """隔离集体投票服务调用（review producer 集成投票会话后新增的 Redis 依赖）。"""
+
+    async def fake_create(session, *args, **kwargs):
+        return session if created else None
+
+    mocker.patch.object(antispam, "create_vote_session", new=AsyncMock(side_effect=fake_create))
+    mocker.patch.object(antispam, "record_vote_prompt", new=AsyncMock(return_value=True))
+    mocker.patch.object(antispam, "discard_vote_session", new=AsyncMock())
+
+
 def _authorize(mocker, allowed: bool = True):
     mocker.patch.object(antispam.settings, "admin_ids", [])
     return mocker.patch.object(
@@ -114,6 +125,7 @@ async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localiz
         "create_review_state",
         new=AsyncMock(side_effect=lambda state, *args, **kwargs: state),
     )
+    _patch_vote_services(mocker)
     mocker.patch.object(antispam, "format_user_mention", return_value="Offender")
     mocker.patch.object(
         antispam, "get_spam_handler_admins_mention", new=AsyncMock(return_value="@admins")
@@ -167,6 +179,7 @@ async def test_review_producer_cleans_state_when_prompt_send_fails(mocker, local
         "create_review_state",
         new=AsyncMock(side_effect=lambda state, *args, **kwargs: state),
     )
+    _patch_vote_services(mocker)
     cleanup = mocker.patch.object(
         antispam, "delete_review_state_if_match", new=AsyncMock(return_value=True)
     )
@@ -653,6 +666,7 @@ async def test_route_spam_detection_uses_review_when_enabled(mocker) -> None:
         result,
         message_type=SpamMessageType.sticker,
         recognized_text="recognized text",
+        group=group,
     )
     immediate.assert_not_awaited()
 

@@ -377,6 +377,8 @@ def _admin(user_id: int, *, anonymous: bool = False, delete: bool = True, restri
         can_post_stories=False,
         can_edit_stories=False,
         can_delete_stories=False,
+        # aiogram 3.31 新增必填（旧版 extra=allow 会忽略，向后兼容）
+        can_send_welcome_messages=False,
     )
 
 

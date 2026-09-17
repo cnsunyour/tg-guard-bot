@@ -10,6 +10,7 @@
 - 举报提示只回复被举报消息，正文不复制原文（对齐 antispam review 提示）
 """
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -272,9 +273,15 @@ async def test_report_callback_preflight_failure_does_not_clean_prompt(
 @pytest.mark.unit
 async def test_process_report_ignore_marks_report_ignored() -> None:
     """忽略举报仅写 status=ignored，不触发封禁/训练。"""
+
+    @asynccontextmanager
+    async def fake_guard(chat_id: int, message_id: int | None):
+        yield True
+
     report = SimpleNamespace(
         group_id=-1001234567890,
         status="pending",
+        message_id=77,
     )
     get_report = AsyncMock(return_value=report)
     update_status = AsyncMock(return_value=True)
@@ -282,6 +289,7 @@ async def test_process_report_ignore_marks_report_ignored() -> None:
     with (
         patch.object(moderation.ReportRepository, "get_report_by_id", new=get_report),
         patch.object(moderation.ReportRepository, "update_report_status", new=update_status),
+        patch.object(moderation, "_report_decision_guard", new=fake_guard),
     ):
         success, error = await moderation._process_report_ignore(
             report_id=123,
@@ -354,6 +362,10 @@ async def test_cmd_spam_prompt_replies_original_without_copying_content() -> Non
             "count_pending_reports",
             new=AsyncMock(return_value=1),
         ),
+        # 集体投票服务隔离：无活跃会话 + 群开关查询 + 建会话返回 None（提示不带投票行）
+        patch.object(moderation, "get_vote_session", new=AsyncMock(return_value=None)),
+        patch.object(moderation.GroupRepository, "get", new=AsyncMock(return_value=None)),
+        patch.object(moderation, "create_vote_session", new=AsyncMock(return_value=None)),
         patch.object(
             moderation,
             "get_spam_handler_admins_mention",
@@ -398,3 +410,86 @@ async def test_cmd_spam_prompt_replies_original_without_copying_content() -> Non
         reply,
         delay=moderation.settings.spam_review_prompt_auto_delete_seconds,
     )
+
+
+@pytest.mark.unit
+async def test_report_guard_keeps_session_when_lock_not_acquired(mocker) -> None:
+    """守卫未取得锁时不得清理投票会话——锁持有方（投票终局）可能正在使用。
+
+    回归契约（codex review High）：曾在 finally 无条件 discard，会误删正在被
+    终局使用的会话，令已达阈值的处置被无声放弃。
+    """
+
+    @asynccontextmanager
+    async def fake_lock(chat_id: int, message_id: int):
+        yield False  # 锁被投票终局持有
+
+    mocker.patch.object(moderation, "review_lock", new=fake_lock)
+    discard = mocker.patch.object(moderation, "discard_vote_session", new=AsyncMock())
+
+    async with moderation._report_decision_guard(-1001234567890, 77) as guarded:
+        assert guarded is False
+
+    discard.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_report_guard_discards_after_locked_processing(mocker) -> None:
+    """守卫取得锁并完成处置后关闭该消息的成员投票（管理员终局语义）。"""
+
+    @asynccontextmanager
+    async def fake_lock(chat_id: int, message_id: int):
+        yield True
+
+    mocker.patch.object(moderation, "review_lock", new=fake_lock)
+    discard = mocker.patch.object(moderation, "discard_vote_session", new=AsyncMock())
+
+    async with moderation._report_decision_guard(-1001234567890, 77) as guarded:
+        assert guarded is True
+
+    discard.assert_awaited_once_with(-1001234567890, 77)
+
+
+@pytest.mark.unit
+async def test_cmd_spam_with_active_session_still_reports_and_limits() -> None:
+    """已有投票会话时 /spam 仍走频率限制 + 举报落库（投票不得绕过契约）。
+
+    回归契约（codex review High）：曾提前 return 绕过 count_user_reports 与
+    create_report，可被反复刷票。
+    """
+    message = MagicMock(spec=Message)
+    message.chat = SimpleNamespace(id=-1001234567890, type="supergroup")
+    message.from_user = SimpleNamespace(id=100200300)
+    message.text = "/spam"
+    message.reply_to_message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        message_id=77,
+        text="spam text",
+        caption=None,
+        content_type="text",
+    )
+    localizer = _localizer()
+    session = SimpleNamespace(vote_id="0123456789abcdef")
+    handle_vote = AsyncMock()
+    count_reports = AsyncMock(return_value=0)
+    create_report = AsyncMock(return_value=SimpleNamespace(id=123))
+
+    with (
+        patch.object(
+            moderation,
+            "check_admin_permission_strict_message",
+            new=AsyncMock(return_value=False),
+        ),
+        patch.object(moderation, "parse_spam_args", return_value=(False, None)),
+        patch.object(moderation.ReportRepository, "count_user_reports", new=count_reports),
+        patch.object(moderation.ReportRepository, "create_report", new=create_report),
+        patch.object(moderation, "get_vote_session", new=AsyncMock(return_value=session)),
+        patch.object(moderation, "handle_vote_command", new=handle_vote),
+        patch.object(moderation, "auto_delete_message", new=AsyncMock()),
+    ):
+        await moderation.cmd_spam(message, AsyncMock(), localizer)
+
+    # 限流与落库先于投票分支执行
+    count_reports.assert_awaited_once()
+    create_report.assert_awaited_once()
+    handle_vote.assert_awaited_once()

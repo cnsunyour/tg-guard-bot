@@ -9,6 +9,14 @@ import time
 import pytest
 import redis as sync_redis
 
+# 必填配置兜底：无 .env 的环境（如 CI）也能完成测试收集与运行。
+# 必须在模块顶层执行（收集阶段先于任何 fixture），setdefault 不覆盖显式配置。
+# 四项与下方 mock_settings fixture 的 setenv 集合对齐（含 model_post_init 生产校验）
+os.environ.setdefault("BOT_TOKEN", "123456:TEST_BOT_TOKEN")
+os.environ.setdefault("MODEL_SIGNATURE_KEY", "t" * 64)
+os.environ.setdefault("DB_PASSWORD", "ci-test-db-password")
+os.environ.setdefault("REDIS_PASSWORD", "ci-test-redis-password")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_env():

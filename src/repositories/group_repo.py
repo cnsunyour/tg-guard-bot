@@ -146,6 +146,27 @@ class GroupRepository:
             return False
 
     @staticmethod
+    async def update_spam_vote_settings(chat_id: int, enabled: bool) -> bool:
+        """更新群成员集体投票设置
+
+        Args:
+            chat_id: 群组 ID
+            enabled: 是否启用群成员集体投票
+
+        Returns:
+            是否更新成功
+        """
+        async with get_db_session() as session:
+            result = await session.execute(select(Group).where(Group.id == chat_id))
+            group = result.scalar_one_or_none()
+
+            if group:
+                group.spam_vote_enabled = enabled
+                await session.commit()
+                return True
+            return False
+
+    @staticmethod
     async def get_whitelisted_groups() -> list[Group]:
         """获取所有白名单群组"""
         async with get_db_session() as session:

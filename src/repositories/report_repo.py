@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 
 from src.core.database import get_db_session
 from src.core.utils import utcnow_naive
@@ -108,6 +108,45 @@ class ReportRepository:
 
             await session.commit()
             return True
+
+    @staticmethod
+    async def update_reports_status_by_message(
+        group_id: int,
+        message_id: int,
+        status: str,
+        handled_by: int,
+    ) -> bool:
+        """按群组与原消息批量推进仍为 pending 的举报到终态。
+
+        集体投票终态可能同时关联同一条目标消息的多条举报（每个举报者一条记录），
+        且无单一 report_id 可寻；仅推进 ``status='pending'`` 的记录防止并发覆盖
+        已被管理员单独处理的终态。
+
+        Args:
+            group_id: 群组ID
+            message_id: 被举报的原消息ID
+            status: 终态 (approved/rejected)
+            handled_by: 触发者ID（投票达阈值的成员）
+        """
+        async with get_db_session() as session:
+            result = await session.execute(
+                update(Report)
+                .where(
+                    and_(
+                        Report.group_id == group_id,
+                        Report.message_id == message_id,
+                        Report.status == "pending",
+                    )
+                )
+                .values(
+                    status=status,
+                    handled_by=handled_by,
+                    handled_at=utcnow_naive(),
+                )
+            )
+            await session.commit()
+            # mypy: Result[Any] 实际上是 CursorResult，它有 rowcount 属性
+            return bool(result.rowcount)  # type: ignore[attr-defined]
 
     @staticmethod
     async def count_pending_reports(group_id: int) -> int:

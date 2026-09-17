@@ -10,6 +10,7 @@
 - 自动训练仅在样本成功入库后触发
 """
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,17 @@ from aiogram.types import Message
 
 from src.bot.handlers import moderation
 from src.services.moderation import ModerationErrorCode, ModerationResult
+
+
+@pytest.fixture(autouse=True)
+def _fake_review_lock(mocker):
+    """隔离管理员直达 /spam 的同消息处置锁（review_lock 依赖真实 Redis）。"""
+
+    @asynccontextmanager
+    async def fake_lock(chat_id: int, message_id: int):
+        yield True
+
+    mocker.patch.object(moderation, "review_lock", new=fake_lock)
 
 
 def _make_message(text: str = "/spam") -> Message:
@@ -252,3 +264,62 @@ async def test_ban_user_called_with_allow_left() -> None:
         await moderation.cmd_spam(message, AsyncMock(), localizer)
 
     assert ban_user.await_args.kwargs["allow_left"] is True
+
+
+@pytest.mark.unit
+async def test_notspam_admin_trains_under_decision_guard_and_closes_vote() -> None:
+    """管理员 /notspam：同消息守卫内训练，退出时关闭该消息的集体投票。
+
+    回归契约（codex recheck）：训练不持锁时并发投票终局可在管理员表态非垃圾
+    之后仍执行处罚；guard 兼职"获锁处置后 discard"，训练失败路径同样关闭。
+    """
+    message = _make_message(text="/notspam")
+    localizer = _make_localizer()
+    discard = patch.object(moderation, "discard_vote_session", new=AsyncMock())
+    guard_discard = discard.start()
+
+    detector = MagicMock()
+    detector.check_and_auto_train = AsyncMock(return_value=None)
+
+    with (
+        patch.object(
+            moderation, "check_admin_permission_strict_message", new=AsyncMock(return_value=True)
+        ),
+        patch.object(
+            moderation.SpamRepository, "find_sample_by_text", new=AsyncMock(return_value=None)
+        ),
+        patch.object(moderation.SpamRepository, "add_sample", new=AsyncMock()),
+        patch.object(moderation, "auto_delete_message", new=AsyncMock()),
+        patch("src.services.spam_detector.get_detector", return_value=detector),
+    ):
+        await moderation.cmd_notspam(message, AsyncMock(), localizer)
+
+    # 训练执行 + 退出守卫时关闭投票（reply 的消息 ID 为目标）
+    guard_discard.assert_awaited_once_with(message.chat.id, message.reply_to_message.message_id)
+
+
+@pytest.mark.unit
+async def test_notspam_admin_training_failure_still_closes_vote() -> None:
+    """训练失败（入库异常）同样关闭投票：管理员已终局表态，不得留下可 +阈 的会话。"""
+    message = _make_message(text="/notspam")
+    localizer = _make_localizer()
+    discard = patch.object(moderation, "discard_vote_session", new=AsyncMock())
+    guard_discard = discard.start()
+
+    with (
+        patch.object(
+            moderation, "check_admin_permission_strict_message", new=AsyncMock(return_value=True)
+        ),
+        patch.object(
+            moderation.SpamRepository,
+            "find_sample_by_text",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ),
+        patch.object(moderation, "auto_delete_message", new=AsyncMock()),
+    ):
+        await moderation.cmd_notspam(message, AsyncMock(), localizer)
+
+    guard_discard.assert_awaited_once_with(message.chat.id, message.reply_to_message.message_id)
+
+    used_keys = [call.args[0] for call in localizer.t.call_args_list]
+    assert "moderation.notspam.failed.message" in used_keys

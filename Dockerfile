@@ -32,8 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 复制依赖文件
 COPY pyproject.toml ./
 
-# 安装 Python 依赖
-RUN pip install --upgrade pip setuptools wheel && \
+# 安装 Python 依赖（setuptools 钉 >=78.1.1：修复 CVE-2025-47273，防层缓存复用旧版）
+RUN pip install --upgrade pip "setuptools>=78.1.1" wheel && \
     pip install -e .
 
 # 复制项目代码

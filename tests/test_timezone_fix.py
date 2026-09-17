@@ -116,13 +116,16 @@ class TestIntegrationScenarios:
     def test_old_vs_new_utcnow_timestamp_difference(self):
         """测试新旧 utcnow() 在非 UTC 时区的差异"""
         import os
+        import time
 
         # 保存原始 TZ
         original_tz = os.environ.get("TZ")
 
         try:
-            # 模拟在 +0800 时区运行
+            # 模拟在 +0800 时区运行（Unix 上改 TZ 环境变量须 tzset() 才生效，
+            # 否则在 UTC 时区的 CI runner 上本地时区不变，差异恒为 0）
             os.environ["TZ"] = "Asia/Shanghai"
+            time.tzset()
 
             # 新实现（正确）
             aware_now = utcnow()

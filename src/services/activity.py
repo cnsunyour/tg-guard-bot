@@ -7,6 +7,7 @@ from loguru import logger
 
 from src.core.config import settings
 from src.core.redis import RedisKeys, get_redis
+from src.core.utils import calculate_normalized_length
 
 
 class ActivityService:
@@ -14,7 +15,9 @@ class ActivityService:
 
     活跃度规则:
     - 初始值: 0
-    - 文本消息: +1
+    - 文本消息: +1（标准化长度 >= spam_min_text_length 才计；超短消息——
+      单个标点、纯空白、极短互动等——不加分也不刷新衰减时钟，防占位消息
+      刷活跃度解锁新人非文本限制）
     - 非文本消息: 0 (不扣分)
     - 每日衰减: -1 (仅当当前活跃度 > activity_decay_floor 且 < 10 时衰减；>= 10 不衰减)
       衰减结果最低保留 activity_decay_floor (默认1)；活跃度 <= floor (含 0) 不衰减保持原值
@@ -33,7 +36,7 @@ class ActivityService:
     TEXT_REWARD = 1
 
     @staticmethod
-    async def get_activity(chat_id: int, user_id: int) -> int:
+    async def get_activity(chat_id: int, user_id: int, *, persist_decay: bool = True) -> int:
         """获取用户活跃度 (含衰减计算)
 
         使用懒惰衰减策略：读取时根据最后消息日期计算衰减
@@ -41,6 +44,8 @@ class ActivityService:
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
+            persist_decay: 是否将懒惰衰减结果写回 Redis。无意义消息记录路径传
+                False，避免仅读取活跃度就重置衰减时钟
 
         Returns:
             活跃度值 (最小为 0)
@@ -81,9 +86,10 @@ class ActivityService:
                     # 活跃度 >= 10 时不衰减
                     actual_activity = stored_activity
 
-                # 更新 Redis 存储为正确的值（避免下次读取时重复衰减）
-                await redis.set(activity_key, str(actual_activity))
-                await redis.set(last_date_key, date.today().isoformat())
+                if persist_decay:
+                    # 更新 Redis 存储为正确的值（避免下次读取时重复衰减）
+                    await redis.set(activity_key, str(actual_activity))
+                    await redis.set(last_date_key, date.today().isoformat())
 
                 return actual_activity
         except ValueError:
@@ -94,16 +100,30 @@ class ActivityService:
         return max(stored_activity, 0)
 
     @staticmethod
-    async def record_text_message(chat_id: int, user_id: int) -> int:
+    async def record_text_message(chat_id: int, user_id: int, text: str | None = None) -> int:
         """记录文本消息，增加活跃度
+
+        传入 ``text`` 且标准化长度低于 ``spam_min_text_length``（与垃圾检测的
+        最小文本长度共用阈值）时视为超短消息：不加分也不刷新衰减时钟，防止
+        垃圾号发一个「.」就把活跃度从 0 抬到 1、解锁新人非文本消息限制。
+        ``text=None`` 保持原有行为（无条件 +1）。
 
         Args:
             chat_id: 群组 ID
             user_id: 用户 ID
+            text: 消息文本；低于最小文本长度的消息不增加活跃度
 
         Returns:
-            更新后的活跃度
+            更新后的活跃度（超短消息返回当前值）
         """
+        if text is not None and calculate_normalized_length(text) < settings.spam_min_text_length:
+            # persist_decay=False：仅读取活跃度也不写回，避免重置衰减时钟
+            current = await ActivityService.get_activity(chat_id, user_id, persist_decay=False)
+            logger.debug(
+                f"忽略超短消息的活跃度奖励 " f"[群组:{chat_id}] [用户:{user_id}] [活跃度:{current}]"
+            )
+            return current
+
         redis = get_redis()
         activity_key = RedisKeys.user_activity(chat_id, user_id)
         last_date_key = RedisKeys.activity_last_date(chat_id, user_id)

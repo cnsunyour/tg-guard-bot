@@ -127,6 +127,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         events,
         lang,
         moderation,
+        spam_vote,
         start,
         verification,
     )
@@ -136,6 +137,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.include_router(admin.router)  # 管理命令
     dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
+    dp.include_router(spam_vote.router)  # 群成员集体投票
     dp.include_router(curfew.router)  # 宵禁模式
     dp.include_router(
         lang.router
