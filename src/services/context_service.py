@@ -260,16 +260,13 @@ class ContextService:
             for msg in context["reply_chain"]:
                 parts.append(f"{msg['user_name']}: {msg['text']}")
 
-        # 群组最近对话（排除当前消息，按时间正序）
+        # 群组最近对话：Redis 缓存最新在前，反转为时间正序后全部输出
+        # （数量已由 CONTEXT_MESSAGE_COUNT 在缓存层限定，此处不再二次截断）
         if context["recent_messages"]:
             parts.append("\n【群组最近对话】")
-            # 过滤当前消息 + 倒序（最老的在前）
-            filtered_messages = [
-                msg
-                for msg in reversed(context["recent_messages"])
-                if current_message_id is None or msg["message_id"] != current_message_id
-            ]
-            for msg in filtered_messages[:5]:  # 只取最近 5 条
+            for msg in reversed(context["recent_messages"]):
+                if current_message_id is not None and msg["message_id"] == current_message_id:
+                    continue
                 parts.append(f"{msg['user_name']}: {msg['text']}")
 
         # 当前消息

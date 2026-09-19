@@ -107,7 +107,7 @@ async def test_detect_stage3_embedding_returns_embedding_similarity_code() -> No
 async def test_merge_both_failed_returns_all_detectors_failed_code() -> None:
     """传统+AI 都失败 → reasons == [ReasonCode.all_detectors_failed]。"""
     detector, _, _ = _make_detector()
-    result = await detector._merge_detection_results(None, None, "text", USER_ID)
+    result = await detector._merge_detection_results(None, None, USER_ID)
 
     assert result["reasons"] == [ReasonCode.all_detectors_failed]
     # StrEnum 继承 str，序列化后即字符串 code（Redis state 兼容）
