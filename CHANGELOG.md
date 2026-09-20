@@ -5,6 +5,27 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.11.1] - 2026-09-20
+
+### Bug 修复
+
+#### 反频道马甲不再向假用户记警告 🎭
+- Bot API 对以频道身份发送的消息，`from` 出于向后兼容填的是假用户 Channel_Bot（136817688），此前删除后的 `warn_user` 把警告记到该假用户名下（全群频道马甲共享一个计数），提示文案也误以「您」称呼假用户；「无发送者」分支实际永远走不到
+- 现统一为「删除 + 群内提示（30s 自动删）」，不再记警告；catalog 合并为单一 `antispam.channel_impersonation.notice.message`（删除 `warning.user` / `warning.anonymous` 两 key）；`/groupset`、`/help antichannel` 说明同步去掉「记录警告」
+- 放行判定加固：新增官方字段 `is_automatic_forward` 放行（早于 sender_chat 判定，不再仅依赖 `from` 为 777000 的兼容假定）；关联频道判定改走与跨聊天回复共用的 Redis 缓存查询 `_get_linked_channel_id`（600s），不再每条频道消息都调 `get_chat`
+- 删除失败（权限缺失）仍发提示，让管理员知道有消息需人工处理
+
+#### 跨聊天回复直接删除 + 记警告，不再进入管理员复核 🔗
+- 此前命中后走反垃圾统一路由，确认模式群每条命中都生成一条一小时存活的复核提示；垃圾账号连发七八条时提示本身比垃圾更扰群
+- 现改为专用处置：删除 + 系统警告 `system:external_reply`（走既有警告升级：默认 3 次禁言 / 5 次踢出 / 7 次封禁）+ 群内提示（含累计警告次数，30s 自动删）；不进入管理员复核 / 集体投票，不发反馈按钮
+- 不再写训练样本、不缓存文本：本检测是纯结构信号，正文通常是无意义占位文字，入库只会污染分类器
+- 删除失败不阻断记警告（消息处置与账号处置独立）；`/warnings` 列表按 locale 渲染该系统原因
+- `SpamMessageType.external_reply` 及其 catalog 保留，用于反序列化升级前 TTL 内残留的 review 快照
+
+### 代码质量
+
+- 新增 `tests/test_antispam_channel_sender.py`（自动转发 / 系统账号 / 关联频道 / 群开关 / 命中不记警告 / 查询失败 fail-punish）；跨聊天回复测试改为断言专用处置（删除 + 警告 + 提示 / 删除失败仍警告 / 警告失败省略次数行 / 不入库不缓存不路由）
+
 ## [1.11.0] - 2026-09-20
 
 ### 新增功能

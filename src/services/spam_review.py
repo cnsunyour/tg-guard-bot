@@ -43,6 +43,8 @@ class SpamMessageType(StrEnum):
     sticker = "sticker"
     edited_text = "edited_text"
     edited_photo = "edited_photo"
+    # 跨聊天回复已改为直接删除 + 记警告，不再产生 review state；保留成员用于
+    # 反序列化升级前 TTL 内残留的 review 快照，待其自然过期后可移除
     external_reply = "external_reply"
 
 

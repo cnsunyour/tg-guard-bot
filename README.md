@@ -695,7 +695,7 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [x] **v1.8.x**: AI 多协议适配（OpenAI Chat/Responses + Anthropic Messages），支持主备服务商异构配置与自动回退；入群限制权限收紧（禁 react/编辑头衔/发起话题）、datetime 时区脆弱性消除、altcha PHP 版本约束对齐、数据库迁移切换 Alembic（启动自动迁移 + 旧库自动 stamp）、review/report 提示改回复原文、/lang 幂等编辑修复、/spam 封禁失败不再阻断消息删除与训练样本入库、群内引导消息匿名 mention 待验证用户、入群资料检测修复 bio 获取链（事件 bio + Telethon 降级）、spam 提示仅 mention 具备处置权限的管理员
 - [x] **v1.9.0**: 数据定时清理（spam_samples 负样本按训练比例裁剪 + audit_logs 保留期）、启动时恢复进行中的验证会话 timeout、批量删除改 deleteMessages 分批调用、项目文档交互图（架构/流程/活跃度三张，GitHub Pages 在线 + README 内嵌 SVG）
 - [x] **v1.10.0**: 垃圾待确认消息的群成员集体投票决策（按钮 / /spam /unspam 投票，达阈自动处置，管理员不在线不再积压）、超短消息不再计入活跃度、CI 全面加固
-- [x] **v1.11.0**: 跨聊天回复引流防护（Reply in Another Chat 结构信号检测，群开关可控）、AI 正样本入库延后到置信度调整之后、群组上下文完整送 AI、训练样本同文本去重（人工标注优先）
+- [x] **v1.11.x**: 跨聊天回复引流防护（Reply in Another Chat 结构信号检测，群开关可控）、AI 正样本入库延后到置信度调整之后、群组上下文完整送 AI、训练样本同文本去重（人工标注优先）；跨聊天回复改为直接删除 + 记警告（不再进入管理员复核）、反频道马甲不再向假用户记警告（自动转发放行 + 关联频道缓存查询）
 
 ## 🤝 贡献
 

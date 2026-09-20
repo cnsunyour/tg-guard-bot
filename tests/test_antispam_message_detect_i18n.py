@@ -1,6 +1,6 @@
 """antispam.py 消息检测 handler 遗漏文案 i18n 测试(3c10)。
 
-覆盖 check_and_handle_channel_as_sender 频道马甲警告(2 处)+
+覆盖 check_and_handle_channel_as_sender 频道马甲提示 +
 notify_activity_restriction 活跃度限制私聊通知。
 """
 
@@ -28,6 +28,8 @@ def _message(*, has_user: bool = True, channel_title: str | None = "SpamChan") -
     message.chat.id = -100
     message.answer = AsyncMock()
     message.delete = AsyncMock()
+    # MagicMock 属性默认 truthy，官方布尔字段须显式置 None 才不会误触发自动转发放行
+    message.is_automatic_forward = None
     if has_user:
         message.from_user = MagicMock(id=42, first_name="User", username="user")
     else:
@@ -40,70 +42,65 @@ def _message(*, has_user: bool = True, channel_title: str | None = "SpamChan") -
     return message
 
 
-# ===== check_and_handle_channel_as_sender: 频道马甲警告 =====
-async def test_channel_impersonation_user_warning_uses_catalog(mocker) -> None:
-    """有用户 → warning.user.message,{user}/{channel} 注入,channel escape。"""
+def _stub_channel_deps(mocker, localizer: MagicMock) -> AsyncMock:
+    """打桩频道马甲处置的外部依赖（判定为频道马甲、无关联频道），返回 warn_user mock。"""
+    mocker.patch.object(handler, "is_channel_as_sender", return_value=True)
+    mocker.patch.object(handler, "should_skip_sender", return_value=False)
+    mocker.patch.object(handler.GroupRepository, "get", new=AsyncMock(return_value=None))
+    mocker.patch.object(handler, "_get_linked_channel_id", new=AsyncMock(return_value=None))
+    mocker.patch.object(handler, "get_resolver")
+    handler.get_resolver.return_value.for_group = AsyncMock(return_value="zh-Hans")
+    mocker.patch.object(
+        handler,
+        "get_translator",
+        return_value=MagicMock(for_locale=MagicMock(return_value=localizer)),
+    )
+    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    return mocker.patch.object(handler.ModerationService, "warn_user", new=AsyncMock())
+
+
+# ===== check_and_handle_channel_as_sender: 频道马甲提示 =====
+async def test_channel_impersonation_notice_uses_catalog(mocker) -> None:
+    """频道马甲 → 删除 + notice.message({channel} escape）+ 自动删除，不记警告。"""
     localizer = _localizer()
     bot = AsyncMock(id=999)
     message = _message(has_user=True, channel_title="<x>&Co")
-
-    mocker.patch.object(handler, "is_channel_as_sender", return_value=True)
-    mocker.patch.object(handler, "should_skip_sender", return_value=False)
-    mocker.patch.object(handler.GroupRepository, "get", new=AsyncMock(return_value=None))
-    mocker.patch.object(handler, "get_resolver")
-    handler.get_resolver.return_value.for_group = AsyncMock(return_value="zh-Hans")
-    mocker.patch.object(
-        handler,
-        "get_translator",
-        return_value=MagicMock(for_locale=MagicMock(return_value=localizer)),
-    )
-    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
-    warn_user = mocker.patch.object(handler.ModerationService, "warn_user", new=AsyncMock())
+    warn_user = _stub_channel_deps(mocker, localizer)
 
     result = await handler.check_and_handle_channel_as_sender(message, bot)
 
     assert result is True
-    # warning.user.message 调用
-    warn_call = next(
+    message.delete.assert_awaited_once()
+    notice_call = next(
         c
         for c in localizer.t.call_args_list
-        if c.args == ("antispam.channel_impersonation.warning.user.message",)
+        if c.args == ("antispam.channel_impersonation.notice.message",)
     )
-    assert warn_call.kwargs["channel"] == "&lt;x&gt;&amp;Co"  # escape_html
-    # warn_user 记录
-    warn_user.assert_awaited_once()
-    # auto_delete 调用
+    assert notice_call.kwargs["channel"] == "&lt;x&gt;&amp;Co"  # escape_html
+    assert "user" not in notice_call.kwargs  # 不展示假用户
+    message.answer.assert_awaited_once()
     handler.auto_delete_message.assert_awaited()
+    # from 是 Bot API 兼容用的假用户（Channel_Bot），记警告只会错记到假用户名下
+    warn_user.assert_not_awaited()
 
 
-async def test_channel_impersonation_anonymous_warning_uses_catalog(mocker) -> None:
-    """无用户(匿名) → warning.anonymous.message,仅 {channel}。"""
+async def test_channel_impersonation_without_from_user_same_notice(mocker) -> None:
+    """无 from_user 走同一提示分支（旧版「匿名」分支已合并）。"""
     localizer = _localizer()
     bot = AsyncMock(id=999)
     message = _message(has_user=False, channel_title="AnonChan")
-
-    mocker.patch.object(handler, "is_channel_as_sender", return_value=True)
-    mocker.patch.object(handler, "should_skip_sender", return_value=False)
-    mocker.patch.object(handler.GroupRepository, "get", new=AsyncMock(return_value=None))
-    mocker.patch.object(handler, "get_resolver")
-    handler.get_resolver.return_value.for_group = AsyncMock(return_value="zh-Hans")
-    mocker.patch.object(
-        handler,
-        "get_translator",
-        return_value=MagicMock(for_locale=MagicMock(return_value=localizer)),
-    )
-    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    warn_user = _stub_channel_deps(mocker, localizer)
 
     result = await handler.check_and_handle_channel_as_sender(message, bot)
 
     assert result is True
-    anon_call = next(
+    notice_call = next(
         c
         for c in localizer.t.call_args_list
-        if c.args == ("antispam.channel_impersonation.warning.anonymous.message",)
+        if c.args == ("antispam.channel_impersonation.notice.message",)
     )
-    assert anon_call.kwargs["channel"] == "AnonChan"
-    # 无用户 → 不调用 warn_user(无 from_user)
+    assert notice_call.kwargs["channel"] == "AnonChan"
+    warn_user.assert_not_awaited()
 
 
 async def test_channel_impersonation_no_title_uses_unknown_label(mocker) -> None:
@@ -111,18 +108,7 @@ async def test_channel_impersonation_no_title_uses_unknown_label(mocker) -> None
     localizer = _localizer()
     bot = AsyncMock(id=999)
     message = _message(has_user=False, channel_title=None)
-
-    mocker.patch.object(handler, "is_channel_as_sender", return_value=True)
-    mocker.patch.object(handler, "should_skip_sender", return_value=False)
-    mocker.patch.object(handler.GroupRepository, "get", new=AsyncMock(return_value=None))
-    mocker.patch.object(handler, "get_resolver")
-    handler.get_resolver.return_value.for_group = AsyncMock(return_value="zh-Hans")
-    mocker.patch.object(
-        handler,
-        "get_translator",
-        return_value=MagicMock(for_locale=MagicMock(return_value=localizer)),
-    )
-    mocker.patch.object(handler, "auto_delete_message", new=AsyncMock())
+    _stub_channel_deps(mocker, localizer)
 
     await handler.check_and_handle_channel_as_sender(message, bot)
 
@@ -132,17 +118,29 @@ async def test_channel_impersonation_no_title_uses_unknown_label(mocker) -> None
         for c in localizer.t.call_args_list
         if c.args == ("antispam.channel_impersonation.unknown_channel.label",)
     )
-    # anonymous warning 的 channel 占位为 escape 后的 unknown label
+    # notice 的 channel 占位为 escape 后的 unknown label
     # (真实 label 无 HTML 字符 escape 不变;mock 的 <key> 含 <> 被 escape)
-    anon_call = next(
+    notice_call = next(
         c
         for c in localizer.t.call_args_list
-        if c.args == ("antispam.channel_impersonation.warning.anonymous.message",)
+        if c.args == ("antispam.channel_impersonation.notice.message",)
     )
     assert (
-        anon_call.kwargs["channel"]
+        notice_call.kwargs["channel"]
         == "&lt;antispam.channel_impersonation.unknown_channel.label&gt;"
     )
+
+
+async def test_channel_impersonation_delete_failure_still_notifies(mocker) -> None:
+    """删除失败（权限缺失）仍发提示，让管理员知道需人工处理。"""
+    localizer = _localizer()
+    bot = AsyncMock(id=999)
+    message = _message()
+    message.delete = AsyncMock(side_effect=RuntimeError("no rights"))
+    _stub_channel_deps(mocker, localizer)
+
+    assert await handler.check_and_handle_channel_as_sender(message, bot) is True
+    message.answer.assert_awaited_once()
 
 
 async def test_channel_impersonation_not_channel_returns_false(mocker) -> None:

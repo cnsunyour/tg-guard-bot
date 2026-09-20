@@ -93,8 +93,10 @@ def _render_moderation_error(
 # 系统警告 reason（bot 自动警告）的稳定 code → catalog key 映射。
 # 历史兼容：修复前直接写入 warnings.reason 的中文也映射，避免旧记录跨 locale 泄漏。
 _WARNING_REASON_CATALOG_KEYS: dict[str, str] = {
+    # 频道马甲：已不再记警告（from 是假用户），映射保留用于渲染历史记录
     "system:channel_impersonation": "moderation.warnings.system_reason.channel_impersonation.label",
     "使用频道马甲发言": "moderation.warnings.system_reason.channel_impersonation.label",
+    "system:external_reply": "moderation.warnings.system_reason.external_reply.label",
 }
 
 
