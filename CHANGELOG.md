@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.12.0] - 2026-09-21
 
 ### 新增功能
 
@@ -19,7 +19,8 @@
 
 ### 代码质量
 
-- `tests/test_ai_protocols.py` 新增 Jev 请求构造 / 端点变体 / 响应解析 / 概率边界 / Vision 拒绝 / 跨协议主备回退用例；`tests/test_config.py` 新增协议校验用例；`tests/test_antispam_render.py` 新增 `ai_category` 三语渲染用例
+- `tests/test_ai_protocols.py` 新增 Jev 请求构造 / 端点变体 / 响应解析 / 概率边界 / Vision 拒绝 / 跨协议主备回退 / 协议枚举与配置集合一致性 / `_process_result` details 合并回归用例；`tests/test_config.py` 新增协议校验用例；`tests/test_antispam_render.py` 新增 `ai_category` 三语全类别渲染用例
+- 移除 `spam_vote.py` 投票终局处 mypy 报告的冗余 cast（mypy 2.3 已能推断条件表达式为 Literal），`mypy src` 恢复零报错
 
 ## [1.11.1] - 2026-09-20
 

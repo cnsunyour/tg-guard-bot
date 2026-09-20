@@ -713,6 +713,7 @@ AI_SPAM_VISION_BACKUP_MODEL=claude-3-5-sonnet
 - [x] **v1.9.0**: 数据定时清理（spam_samples 负样本按训练比例裁剪 + audit_logs 保留期）、启动时恢复进行中的验证会话 timeout、批量删除改 deleteMessages 分批调用、项目文档交互图（架构/流程/活跃度三张，GitHub Pages 在线 + README 内嵌 SVG）
 - [x] **v1.10.0**: 垃圾待确认消息的群成员集体投票决策（按钮 / /spam /unspam 投票，达阈自动处置，管理员不在线不再积压）、超短消息不再计入活跃度、CI 全面加固
 - [x] **v1.11.x**: 跨聊天回复引流防护（Reply in Another Chat 结构信号检测，群开关可控）、AI 正样本入库延后到置信度调整之后、群组上下文完整送 AI、训练样本同文本去重（人工标注优先）；跨聊天回复改为直接删除 + 记警告（不再进入管理员复核）、反频道马甲不再向假用户记警告（自动转发放行 + 关联频道缓存查询）
+- [x] **v1.12.0**: AI 检测新增 TypeSafe Jev 决策模型协议 `typesafe_systemone`（不生成文本、直接返回垃圾概率与类别，约 500ms，兼容 TypeSafe 官方与 OpenRouter 端点，可作文本主服务商、LLM 作备份）
 
 ## 🤝 贡献
 
