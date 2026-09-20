@@ -52,6 +52,7 @@ _REQUIRED_REASON_PARAMS: dict[str, frozenset[str]] = {
     "embedding_similarity": frozenset({"similarity"}),
     "reply_relevant": frozenset({"similarity"}),
     "topic_consistent": frozenset({"similarity"}),
+    "ai_category": frozenset({"category"}),
 }
 
 # 数值参数 code → 参数名：confidence/similarity 为服务端 :.2f 格式化产物，
@@ -81,6 +82,7 @@ _KNOWN_REASON_CODES = frozenset(
         "reply_relevant",
         "topic_consistent",
         "external_reply",
+        "ai_category",
     }
 )
 
@@ -145,6 +147,19 @@ def _format_single_reason(localizer: BoundLocalizer, reason: str) -> str:
             "antispam.reason.suspicious_domain.label",
             domain=escape_html(params["domain"]),
         )
+
+    # ai_category（TypeSafe Jev 类别）：category 是子 code，二次映射为独立 label；
+    # 子 code 不在 catalog（协议侧新增类别或伪造 code 格式）时 escape 原样，不泄漏裸 key
+    if code == "ai_category":
+        category = params["category"]
+        category_key = f"antispam.reason.ai_category_type.{category}.label"
+        try:
+            category_label = localizer.t(category_key)
+            if category_label == category_key:
+                category_label = escape_html(category)
+        except KeyError:
+            category_label = escape_html(category)
+        return localizer.t("antispam.reason.ai_category.label", category=category_label)
 
     # 数值参数 code（ml_classifier/embedding_similarity/reply_relevant/topic_consistent）：
     # confidence/similarity 防御性 escape 后注入（与 rule_match/suspicious_domain 对齐）

@@ -179,3 +179,77 @@ def test_config_no_webapp_allows_empty_captcha_signature_key(monkeypatch):
 
     settings = Settings(_env_file=None)
     assert settings.captcha_signature_key == ""
+
+
+# ===== TypeSafe Jev（typesafe_systemone）协议校验 =====
+
+
+@pytest.mark.unit
+def test_config_accepts_typesafe_systemone_as_text_protocol(monkeypatch):
+    """typesafe_systemone 可作文本主/备协议；Vision 未启用时不受影响。"""
+    _captcha_env(monkeypatch, webapp_url=None, signature_key="")
+    monkeypatch.setenv("AI_SPAM_PROTOCOL", "TypeSafe_SystemOne")
+    monkeypatch.setenv("AI_SPAM_BACKUP_PROTOCOL", "typesafe_systemone")
+    monkeypatch.setenv("AI_SPAM_VISION_ENABLED", "false")
+
+    from src.core.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.ai_spam_protocol == "typesafe_systemone"
+    assert settings.ai_spam_backup_protocol == "typesafe_systemone"
+    # 留空继承到 Jev 本身合法，只有 Vision 启用时才拒绝
+    assert settings.vision_protocol_effective == "typesafe_systemone"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("env_name", ["AI_SPAM_VISION_PROTOCOL", "AI_SPAM_VISION_BACKUP_PROTOCOL"])
+def test_config_rejects_explicit_typesafe_vision_protocol(monkeypatch, env_name):
+    """Vision 协议字段显式填 Jev → 字段校验拒绝（不论 Vision 是否启用）。"""
+    _captcha_env(monkeypatch, webapp_url=None, signature_key="")
+    monkeypatch.setenv(env_name, "typesafe_systemone")
+
+    from src.core.config import Settings
+
+    with pytest.raises(ValidationError, match="Jev 仅支持纯文本"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.unit
+def test_config_rejects_typesafe_vision_inheritance_when_vision_enabled(monkeypatch):
+    """文本主协议 Jev + Vision 启用 + Vision 协议留空 → 启动拒绝，提示显式配置。"""
+    _captcha_env(monkeypatch, webapp_url=None, signature_key="")
+    monkeypatch.setenv("AI_SPAM_PROTOCOL", "typesafe_systemone")
+    monkeypatch.setenv("AI_SPAM_VISION_ENABLED", "true")
+
+    from src.core.config import Settings
+
+    with pytest.raises(ValidationError, match="AI_SPAM_VISION_PROTOCOL"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.unit
+def test_config_rejects_typesafe_vision_backup_inheritance_when_enabled(monkeypatch):
+    """文本备协议 Jev + Vision 主备均启用 + Vision 备协议留空 → 启动拒绝。"""
+    _captcha_env(monkeypatch, webapp_url=None, signature_key="")
+    monkeypatch.setenv("AI_SPAM_BACKUP_PROTOCOL", "typesafe_systemone")
+    monkeypatch.setenv("AI_SPAM_VISION_ENABLED", "true")
+    monkeypatch.setenv("AI_SPAM_VISION_BACKUP_ENABLED", "true")
+
+    from src.core.config import Settings
+
+    with pytest.raises(ValidationError, match="AI_SPAM_VISION_BACKUP_PROTOCOL"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.unit
+def test_config_typesafe_text_with_explicit_vision_protocol_starts(monkeypatch):
+    """文本 Jev + Vision 显式指定 openai_chat → 正常启动。"""
+    _captcha_env(monkeypatch, webapp_url=None, signature_key="")
+    monkeypatch.setenv("AI_SPAM_PROTOCOL", "typesafe_systemone")
+    monkeypatch.setenv("AI_SPAM_VISION_ENABLED", "true")
+    monkeypatch.setenv("AI_SPAM_VISION_PROTOCOL", "openai_chat")
+
+    from src.core.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.vision_protocol_effective == "openai_chat"

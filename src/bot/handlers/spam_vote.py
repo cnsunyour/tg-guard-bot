@@ -347,15 +347,9 @@ async def finalize_vote_if_ready(
             if review_state is not None:
                 await consume_review_state(chat_id, orig_msg_id, review_state.review_id)
 
+        verdict: Literal["spam", "ham"] = "spam" if direction == "up" else "ham"
         result_text = await _finalize_vote_outcome(
-            bot,
-            chat_id,
-            orig_msg_id,
-            consumed,
-            operator_id,
-            cast("Literal['spam', 'ham']", "spam" if direction == "up" else "ham"),
-            up,
-            down,
+            bot, chat_id, orig_msg_id, consumed, operator_id, verdict, up, down
         )
 
     if prompt is not None:

@@ -35,6 +35,7 @@ from src.bot.handlers.antispam_render import (
 )
 from src.core.i18n.translator import BoundLocalizer, Translator
 from src.core.utils import escape_html
+from src.ml.ai_contracts import SYSTEMONE_CATEGORY_CODES
 from src.services.spam_review import SpamMessageType, SpamReviewState
 
 pytestmark = pytest.mark.unit
@@ -164,6 +165,31 @@ def test_format_reasons_legacy_format_escapes() -> None:
     assert _format_reasons(localizer, ("<b>rule</b>", 'vision:"qr"&😀')) == (
         "&lt;b&gt;rule&lt;/b&gt;、vision:&quot;qr&quot;&amp;😀"
     )
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+@pytest.mark.parametrize("category", SYSTEMONE_CATEGORY_CODES)
+def test_format_reasons_ai_category_renders_nested_label(locale: str, category: str) -> None:
+    """Jev 的 ai_category code：全部类别子 code 在三语 catalog 均有覆盖，按 locale 二次映射。"""
+    localizer = _localizer(locale)
+    rendered = _format_reasons(localizer, (f"ai_category:category={category}",))
+    category_key = f"antispam.reason.ai_category_type.{category}.label"
+    expected = localizer.t("antispam.reason.ai_category.label", category=localizer.t(category_key))
+    assert rendered == expected
+    assert category_key not in rendered  # strict 缺 key 会抛，这里再钉住不泄漏裸 key
+    _assert_no_placeholders(rendered)
+
+
+def test_format_reasons_ai_category_unknown_subcode_escapes() -> None:
+    """未知类别子 code（协议侧新增 / 伪造）→ escape 原样嵌入，不泄漏裸 catalog key。"""
+    rendered = _format_reasons(_localizer(), ("ai_category:category=<new>",))
+    assert "&lt;new&gt;" in rendered
+    assert "antispam.reason" not in rendered
+
+
+def test_format_reasons_ai_category_missing_param_keeps_original() -> None:
+    """缺 category 参数按旧格式 escape 原样显示（与其它带参 code 一致）。"""
+    assert _format_reasons(_localizer(), ("ai_category",)) == "ai_category"
 
 
 @pytest.mark.parametrize("locale", _LOCALES)

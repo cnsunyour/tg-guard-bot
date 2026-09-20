@@ -40,6 +40,8 @@ class ReasonCode(StrEnum):
     all_detectors_failed = "all_detectors_failed"
     reply_relevant = "reply_relevant"
     topic_consistent = "topic_consistent"
+    # AI 决策模型（TypeSafe Jev）给出的垃圾类别，参数 category ∈ SYSTEMONE_CATEGORY_CODES
+    ai_category = "ai_category"
 
 
 class AnalysisResult(TypedDict):
