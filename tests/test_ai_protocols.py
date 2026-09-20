@@ -1,9 +1,9 @@
 """AI 多协议 adapter 与 provider 集成测试。
 
-覆盖三种协议（OpenAI Chat / OpenAI Responses / Anthropic Messages）的请求构造、
-响应解析、终止状态（refusal/token 截断）处理，以及跨协议主备回退。使用
-``httpx.MockTransport`` 驱动真实 ``AsyncClient``，在 handler 中断言 method、URL、
-认证 header 和 JSON body，不引入额外 mock 依赖。
+覆盖四种协议（OpenAI Chat / OpenAI Responses / Anthropic Messages / TypeSafe
+System One）的请求构造、响应解析、终止状态（refusal/token 截断）处理，以及
+跨协议主备回退。使用 ``httpx.MockTransport`` 驱动真实 ``AsyncClient``，在
+handler 中断言 method、URL、认证 header 和 JSON body，不引入额外 mock 依赖。
 """
 
 import json
@@ -13,7 +13,11 @@ import httpx
 import pytest
 
 from src.core.utils import utcnow
-from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA
+from src.ml.ai_contracts import (
+    SYSTEMONE_TEXT_QUESTIONS,
+    TEXT_RESULT_SCHEMA,
+    VISION_RESULT_SCHEMA,
+)
 from src.ml.ai_detector import (
     AIServiceConfig,
     AIServiceProvider,
@@ -28,6 +32,7 @@ from src.ml.ai_protocols import (
     ResponseTerminatedError,
     ResponseTermination,
     StructuredOutputMode,
+    TypeSafeSystemOneAdapter,
     create_protocol_adapter,
 )
 
@@ -41,6 +46,22 @@ _VISION_RESULT = {
     "extracted_text": "promo",
 }
 _PNG_B64 = "aW1hZ2U="  # "image" 的 base64
+# Jev 响应样例（含 OpenRouter 额外透传的 id / provider / usage.cost）
+_SYSTEMONE_RESPONSE: dict[str, Any] = {
+    "id": "gen-dec-1",
+    "provider": "TypeSafe",
+    "model": "jev-1.13.0",
+    "answers": {
+        "is_spam": {"type": "noul", "noul": 0.98},
+        "category": {
+            "type": "choice",
+            "choice": "scam",
+            "confidence": 0.97,
+            "probabilities": {"scam": 0.97, "normal": 0.03},
+        },
+    },
+    "usage": {"input_tokens": 426, "output_tokens": 73, "cost": 0.00002},
+}
 
 
 def _config(
@@ -382,6 +403,239 @@ def test_anthropic_url_accepts_versioned_and_unversioned_base(api_base: str, exp
         anthropic_output_mode="native",
     )
     assert adapter.build_url(api_base) == expected
+
+
+# ===== TypeSafe System One（Jev）=====
+
+
+async def test_typesafe_systemone_text_request_and_response() -> None:
+    """Jev：请求体 {model, state, questions}，无 prompt/schema/token 字段；
+    响应 noul → confidence、choice → 稳定 reason code，附加诊断 details。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "https://api.typesafe.ai/v1/systemone"
+        assert request.headers["authorization"] == "Bearer test-key"
+        body = _request_json(request)
+        assert body == {
+            "model": "jev-latest",
+            "state": "hello",
+            "questions": SYSTEMONE_TEXT_QUESTIONS,
+        }
+        return httpx.Response(200, json=_SYSTEMONE_RESPONSE)
+
+    provider = _provider(
+        "primary",
+        _config(
+            protocol="typesafe_systemone",
+            api_base="https://api.typesafe.ai",
+            model="jev-latest",
+            structured_output_mode="auto",
+        ),
+    )
+    _attach_mock_transport(provider, handler)
+    try:
+        raw = await provider._call_api("hello")
+        assert raw["is_spam"] is True
+        assert raw["confidence"] == 0.98
+        assert raw["reason"] == "ai_category:category=scam"
+        assert raw["details"]["category"] == "scam"
+        assert raw["details"]["category_confidence"] == 0.97
+        assert raw["details"]["category_probabilities"] == {"scam": 0.97, "normal": 0.03}
+        assert raw["details"]["served_model"] == "jev-1.13.0"
+        assert raw["details"]["usage"]["cost"] == 0.00002
+
+        processed = provider._process_result(raw)
+        assert processed.is_spam is True
+        assert processed.confidence == 0.98
+        assert processed.reasons == ["ai_category:category=scam"]
+        # 协议侧 details 并入，但基础字段以 provider 为准（model 仍是配置值）
+        assert processed.details["served_model"] == "jev-1.13.0"
+        assert processed.details["model"] == "jev-latest"
+        assert processed.details["raw_is_spam"] is True
+        assert processed.details["threshold"] == 0.8
+    finally:
+        await provider.close()
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        ("https://api.typesafe.ai", "https://api.typesafe.ai/v1/systemone"),
+        ("https://api.typesafe.ai/", "https://api.typesafe.ai/v1/systemone"),
+        ("https://api.typesafe.ai/v1", "https://api.typesafe.ai/v1/systemone"),
+        ("https://openrouter.ai/api", "https://openrouter.ai/api/v1/systemone"),
+        ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/systemone"),
+        ("https://openrouter.ai/api/v1/systemone", "https://openrouter.ai/api/v1/systemone"),
+        ("https://openrouter.ai/api/alpha/decisions", "https://openrouter.ai/api/alpha/decisions"),
+        ("https://gateway.example/jev", "https://gateway.example/jev/v1/systemone"),
+        # 尾斜杠 / 大小写 / query string（网关路由参数须保留）/ fragment（丢弃）
+        ("https://openrouter.ai/api/alpha/decisions/", "https://openrouter.ai/api/alpha/decisions"),
+        ("https://openrouter.ai/API/V1/SystemOne", "https://openrouter.ai/API/V1/SystemOne"),
+        (
+            "https://gateway.example/api/v1?tenant=a",
+            "https://gateway.example/api/v1/systemone?tenant=a",
+        ),
+        ("https://api.typesafe.ai/#frag", "https://api.typesafe.ai/v1/systemone"),
+    ],
+)
+def test_typesafe_systemone_url_variants(api_base: str, expected: str) -> None:
+    """兼容 TypeSafe 官方、OpenRouter 两条路径与自建网关前缀。"""
+    adapter = TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
+    assert adapter.build_url(api_base) == expected
+
+
+def test_typesafe_systemone_url_rejects_invalid_base() -> None:
+    adapter = TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
+    with pytest.raises(ValueError, match="API Base 无效"):
+        adapter.build_url("api.typesafe.ai")
+
+
+def _systemone_response(noul: float, category: str = "normal") -> dict[str, Any]:
+    return {
+        "answers": {
+            "is_spam": {"type": "noul", "noul": noul},
+            "category": {
+                "type": "choice",
+                "choice": category,
+                "confidence": 0.9,
+                "probabilities": {category: 0.9},
+            },
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("noul", "expected"), [(0.49, False), (0.5, True), (0.0, False), (1.0, True)]
+)
+def test_typesafe_systemone_noul_boundary(noul: float, expected: bool) -> None:
+    """noul >= 0.5 为协议层原始判定；confidence 原样透传供 threshold 复判。"""
+    adapter = TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
+    parsed = adapter.parse_response(_systemone_response(noul))
+    assert parsed.termination is ResponseTermination.COMPLETED
+    assert parsed.result is not None
+    assert parsed.result["is_spam"] is expected
+    assert parsed.result["confidence"] == noul
+
+
+@pytest.mark.parametrize(
+    "response_json",
+    [
+        {},
+        {"answers": {}},
+        {"answers": {"is_spam": {"type": "noul", "noul": 0.9}}},
+        {"answers": {"is_spam": {"type": "choice", "noul": 0.9}}},
+        _systemone_response(1.5),
+        _systemone_response(0.9, category="unknown_bucket"),
+        {
+            "answers": {
+                **_systemone_response(0.9)["answers"],
+                "is_spam": {"type": "noul", "noul": True},
+            }
+        },
+        {
+            "answers": {
+                **_systemone_response(0.9)["answers"],
+                "is_spam": {"type": "noul", "noul": "0.9"},
+            }
+        },
+        {
+            "answers": {
+                **_systemone_response(0.9)["answers"],
+                "is_spam": {"type": "noul", "noul": float("nan")},
+            }
+        },
+        {
+            "answers": {
+                "is_spam": {"type": "noul", "noul": 0.9},
+                "category": {"type": "choice", "choice": "scam", "confidence": True},
+            }
+        },
+    ],
+)
+def test_typesafe_systemone_parser_rejects_malformed_answers(response_json: dict[str, Any]) -> None:
+    """字段缺失 / 类型错误 / 概率越界 / 未知类别 → ValueError（走正常重试链路）。"""
+    adapter = TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
+    with pytest.raises(ValueError):
+        adapter.parse_response(response_json)
+
+
+def test_typesafe_systemone_factory_forces_strict_and_ignores_anthropic_mode() -> None:
+    """任意 structured 配置下都得到 strict 的 Jev adapter；anthropic_output_mode 完全不解析。"""
+    for structured in ("auto", "strict", "legacy"):
+        adapter = create_protocol_adapter(
+            protocol="typesafe_systemone",
+            model="jev-latest",
+            structured_output_mode=structured,
+            anthropic_output_mode="not-a-real-mode",
+        )
+        assert isinstance(adapter, TypeSafeSystemOneAdapter)
+        assert adapter.structured_output_mode is StructuredOutputMode.STRICT
+
+
+def test_config_protocol_sets_match_protocol_enum() -> None:
+    """config 层协议集合与 AIProtocol 枚举双份维护，用测试钉住不漂移。"""
+    from src.core.config import _TEXT_AI_PROTOCOLS, _TEXT_ONLY_AI_PROTOCOL, _VISION_AI_PROTOCOLS
+    from src.ml.ai_protocols import AIProtocol
+
+    assert {member.value for member in AIProtocol} == _TEXT_AI_PROTOCOLS
+    assert AIProtocol.TYPESAFE_SYSTEMONE.value == _TEXT_ONLY_AI_PROTOCOL
+    assert _TEXT_AI_PROTOCOLS - {_TEXT_ONLY_AI_PROTOCOL} == _VISION_AI_PROTOCOLS
+
+
+@pytest.mark.parametrize(
+    "extra_details",
+    [None, "not-a-dict", ["list"], {"model": "spoofed", "raw_is_spam": False, "threshold": 0.1}],
+)
+def test_process_result_details_merge_keeps_provider_fields_authoritative(
+    extra_details: Any,
+) -> None:
+    """LLM 路径回归：无 details 或非 dict 时结构不变；dict 时并入但不得覆盖 provider 基础字段。"""
+    provider = _provider(
+        "primary", _config(protocol="openai_chat", api_base="https://api.openai.com/v1")
+    )
+    raw: dict[str, Any] = {"is_spam": True, "confidence": 0.95, "reason": "ad"}
+    if extra_details is not None:
+        raw["details"] = extra_details
+    processed = provider._process_result(raw)
+    assert processed.details["model"] == "test-model"
+    assert processed.details["raw_is_spam"] is True
+    assert processed.details["raw_confidence"] == 0.95
+    assert processed.details["threshold"] == 0.8
+    assert set(processed.details) == {"raw_is_spam", "raw_confidence", "threshold", "model"}
+
+
+def test_typesafe_systemone_rejects_vision_payload() -> None:
+    adapter = TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
+    with pytest.raises(ValueError, match="不支持 Vision"):
+        adapter.build_vision_payload(
+            "jev-latest", "system", "text", _PNG_B64, "image/png", "low", VISION_RESULT_SCHEMA, 512
+        )
+
+
+async def test_typesafe_systemone_context_detection_passes_formatted_state() -> None:
+    """上下文检测：format_context_for_ai 的分节字符串原样作 state。"""
+    context_text = "【对话回复链】\nA: 手机壳哪买\n\n【待检测消息】\n淘宝搜 xx"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _request_json(request)
+        assert body["state"] == context_text
+        return httpx.Response(200, json=_systemone_response(0.1))
+
+    provider = _provider(
+        "primary",
+        _config(
+            protocol="typesafe_systemone", api_base="https://api.typesafe.ai", model="jev-latest"
+        ),
+    )
+    _attach_mock_transport(provider, handler)
+    try:
+        result = await provider.detect(context_text, use_context_prompt=True)
+    finally:
+        await provider.close()
+    assert result.is_spam is False
+    assert result.confidence == 0.1
+    assert result.reasons == ["ai_category:category=normal"]
 
 
 # ===== 终止响应解析（refusal / max_tokens / content_filter）=====
@@ -765,3 +1019,55 @@ async def test_detect_with_context_falls_back_on_termination() -> None:
     assert primary_calls == 1
     assert backup_calls == 1
     assert detector._stats["primary"].failure_count == 0
+
+
+async def test_typesafe_systemone_backup_fallback_across_protocols() -> None:
+    """主 OpenAI Chat 5xx 耗尽重试后回退到 Jev 备份，验证异构主备链路与 reason code 透传。"""
+    primary_calls = 0
+    backup_calls = 0
+
+    def primary_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal primary_calls
+        primary_calls += 1
+        return httpx.Response(503, json={"error": "primary unavailable"})
+
+    def backup_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal backup_calls
+        backup_calls += 1
+        assert str(request.url) == "https://openrouter.ai/api/v1/systemone"
+        assert _request_json(request)["state"] == "spam"
+        return httpx.Response(200, json=_SYSTEMONE_RESPONSE)
+
+    primary = _provider(
+        "primary",
+        _config(protocol="openai_chat", api_base="https://api.openai.com/v1", max_retries=0),
+    )
+    backup = _provider(
+        "backup",
+        _config(
+            protocol="typesafe_systemone",
+            api_base="https://openrouter.ai/api/v1",
+            model="typesafe/jev-1.13",
+            structured_output_mode="auto",
+            max_retries=0,
+        ),
+    )
+    _attach_mock_transport(primary, primary_handler)
+    _attach_mock_transport(backup, backup_handler)
+
+    detector = HybridAIDetector()
+    detector.primary = primary
+    detector.backup = backup
+    try:
+        result = await detector.detect("spam")
+    finally:
+        await primary.close()
+        await backup.close()
+
+    assert result["is_spam"] is True
+    assert result["confidence"] == 0.98
+    assert result["reasons"] == ["ai_category:category=scam"]
+    assert result["details"]["provider"] == "backup"
+    assert result["details"]["served_model"] == "jev-1.13.0"
+    assert primary_calls == 1
+    assert backup_calls == 1

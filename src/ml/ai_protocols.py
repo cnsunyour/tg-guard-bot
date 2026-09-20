@@ -1,8 +1,9 @@
 """AI 检测 HTTP 协议适配层。
 
-将 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三种
-协议的差异（端点、认证、请求体、响应结构、结构化输出承载方式）收敛到
-adapter，业务层（``ai_detector.py``）只持有中立配置和统一结果类型。
+将 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三种 LLM
+协议与 TypeSafe System One（Jev 决策模型）的差异（端点、认证、请求体、响应
+结构、结构化输出承载方式）收敛到 adapter，业务层（``ai_detector.py``）只持有
+中立配置和统一结果类型。
 
 核心抽象
 --------
@@ -22,16 +23,29 @@ Anthropic 承载方式（``anthropic_output_mode``）
 - ``native``：``output_config.format``（Claude 4.5+ 原生结构化输出，GA 无需 beta header）
 - ``tool``：tool_use + tool_choice 强制（全模型兼容）
 - ``auto``：由 factory 按模型 allowlist 选择
+
+TypeSafe System One（``typesafe_systemone``）
+--------------------------------------------
+Jev 不是语言模型：输入 ``state`` + typed questions，一次并行返回每问的概率，
+不生成文本、无采样参数、无 refusal / 截断等终止态、仅支持纯文本。结构化输出
+由 questions 本身保证，``structured_output_mode`` 恒为 strict，
+``anthropic_output_mode`` 被忽略。同一线协议也由 OpenRouter 提供
+（``/api/v1/systemone`` 与 ``/api/alpha/decisions`` 两条路径）。
 """
 
 import json
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from src.ml.ai_contracts import JSONSchema
+from src.ml.ai_contracts import (
+    SYSTEMONE_CATEGORY_CODES,
+    SYSTEMONE_TEXT_QUESTIONS,
+    JSONSchema,
+)
 
 
 class AIProtocol(StrEnum):
@@ -40,6 +54,7 @@ class AIProtocol(StrEnum):
     OPENAI_CHAT = "openai_chat"
     OPENAI_RESPONSES = "openai_responses"
     ANTHROPIC_MESSAGES = "anthropic_messages"
+    TYPESAFE_SYSTEMONE = "typesafe_systemone"
 
 
 class StructuredOutputMode(StrEnum):
@@ -651,6 +666,153 @@ class AnthropicMessagesAdapter(ProtocolAdapter):
         raise ValueError("Anthropic 响应缺少 text block")
 
 
+# System One 请求路径末段：命中即视为用户给了完整 endpoint，原样使用
+_SYSTEMONE_ENDPOINT_SEGMENTS: Final[frozenset[str]] = frozenset({"systemone", "decisions"})
+
+# Jev 是二元概率：noul >= 0.5 视为模型原始判定为垃圾（provider threshold 在此之上再过滤）
+_SYSTEMONE_SPAM_PROBABILITY_FLOOR: Final[float] = 0.5
+
+
+class TypeSafeSystemOneAdapter(ProtocolAdapter):
+    """TypeSafe System One（Jev）协议。
+
+    请求体 ``{model, state, questions}``：``state`` 直接取待检测文本（含上下文
+    检测时由 ``format_context_for_ai`` 拼好的分节字符串），``questions`` 固定为
+    :data:`SYSTEMONE_TEXT_QUESTIONS`；system prompt / JSON Schema /
+    max_output_tokens 对 Jev 无意义，按接口签名接收后忽略。
+
+    响应 ``answers.is_spam.noul`` 即"是垃圾"的概率，直接作 confidence；
+    ``answers.category.choice`` 编码为稳定 reason code ``ai_category:category=<code>``
+    （展示层按 locale 渲染，与仓库 i18n 守则一致）。Jev 不生成文本，故无
+    refusal / 截断终止态：HTTP 200 即 COMPLETED，字段缺失按格式错误抛
+    ``ValueError`` 走正常重试链路。
+
+    端点兼容 TypeSafe 官方与 OpenRouter 两条路径，见 :meth:`build_url`。
+    """
+
+    def build_url(self, api_base: str) -> str:
+        """按 base path 末段构造 endpoint。
+
+        - 末段是 ``systemone`` / ``decisions``：用户已给完整 endpoint，原样使用
+          （``https://openrouter.ai/api/alpha/decisions``）
+        - 末段是 ``v1``：追加 ``/systemone``（``https://api.typesafe.ai/v1``、
+          ``https://openrouter.ai/api/v1``）
+        - 其它：追加 ``/v1/systemone``（``https://api.typesafe.ai``、
+          ``https://openrouter.ai/api``）
+
+        base 自带的 query string 原样保留（网关路由参数），fragment 丢弃。
+        """
+        parts = urlsplit(api_base.strip())
+        if not parts.scheme or not parts.netloc:
+            raise ValueError(f"TypeSafe System One API Base 无效: {api_base}")
+        path = parts.path.rstrip("/")
+        last_segment = path.rsplit("/", 1)[-1].lower()
+        if last_segment in _SYSTEMONE_ENDPOINT_SEGMENTS:
+            endpoint = path
+        elif last_segment == "v1":
+            endpoint = f"{path}/systemone"
+        else:
+            endpoint = f"{path}/v1/systemone"
+        return urlunsplit((parts.scheme, parts.netloc, endpoint, parts.query, ""))
+
+    def build_headers(self, api_key: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def build_text_payload(
+        self,
+        model: str,
+        system_prompt: str,
+        user_text: str,
+        schema: JSONSchema,
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
+        # questions 常量只读，序列化前不会被修改，无需拷贝
+        return {
+            "model": model,
+            "state": user_text,
+            "questions": SYSTEMONE_TEXT_QUESTIONS,
+        }
+
+    def build_vision_payload(
+        self,
+        model: str,
+        system_prompt: str,
+        user_text: str,
+        image_b64: str,
+        mime: str,
+        detail: str,
+        schema: JSONSchema,
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
+        # 配置层已拒绝把 typesafe_systemone 用作 Vision 协议，此处是最后防线
+        raise ValueError("TypeSafe System One（Jev）仅支持纯文本，不支持 Vision")
+
+    @staticmethod
+    def _read_probability(value: Any, field_name: str) -> float:
+        """读取 [0, 1] 概率字段。
+
+        Jev 是严格结构化协议，概率只接受 JSON number：bool（是 int 子类）、
+        数字字符串、非有限数、越界均视为响应损坏，抛 ValueError 走重试链路。
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Jev 响应字段 {field_name} 不是数字: {value!r}")
+        probability = float(value)
+        if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise ValueError(f"Jev 响应字段 {field_name} 超出 [0, 1]: {probability}")
+        return probability
+
+    def parse_response(self, response_json: dict[str, Any]) -> ProtocolResponse:
+        answers = response_json.get("answers")
+        if not isinstance(answers, dict):
+            raise ValueError("Jev 响应格式错误：缺少 answers")
+
+        is_spam_answer = answers.get("is_spam")
+        if not isinstance(is_spam_answer, dict) or is_spam_answer.get("type") != "noul":
+            raise ValueError("Jev 响应格式错误：缺少 answers.is_spam（noul）")
+        spam_probability = self._read_probability(
+            is_spam_answer.get("noul"), "answers.is_spam.noul"
+        )
+
+        category_answer = answers.get("category")
+        if not isinstance(category_answer, dict) or category_answer.get("type") != "choice":
+            raise ValueError("Jev 响应格式错误：缺少 answers.category（choice）")
+        category = category_answer.get("choice")
+        if not isinstance(category, str) or category not in SYSTEMONE_CATEGORY_CODES:
+            raise ValueError(f"Jev 响应 category 不在预期选项内: {category!r}")
+        category_confidence = self._read_probability(
+            category_answer.get("confidence"), "answers.category.confidence"
+        )
+
+        # 诊断元数据：类别概率分布、实际服务版本（jev-latest 别名会漂移）、用量。
+        # OpenRouter 额外返回 id / provider / usage.cost，仅透传 usage
+        details: dict[str, Any] = {
+            "category": category,
+            "category_confidence": category_confidence,
+        }
+        probabilities = category_answer.get("probabilities")
+        if isinstance(probabilities, dict):
+            details["category_probabilities"] = dict(probabilities)
+        served_model = response_json.get("model")
+        if isinstance(served_model, str) and served_model:
+            details["served_model"] = served_model
+        usage = response_json.get("usage")
+        if isinstance(usage, dict):
+            details["usage"] = dict(usage)
+
+        return ProtocolResponse(
+            termination=ResponseTermination.COMPLETED,
+            result={
+                "is_spam": spam_probability >= _SYSTEMONE_SPAM_PROBABILITY_FLOOR,
+                "confidence": spam_probability,
+                "reason": f"ai_category:category={category}",
+                "details": details,
+            },
+        )
+
+
 def _supports_anthropic_native(model: str) -> bool:
     """模型是否在 Anthropic 原生结构化输出 allowlist 内。
 
@@ -674,12 +836,22 @@ def create_protocol_adapter(
       避免旧模型 gpt-3.5/gpt-4-turbo 升级后 400）；openai_responses 升级 strict；
       anthropic_messages 支持 native 的模型升级 strict，旧模型降级 legacy
     - ``anthropic_output_mode=auto``：模型在 native allowlist 用 native，否则 tool
+    - ``typesafe_systemone``：输出由 typed questions 天然结构化，不存在 legacy 解析
+      路径，无论配置为何都按 strict 构造；``anthropic_output_mode`` 被忽略
 
     解析后的 adapter 是稳定的（配置不变则行为不变），provider 可长期持有。
     """
     try:
         protocol_value = AIProtocol(protocol)
         structured_value = StructuredOutputMode(structured_output_mode)
+    except ValueError as error:
+        raise ValueError(f"AI 协议配置无效: {error}") from error
+
+    # Jev 与 anthropic_output_mode 无关，在解析该字段前返回，做到真正忽略
+    if protocol_value is AIProtocol.TYPESAFE_SYSTEMONE:
+        return TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
+
+    try:
         anthropic_value = AnthropicOutputMode(anthropic_output_mode)
     except ValueError as error:
         raise ValueError(f"AI 协议配置无效: {error}") from error

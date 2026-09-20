@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 新增功能
+
+#### AI 检测新增 TypeSafe Jev 决策模型协议（`typesafe_systemone`）🎯
+- 在 OpenAI Chat / OpenAI Responses / Anthropic Messages 之外新增第 4 种协议，`AI_SPAM_PROTOCOL` / `AI_SPAM_BACKUP_PROTOCOL` 可自由选择、主备可异构（如 Jev 主 + LLM 备）
+- Jev 是 System One 决策模型：输入文本与 typed questions，一次并行返回「是垃圾」概率（直接作 confidence）与类别，不生成文本。2026-09-20 本地 31 条中文群样本实测：@0.8 阈值与 DeepSeek 判定完全一致，延迟中位数约 500ms（同批 DeepSeek 约 3s，尾部达 100s）；官方定价 $0.042/M 输入 tokens、输出免费
+- 端点同时兼容 TypeSafe 官方（`https://api.typesafe.ai`）与 OpenRouter（`https://openrouter.ai/api/v1` 自动补 `/systemone`，或直接填 `/api/alpha/decisions` 完整路径）
+- 检测原因以稳定 code `ai_category:category=<advertising|gambling|adult|scam|traffic|normal>` 持久化，展示层按群 locale 渲染（新增三语 catalog `antispam.reason.ai_category*`），与 i18n 守则一致
+- 上下文检测复用 `format_context_for_ai` 分节字符串作 state，Jev instructions 明确只对【待检测消息】判定并结合其余分节
+- Jev 仅支持文本：Vision 协议字段显式填 `typesafe_systemone` 或留空继承到它且 Vision 已启用时，启动即拒绝并提示显式配置
+
+### 代码质量
+
+- `tests/test_ai_protocols.py` 新增 Jev 请求构造 / 端点变体 / 响应解析 / 概率边界 / Vision 拒绝 / 跨协议主备回退用例；`tests/test_config.py` 新增协议校验用例；`tests/test_antispam_render.py` 新增 `ai_category` 三语渲染用例
+
 ## [1.11.1] - 2026-09-20
 
 ### Bug 修复

@@ -3,6 +3,12 @@
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# AI 检测协议集合（值与 src/ml/ai_protocols.AIProtocol 对齐；此处不 import 以免
+# 配置模块反向依赖 ml 包）。Jev 决策模型仅支持纯文本，不能作 Vision 协议
+_TEXT_ONLY_AI_PROTOCOL = "typesafe_systemone"
+_VISION_AI_PROTOCOLS = frozenset({"openai_chat", "openai_responses", "anthropic_messages"})
+_TEXT_AI_PROTOCOLS = _VISION_AI_PROTOCOLS | {_TEXT_ONLY_AI_PROTOCOL}
+
 
 class Settings(BaseSettings):
     """应用配置"""
@@ -104,7 +110,10 @@ class Settings(BaseSettings):
     ai_spam_model: str = Field(default="gpt-4o-mini", description="模型名称")
     ai_spam_protocol: str = Field(
         default="openai_chat",
-        description="文本主服务商 HTTP 协议：openai_chat / openai_responses / anthropic_messages",
+        description=(
+            "文本主服务商 HTTP 协议：openai_chat / openai_responses / anthropic_messages / "
+            "typesafe_systemone（TypeSafe Jev 决策模型，仅文本）"
+        ),
     )
     ai_spam_structured_output_mode: str = Field(
         default="auto",
@@ -151,7 +160,10 @@ class Settings(BaseSettings):
     ai_spam_backup_model: str = Field(default="gpt-4o-mini", description="备份模型名称")
     ai_spam_backup_protocol: str = Field(
         default="openai_chat",
-        description="文本备服务商 HTTP 协议：openai_chat / openai_responses / anthropic_messages",
+        description=(
+            "文本备服务商 HTTP 协议：openai_chat / openai_responses / anthropic_messages / "
+            "typesafe_systemone"
+        ),
     )
     ai_spam_backup_structured_output_mode: str = Field(
         default="auto", description="文本备结构化输出策略：auto / strict / legacy"
@@ -477,9 +489,8 @@ class Settings(BaseSettings):
     def validate_ai_protocol(cls, v: str) -> str:
         """校验文本 provider 的 HTTP 协议。"""
         normalized = v.strip().lower()
-        allowed = {"openai_chat", "openai_responses", "anthropic_messages"}
-        if normalized not in allowed:
-            raise ValueError(f"AI protocol 必须是 {sorted(allowed)} 之一，当前: {v}")
+        if normalized not in _TEXT_AI_PROTOCOLS:
+            raise ValueError(f"AI protocol 必须是 {sorted(_TEXT_AI_PROTOCOLS)} 之一，当前: {v}")
         return normalized
 
     @field_validator("ai_spam_vision_protocol", "ai_spam_vision_backup_protocol", mode="after")
@@ -489,9 +500,14 @@ class Settings(BaseSettings):
         normalized = v.strip().lower()
         if not normalized:
             return ""
-        allowed = {"openai_chat", "openai_responses", "anthropic_messages"}
-        if normalized not in allowed:
-            raise ValueError(f"Vision AI protocol 必须是 {sorted(allowed)} 之一，当前: {v}")
+        if normalized == _TEXT_ONLY_AI_PROTOCOL:
+            raise ValueError(
+                f"Vision AI protocol 不支持 {_TEXT_ONLY_AI_PROTOCOL}：Jev 仅支持纯文本，当前: {v}"
+            )
+        if normalized not in _VISION_AI_PROTOCOLS:
+            raise ValueError(
+                f"Vision AI protocol 必须是 {sorted(_VISION_AI_PROTOCOLS)} 之一，当前: {v}"
+            )
         return normalized
 
     @field_validator(
@@ -617,6 +633,27 @@ class Settings(BaseSettings):
                 "请在 .env 文件中设置 CAPTCHA_SIGNATURE_KEY\n"
                 "生成方法：openssl rand -hex 32"
             )
+
+        # Vision 协议留空时继承文本协议；Jev 仅支持纯文本，继承到它会在首次图片
+        # 检测时才失败，故只要 Vision 已启用就在启动期拒绝，要求显式配置 Vision 协议。
+        # 仅文本使用 Jev、Vision 未启用的最简配置不受影响
+        if self.ai_spam_vision_enabled:
+            if self.vision_protocol_effective == _TEXT_ONLY_AI_PROTOCOL:
+                raise ValueError(
+                    f"Vision 主协议（留空继承 AI_SPAM_PROTOCOL）解析为 {_TEXT_ONLY_AI_PROTOCOL}，"
+                    "但 Jev 仅支持纯文本；请显式设置 AI_SPAM_VISION_PROTOCOL 为支持图片的协议，"
+                    "并同时指定 AI_SPAM_VISION_API_BASE / API_KEY（不能继承 Jev 配置）"
+                )
+            if (
+                self.ai_spam_vision_backup_enabled
+                and self.vision_backup_protocol_effective == _TEXT_ONLY_AI_PROTOCOL
+            ):
+                raise ValueError(
+                    "Vision 备协议（留空继承 AI_SPAM_BACKUP_PROTOCOL）解析为 "
+                    f"{_TEXT_ONLY_AI_PROTOCOL}，但 Jev 仅支持纯文本；"
+                    "请显式设置 AI_SPAM_VISION_BACKUP_PROTOCOL 为支持图片的协议，"
+                    "并同时指定 AI_SPAM_VISION_BACKUP_API_BASE / API_KEY（不能继承 Jev 配置）"
+                )
 
         # Vision 备份依赖 Vision 主开关；不一致则提示（不强制关闭）
         if self.ai_spam_vision_backup_enabled and not self.ai_spam_vision_enabled:

@@ -92,7 +92,7 @@
   - 与垃圾原型余弦相似度匹配
 
 #### AI上下文检测（可选）
-- **多协议 AI API** - 支持 OpenAI Chat/Responses 与 Anthropic Messages 协议（GPT-4o-mini、DeepSeek、Moonshot、Claude 等），主备可异构
+- **多协议 AI API** - 支持 OpenAI Chat/Responses、Anthropic Messages 与 TypeSafe System One（Jev 决策模型）协议（GPT-4o-mini、DeepSeek、Moonshot、Claude、Jev 等），主备可异构
 - **上下文理解** - 结合群组对话上下文判断语境
 - **自动训练** - AI检测结果自动入库作为训练样本
 
@@ -443,7 +443,7 @@ tg-guard-bot/
 │   │   ├── classifier.py       # ML 分类器
 │   │   ├── embedder.py         # 语义嵌入
 │   │   ├── ai_detector.py      # AI 检测器（文本 + Vision）
-│   │   ├── ai_protocols.py     # AI 三协议适配
+│   │   ├── ai_protocols.py     # AI 四协议适配（Chat/Responses/Anthropic/TypeSafe Jev）
 │   │   └── ai_contracts.py     # AI 结构化输出契约
 │   ├── models/                 # 数据模型
 │   │   ├── group.py            # 群组配置
@@ -611,13 +611,30 @@ AI_SPAM_ENABLED=true
 AI_SPAM_API_KEY=sk-xxx
 AI_SPAM_API_BASE=https://api.openai.com/v1
 AI_SPAM_MODEL=deepseek-chat
-# 协议：openai_chat（默认）/ openai_responses / anthropic_messages（主备可异构）
+# 协议：openai_chat（默认）/ openai_responses / anthropic_messages / typesafe_systemone（主备可异构）
 # Anthropic 输出：native（Claude 4.5+ 原生 output_config）/ tool（全模型兼容）/ auto（默认）
 # AI_SPAM_PROTOCOL=openai_chat
 # AI_SPAM_ANTHROPIC_OUTPUT_MODE=auto
 
 # 图片检测：多模态模型（key/base 留空自动回退上面的配置）
 AI_SPAM_VISION_ENABLED=true
+AI_SPAM_VISION_MODEL=gpt-4o-mini
+```
+
+**TypeSafe Jev 决策模型**（`typesafe_systemone`）：Jev 不生成文本，直接返回「是垃圾」概率与类别（2026-09 本地 31 条中文样本实测：@0.8 与 DeepSeek 判定一致，延迟中位数约 500ms；官方定价 $0.042/M 输入 tokens），适合作文本主服务商、LLM 作备份：
+```env
+AI_SPAM_ENABLED=true
+AI_SPAM_PROTOCOL=typesafe_systemone
+AI_SPAM_API_BASE=https://api.typesafe.ai      # OpenRouter：https://openrouter.ai/api/v1
+AI_SPAM_API_KEY=...
+AI_SPAM_MODEL=jev-latest                      # OpenRouter：typesafe/jev-1.13 或 ~typesafe/jev-latest
+
+# Jev 仅支持文本。启用 Vision 时，协议 / base / key / model 都不能再留空继承文本配置，
+# 必须整套显式指定一个支持图片的服务商
+AI_SPAM_VISION_ENABLED=true
+AI_SPAM_VISION_PROTOCOL=openai_chat
+AI_SPAM_VISION_API_BASE=https://api.openai.com/v1
+AI_SPAM_VISION_API_KEY=sk-xxx
 AI_SPAM_VISION_MODEL=gpt-4o-mini
 ```
 

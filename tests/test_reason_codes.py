@@ -37,6 +37,7 @@ def test_reason_code_values_are_stable_strings() -> None:
     assert ReasonCode.repeated_chars.value == "repeated_chars"
     assert ReasonCode.channel_mention.value == "channel_mention"
     assert ReasonCode.emoji_flood.value == "emoji_flood"
+    assert ReasonCode.ai_category.value == "ai_category"
 
 
 # ===== rule_engine 返回编码格式 =====

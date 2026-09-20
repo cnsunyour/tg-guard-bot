@@ -649,18 +649,28 @@ class AIServiceProvider(ABC):
         # 根据阈值判断
         final_is_spam = is_spam and confidence >= self.config.threshold
 
+        # 协议层可附带诊断元数据（Jev：类别 / 概率分布 / 实际服务版本 / 用量），
+        # 先并入再写基础字段，保证 raw_* / threshold / model 语义不被协议侧覆盖
+        details: dict[str, Any] = {}
+        extra_details = result.get("details")
+        if isinstance(extra_details, dict):
+            details.update(extra_details)
+        details.update(
+            {
+                "raw_is_spam": is_spam,
+                "raw_confidence": confidence,
+                "threshold": self.config.threshold,
+                "model": self.config.model,
+            }
+        )
+
         # 构建返回结果
         return AIDetectionResult(
             is_spam=final_is_spam,
             confidence=confidence,
             stage="ai_api",
             reasons=[reason] if reason else [],
-            details={
-                "raw_is_spam": is_spam,
-                "raw_confidence": confidence,
-                "threshold": self.config.threshold,
-                "model": self.config.model,
-            },
+            details=details,
             provider=self.name,
         )
 
