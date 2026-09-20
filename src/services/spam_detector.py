@@ -924,16 +924,16 @@ class SpamDetector:
     async def add_feedback(
         self, text: str, is_spam: bool, labeled_by: int, confidence: float | None = None
     ) -> bool:
-        """添加管理员反馈样本
+        """写入反馈样本（同文本去重，人工标注优先；规则见 SpamRepository.upsert_sample）
 
         Args:
             text: 消息文本
             is_spam: 是否为垃圾
-            labeled_by: 标注者 ID
+            labeled_by: 标注者 ID（AI 保留 ID / bot ID 视为自动标注，其余为人工）
             confidence: 置信度
 
         Returns:
-            是否添加成功
+            是否写入成功；空文本、被人工标注保护而跳过、或入库失败时返回 False
         """
         # 空文本不入库（如无文本无引用的跨聊天回复媒体消息）——空文档无训练价值
         # 且干扰 retrain 语料
@@ -941,20 +941,23 @@ class SpamDetector:
             logger.debug("跳过空文本反馈样本入库（无可训练内容）")
             return False
         try:
-            await SpamRepository.add_sample(
+            sample = await SpamRepository.upsert_sample(
                 text=text,
                 is_spam=is_spam,
                 confidence=confidence,
                 labeled_by=labeled_by,
             )
+            if sample is None:
+                logger.info(f"同文本已有人工标注，自动样本未写入 [标注者:{labeled_by}]")
+                return False
 
             logger.info(
-                f"已添加反馈样本 [标注者:{labeled_by}] 类型: {'垃圾' if is_spam else '正常'}"
+                f"已写入反馈样本 [标注者:{labeled_by}] 类型: {'垃圾' if is_spam else '正常'}"
             )
             return True
 
         except Exception as e:
-            logger.error(f"添加反馈样本失败: {e}")
+            logger.error(f"写入反馈样本失败: {e}")
             return False
 
     async def get_statistics(self) -> dict[str, Any]:

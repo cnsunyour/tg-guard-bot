@@ -78,6 +78,37 @@ class TestPruneNegativeSamplesGuard:
             with pytest.raises(ValueError, match="keep_count"):
                 await SpamRepository.prune_negative_samples(bad_count)
 
+    async def test_delete_recheck_includes_label_and_time_boundary(self, mocker):
+        """DELETE 阶段除复核 is_spam=False 外还复核时间边界：
+
+        victim 选取后被人工纠正（upsert_sample 刷新 created_at）的负样本不得被删。
+        """
+        from contextlib import asynccontextmanager
+        from unittest.mock import MagicMock
+
+        from src.repositories import spam_repo
+
+        boundary_result = MagicMock()
+        boundary_result.first.return_value = (datetime(2026, 1, 1), 100)
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=boundary_result)
+
+        @asynccontextmanager
+        async def fake_session():
+            yield session
+
+        mocker.patch.object(spam_repo, "get_db_session", fake_session)
+        delete_in_batches = mocker.patch.object(
+            spam_repo, "delete_in_batches", new=AsyncMock(return_value=0)
+        )
+
+        await SpamRepository.prune_negative_samples(10)
+
+        extra_conditions = delete_in_batches.await_args.kwargs["extra_conditions"]
+        rendered = [str(cond) for cond in extra_conditions]
+        assert any("is_spam IS false" in text for text in rendered)
+        assert any("created_at <" in text and "id <" in text for text in rendered)
+
 
 class TestAuditLogsCleanup:
     """审计日志按配置保留期滚动删除"""

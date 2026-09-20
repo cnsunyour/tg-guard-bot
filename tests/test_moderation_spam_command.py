@@ -75,7 +75,7 @@ async def test_ban_failure_still_deletes_and_trains(error_code) -> None:
     """封禁失败（非 target_is_admin）不得阻断删除与入库。"""
     message = _make_message()
     localizer = _make_localizer()
-    add_sample = AsyncMock()
+    upsert_sample = AsyncMock()
     detector = MagicMock()
     detector.check_and_auto_train = AsyncMock(return_value=None)
 
@@ -88,14 +88,14 @@ async def test_ban_failure_still_deletes_and_trains(error_code) -> None:
             "ban_user",
             new=AsyncMock(return_value=ModerationResult(code=error_code)),
         ),
-        patch.object(moderation.SpamRepository, "add_sample", new=add_sample),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=upsert_sample),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
         patch("src.services.spam_detector.get_detector", return_value=detector),
     ):
         await moderation.cmd_spam(message, AsyncMock(), localizer)
 
     message.reply_to_message.delete.assert_awaited_once()
-    add_sample.assert_awaited_once()
+    upsert_sample.assert_awaited_once()
     detector.check_and_auto_train.assert_awaited_once()
 
     # 回复必须如实告知「未封禁」，不得谎报封禁成功
@@ -122,7 +122,7 @@ async def test_ban_success_uses_processed_message() -> None:
             "ban_user",
             new=AsyncMock(return_value=ModerationResult()),
         ),
-        patch.object(moderation.SpamRepository, "add_sample", new=AsyncMock()),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=AsyncMock()),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
         patch("src.services.spam_detector.get_detector", return_value=detector),
     ):
@@ -138,7 +138,7 @@ async def test_target_is_admin_blocks_everything() -> None:
     """目标是管理员：硬阻断，既不删消息也不写训练样本。"""
     message = _make_message()
     localizer = _make_localizer()
-    add_sample = AsyncMock()
+    upsert_sample = AsyncMock()
 
     with (
         patch.object(
@@ -149,13 +149,13 @@ async def test_target_is_admin_blocks_everything() -> None:
             "ban_user",
             new=AsyncMock(return_value=ModerationResult(code=ModerationErrorCode.target_is_admin)),
         ),
-        patch.object(moderation.SpamRepository, "add_sample", new=add_sample),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=upsert_sample),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
     ):
         await moderation.cmd_spam(message, AsyncMock(), localizer)
 
     message.reply_to_message.delete.assert_not_awaited()
-    add_sample.assert_not_awaited()
+    upsert_sample.assert_not_awaited()
 
 
 @pytest.mark.unit
@@ -175,7 +175,7 @@ async def test_delete_all_skips_single_delete_on_ban_success() -> None:
             "ban_user",
             new=AsyncMock(return_value=ModerationResult()),
         ),
-        patch.object(moderation.SpamRepository, "add_sample", new=AsyncMock()),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=AsyncMock()),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
         patch("src.services.spam_detector.get_detector", return_value=detector),
     ):
@@ -201,7 +201,7 @@ async def test_delete_all_falls_back_to_single_delete_on_ban_failure() -> None:
             "ban_user",
             new=AsyncMock(return_value=ModerationResult(code=ModerationErrorCode.user_not_in_chat)),
         ),
-        patch.object(moderation.SpamRepository, "add_sample", new=AsyncMock()),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=AsyncMock()),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
         patch("src.services.spam_detector.get_detector", return_value=detector),
     ):
@@ -229,7 +229,7 @@ async def test_auto_train_skipped_when_sample_insert_fails() -> None:
         ),
         patch.object(
             moderation.SpamRepository,
-            "add_sample",
+            "upsert_sample",
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
@@ -257,7 +257,7 @@ async def test_ban_user_called_with_allow_left() -> None:
             moderation, "check_admin_permission_strict_message", new=AsyncMock(return_value=True)
         ),
         patch.object(moderation.ModerationService, "ban_user", new=ban_user),
-        patch.object(moderation.SpamRepository, "add_sample", new=AsyncMock()),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=AsyncMock()),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
         patch("src.services.spam_detector.get_detector", return_value=detector),
     ):
@@ -285,10 +285,7 @@ async def test_notspam_admin_trains_under_decision_guard_and_closes_vote() -> No
         patch.object(
             moderation, "check_admin_permission_strict_message", new=AsyncMock(return_value=True)
         ),
-        patch.object(
-            moderation.SpamRepository, "find_sample_by_text", new=AsyncMock(return_value=None)
-        ),
-        patch.object(moderation.SpamRepository, "add_sample", new=AsyncMock()),
+        patch.object(moderation.SpamRepository, "upsert_sample", new=AsyncMock()),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),
         patch("src.services.spam_detector.get_detector", return_value=detector),
     ):
@@ -312,7 +309,7 @@ async def test_notspam_admin_training_failure_still_closes_vote() -> None:
         ),
         patch.object(
             moderation.SpamRepository,
-            "find_sample_by_text",
+            "upsert_sample",
             new=AsyncMock(side_effect=RuntimeError("db down")),
         ),
         patch.object(moderation, "auto_delete_message", new=AsyncMock()),

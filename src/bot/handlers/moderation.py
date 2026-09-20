@@ -1306,10 +1306,10 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 except Exception as e:
                     logger.debug(f"删除垃圾消息失败: {e}")
 
-            # 添加到反垃圾训练库
+            # 添加到反垃圾训练库（同文本覆盖已有自动/人工标注）
             sample_added = False
             try:
-                await SpamRepository.add_sample(
+                await SpamRepository.upsert_sample(
                     text=spam_text,
                     is_spam=True,
                     confidence=1.0,  # 管理员标注，置信度为1.0
@@ -1641,22 +1641,9 @@ async def _process_notspam_training(message: Message, bot: Bot, localizer: Bound
             return
 
         try:
-            # ✅ 修复 bug：先查找并删除之前的正样本记录（如果存在）
-            # 当消息被自动检测为垃圾时，已经调用 add_feedback(is_spam=True) 标记为正样本
-            # 现在管理员标记为非垃圾，需要删除之前的正样本，避免数据冲突
-            existing_sample = await SpamRepository.find_sample_by_text(message_text, is_spam=True)
-
-            if existing_sample:
-                # 删除之前的正样本记录
-                deleted = await SpamRepository.delete_sample(existing_sample.id)
-                if deleted:
-                    logger.info(
-                        f"notspam 命令：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
-                        f"[文本长度:{len(message_text)}] [{usage_type}]"
-                    )
-
-            # 添加负样本
-            await SpamRepository.add_sample(
+            # 管理员纠正直接覆盖同文本的既有样本（自动检测写入的正样本会被改为负样本），
+            # 不再先删后加，避免删除与新增之间的空窗和重复行
+            await SpamRepository.upsert_sample(
                 text=message_text,
                 is_spam=False,  # 标记为非垃圾
                 confidence=1.0,  # 管理员标注，置信度为1.0
@@ -1803,10 +1790,10 @@ async def _process_report_approval(
             except Exception as e:
                 logger.debug(f"删除被举报的消息失败: {e}")
 
-            # 添加到反垃圾训练库
+            # 添加到反垃圾训练库（同文本覆盖已有标注）
             if report.message_text:
                 try:
-                    await SpamRepository.add_sample(
+                    await SpamRepository.upsert_sample(
                         text=report.message_text,
                         is_spam=True,
                         confidence=1.0,

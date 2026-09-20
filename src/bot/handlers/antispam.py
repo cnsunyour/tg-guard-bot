@@ -2995,8 +2995,8 @@ async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
 async def on_spam_feedback(callback: CallbackQuery) -> None:
     """处理管理员反馈（立即处罚后的事后纠正）。
 
-    业务逻辑（缓存文本取值 / 误判删旧正样本 / 确认垃圾替换 AI 样本 / 误判 unmute /
-    自动训练）保留，仅文案 i18n（3b-4）。成功 toast 用简短 recorded，消息结果走
+    从缓存读取原文，以管理员标注写入样本（同文本覆盖 AI/bot 自动标注）；误判时
+    恢复权限并检查自动训练。成功 toast 用简短 recorded，消息结果走
     build_feedback_result（群 locale）。
     """
     try:
@@ -3052,38 +3052,8 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         cached_text = await redis.get(text_cache_key)
 
         if cached_text:
-            # ✅ 误判反馈：需要先删除之前的正样本记录，再添加负样本
-            if not is_spam:
-                from src.repositories.spam_repo import SpamRepository
-
-                existing_sample = await SpamRepository.find_sample_by_text(
-                    cached_text, is_spam=True
-                )
-
-                if existing_sample:
-                    deleted = await SpamRepository.delete_sample(existing_sample.id)
-                    if deleted:
-                        logger.info(
-                            f"误判反馈：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
-                            f"[文本长度:{len(cached_text)}]"
-                        )
-            else:
-                # ✅ 确认垃圾反馈：检查是否已存在 AI 自动入库的样本，避免重复
-                from src.repositories.spam_repo import SpamRepository
-
-                existing_sample = await SpamRepository.find_sample_by_text(
-                    cached_text, is_spam=True
-                )
-
-                if existing_sample and existing_sample.labeled_by == -1:
-                    deleted = await SpamRepository.delete_sample(existing_sample.id)
-                    if deleted:
-                        logger.info(
-                            f"确认垃圾反馈：已删除 AI 自动入库的样本 [样本ID:{existing_sample.id}] "
-                            f"[文本长度:{len(cached_text)}]，将替换为管理员标注"
-                        )
-
-            # 添加新的样本记录
+            # 同文本去重与「管理员标注覆盖 AI/bot 自动标注」由 upsert_sample 统一处理，
+            # 误判反馈直接把已有正样本改写为负样本，不再先删后加
             await detector.add_feedback(
                 text=cached_text,
                 is_spam=is_spam,
