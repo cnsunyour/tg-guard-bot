@@ -325,6 +325,150 @@ async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool
         return False
 
 
+# 群组关联频道 ID 的 Redis 缓存 TTL（跨聊天回复防护查询用，miss 时 bot.get_chat 回填）
+_LINKED_CHANNEL_CACHE_TTL_SECONDS = 600
+
+# 跨聊天回复 sample_text 中 quote 兜底截断长度（对齐 antispam_render._RECOGNIZED_TEXT_LIMIT）
+_EXTERNAL_REPLY_QUOTE_LIMIT = 200
+
+
+async def _get_linked_channel_id(message: Message, bot: Bot) -> int | None:
+    """查询群组关联频道 ID（Redis 缓存 → miss 时 bot.get_chat 回填）。
+
+    缓存值为 linked_chat_id 十进制串；无关联频道存空串（与 miss 区分的哨兵）。
+    get_chat 失败时返回 None 并按无关联频道处理（fail-punish，与频道马甲
+    「获取失败继续检测」先例一致——API 抖动窗口短，且有确认模式纠错）。
+    """
+    cache_key = RedisKeys.chat_linked_channel(message.chat.id)
+    redis = get_redis()
+
+    # 1. 缓存读取（失败降级直查 API）
+    try:
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            return int(cached) if cached else None
+    except Exception as e:
+        logger.debug(f"读取关联频道缓存失败，直查 API [群组:{message.chat.id}]: {e}")
+
+    # 2. API 查询（失败按无关联频道，不阻断检测）
+    try:
+        chat_info = await bot.get_chat(message.chat.id)
+        linked = chat_info.linked_chat_id
+    except Exception as e:
+        logger.warning(
+            f"获取群组关联频道信息失败，继续跨聊天回复检测 [群组:{message.chat.id}]: {e}"
+        )
+        return None
+
+    # 3. 回填缓存（失败不影响本次结果）
+    with contextlib.suppress(Exception):
+        await redis.set(
+            cache_key,
+            str(linked) if linked is not None else "",
+            ex=_LINKED_CHANNEL_CACHE_TTL_SECONDS,
+        )
+    return linked
+
+
+async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
+    """检测并处理跨聊天回复消息（Reply in Another Chat 引流防护）。
+
+    攻击模式：已入群假人发送跨聊天回复，正文无意义，广告内容承载在指向
+    外部频道消息的引用预览里（Bot API 不下发原消息文本，内容检测不可达）。
+    本函数按纯结构信号检测 ``message.external_reply``，所有 origin 类型统一
+    对待，命中后生成合成检测结果交给 :func:`_route_spam_detection`（确认
+    模式群走管理员复核/集体投票，immediate 群直接删除+处罚）。
+
+    豁免（一律返回 False 让消息回归正常检测管线，不占用 skip）：
+    - 论坛群跨 topic 回复：``external_reply.chat`` 即本群自身
+    - 被回复消息来自本群关联频道（linked channel）
+
+    设计边界：
+    - 路由后无条件返回 True，与所有现有检测路径语义一致（rule/ML/AI 命中后
+      处罚失败同样直接结束，不回退跑其它检测）；处罚/删除失败在
+      ``_apply_immediate_punishment`` 内部记 error 日志，由运维介入。
+    - 已注册命令（/spam 等）被更早注册的 router 的 Command handler 优先消费，
+      不经过本检测；带引用预览的命令承载属低收益降级路径，不在本层覆盖。
+
+    Args:
+        message: 消息对象
+        bot: Bot 实例
+
+    Returns:
+        True 表示已生成检测结果并路由（调用方跳过后续处理），False 表示继续。
+    """
+    # 类型缩小
+    assert message.chat
+
+    external = message.external_reply
+    if external is None:
+        return False
+
+    try:
+        # 1. 群开关（未建组时按默认启用处理）
+        try:
+            group = await GroupRepository.get(message.chat.id)
+        except Exception as e:
+            logger.debug(f"获取群组配置失败（非关键）: {e}")
+            group = None
+        if group is not None and not group.anti_external_reply_enabled:
+            return False
+
+        # 2. 论坛群跨 topic 回复豁免（external_reply 语义含 forum topic，此时 chat 即本群）
+        source_chat_id = external.chat.id if external.chat else None
+        if source_chat_id is not None and source_chat_id == message.chat.id:
+            logger.debug(
+                f"跳过论坛跨 topic 回复 [群组:{message.chat.id}] [用户:{message.from_user.id if message.from_user else 'unknown'}]"
+            )
+            return False
+
+        # 3. 关联频道豁免（被回复消息来自本群 linked channel 的正常引用）
+        if source_chat_id is not None and source_chat_id == await _get_linked_channel_id(
+            message, bot
+        ):
+            logger.debug(
+                f"跳过关联频道跨聊天回复 [群组:{message.chat.id}] " f"[频道:{source_chat_id}]"
+            )
+            return False
+
+        # 4. 命中：合成检测结果走统一路由
+        # sample_text 回退链：正文 → caption → quote 截断。quote 是另一个聊天的
+        # 他人内容，仅作末位兜底，避免污染训练样本（add_feedback / 投票双向）。
+        quote_text = (
+            (message.quote.text or "")[:_EXTERNAL_REPLY_QUOTE_LIMIT] if message.quote else ""
+        )
+        sample_text = message.text or message.caption or quote_text or ""
+
+        origin_type = external.origin.type.value
+        source_message_id = external.message_id
+        result: dict[str, Any] = {
+            "is_spam": True,
+            "stage": "external_reply",
+            "confidence": 0.9,
+            "reasons": ["external_reply"],
+            "details": {
+                "sample_text": sample_text,
+                "origin_type": origin_type,
+                "source_chat_id": source_chat_id,
+                "source_message_id": source_message_id,
+            },
+        }
+        logger.warning(
+            f"检测到跨聊天回复消息 [群组:{message.chat.id}] "
+            f"[用户:{message.from_user.id if message.from_user else 'unknown'}] "
+            f"[origin:{origin_type}] [来源聊天:{source_chat_id}] "
+            f"[来源消息:{source_message_id}]"
+        )
+        await _route_spam_detection(
+            message, bot, result, group, message_type=SpamMessageType.external_reply
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"处理跨聊天回复消息失败: {e}")
+        return False
+
+
 class SkipReason(enum.Enum):
     """on_* 消息处理器统一前置过滤的跳过原因。
 
@@ -338,6 +482,7 @@ class SkipReason(enum.Enum):
     NO_FROM_USER = enum.auto()  # 无 from_user（频道身份等无真实发送者）
     REGISTERED_COMMAND = enum.auto()  # 已注册命令（仅文本处理器启用）
     ADMIN = enum.auto()  # 管理员（超管 + 群管，免于反垃圾检测）
+    EXTERNAL_REPLY_HANDLED = enum.auto()  # 跨聊天回复（已生成检测结果并路由）
 
 
 def _is_registered_command(message: Message) -> bool:
@@ -370,7 +515,7 @@ async def _run_message_prechecks(
     通过返回 ``None``（调用方继续业务处理）。
 
     顺序：私聊 → 匿名管理员 → 频道马甲(独立于 antispam 开关) → from_user →
-    (可选)已注册命令 → username 映射 → 管理员豁免。
+    (可选)已注册命令 → username 映射 → 管理员豁免 → 跨聊天回复。
 
     本函数非纯检查，含副作用：频道分支可能删消息/发警告/写 DB，username 映射
     写 Redis（best-effort，见 :func:`update_username_mapping_if_needed`）。
@@ -426,6 +571,11 @@ async def _run_message_prechecks(
     # 7. 管理员豁免：超管 + 群管，免于反垃圾检测
     if await check_admin_permission_by_id(bot, message.chat.id, user.id):
         return _skip(SkipReason.ADMIN)
+
+    # 8. 跨聊天回复：结构信号检测（管理员已在第 7 步豁免；位于活跃度逻辑
+    #    之前，高活跃度用户不豁免——防高活跃度账号被盗用场景）
+    if await check_and_handle_external_reply(message, bot):
+        return _skip(SkipReason.EXTERNAL_REPLY_HANDLED)
 
     return None
 
@@ -1561,6 +1711,101 @@ async def on_antichannel_toggle(callback: CallbackQuery, localizer: BoundLocaliz
         logger.error(f"处理反频道马甲开关失败: {e}")
         await callback.answer(
             localizer.t("admin.antichannel.callback.failed.toast"), show_alert=True
+        )
+
+
+@router.callback_query(F.data.startswith("antiextreply_toggle:"))
+async def on_antiextreply_toggle(callback: CallbackQuery, localizer: BoundLocalizer) -> None:
+    """处理跨聊天回复防护开关（范式对齐 on_antichannel_toggle）。"""
+    try:
+        # 类型检查
+        if not callback.data or not callback.message:
+            await callback.answer(
+                localizer.t("admin.antiextreply.callback.invalid_data.toast"), show_alert=True
+            )
+            return
+
+        from aiogram.types import InaccessibleMessage, Message
+
+        if isinstance(callback.message, InaccessibleMessage):
+            await callback.answer(
+                localizer.t("admin.antiextreply.callback.message_unavailable.toast"),
+                show_alert=True,
+            )
+            return
+
+        message: Message = callback.message
+
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer(
+                localizer.t("admin.antiextreply.callback.invalid_data.toast"), show_alert=True
+            )
+            return
+        _, chat_id_str, action = parts
+        chat_id = int(chat_id_str)
+
+        # 校验 callback 所属群与 action 白名单
+        if message.chat.id != chat_id or action not in {"on", "off"}:
+            await callback.answer(
+                localizer.t("admin.antiextreply.callback.invalid_operation.toast"),
+                show_alert=True,
+            )
+            logger.warning(
+                f"无效的跨聊天回复防护回调: message_chat_id={message.chat.id}, "
+                f"callback_chat_id={chat_id}, action={action}"
+            )
+            return
+
+        # ✅ 权限验证
+        if callback.from_user.id not in settings.admin_ids:
+            # ✅ P1-10: 使用 Redis 缓存减少 API 调用
+            if not await PermissionCache.is_admin(callback.bot, chat_id, callback.from_user.id):  # type: ignore[arg-type]
+                await callback.answer(
+                    localizer.t("admin.antiextreply.callback.permission_denied.toast"),
+                    show_alert=True,
+                )
+                logger.warning(
+                    f"用户 {callback.from_user.id} 尝试修改群组 {chat_id} 跨聊天回复防护设置但无权限"
+                )
+                return
+
+        # 更新配置（群不存在时不静默新建——开关入口均在 groupset 流程内，建组由主菜单保证）
+        enabled = action == "on"
+        if not await GroupRepository.update_anti_external_reply_settings(chat_id, enabled):
+            await callback.answer(
+                localizer.t("admin.antiextreply.callback.failed.toast"), show_alert=True
+            )
+            return
+
+        # 状态双层:common.status → groupset.status(emoji 在 catalog,与 groupset 子菜单一致)
+        state = "enabled" if enabled else "disabled"
+        common_status = localizer.t(f"admin.common.status.{state}.label")
+        status = localizer.t(f"admin.groupset.status.{state}.label", status=common_status)
+
+        # 先确认 callback(DB 已持久化),再更新 UI;edit_text 失败不影响已生效的成功
+        await callback.answer(
+            localizer.t(f"admin.antiextreply.callback.{state}.toast"), show_alert=False
+        )
+        try:
+            # 更新消息(复用 groupset 子菜单说明)
+            await message.edit_text(
+                localizer.t("admin.groupset.menu.antiextreply.message", status=status),
+                parse_mode="HTML",
+            )
+        except Exception as edit_exc:
+            logger.warning(f"跨聊天回复防护 toggle edit_text 失败(设置已生效): {edit_exc}")
+
+        logger.info(f"群组 {chat_id} 跨聊天回复防护功能切换为 {state}")
+
+    except ValueError:
+        await callback.answer(
+            localizer.t("admin.antiextreply.callback.invalid_data.toast"), show_alert=True
+        )
+    except Exception as e:
+        logger.error(f"处理跨聊天回复防护开关失败: {e}")
+        await callback.answer(
+            localizer.t("admin.antiextreply.callback.failed.toast"), show_alert=True
         )
 
 
@@ -2750,8 +2995,8 @@ async def on_spam_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
 async def on_spam_feedback(callback: CallbackQuery) -> None:
     """处理管理员反馈（立即处罚后的事后纠正）。
 
-    业务逻辑（缓存文本取值 / 误判删旧正样本 / 确认垃圾替换 AI 样本 / 误判 unmute /
-    自动训练）保留，仅文案 i18n（3b-4）。成功 toast 用简短 recorded，消息结果走
+    从缓存读取原文，以管理员标注写入样本（同文本覆盖 AI/bot 自动标注）；误判时
+    恢复权限并检查自动训练。成功 toast 用简短 recorded，消息结果走
     build_feedback_result（群 locale）。
     """
     try:
@@ -2807,38 +3052,8 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         cached_text = await redis.get(text_cache_key)
 
         if cached_text:
-            # ✅ 误判反馈：需要先删除之前的正样本记录，再添加负样本
-            if not is_spam:
-                from src.repositories.spam_repo import SpamRepository
-
-                existing_sample = await SpamRepository.find_sample_by_text(
-                    cached_text, is_spam=True
-                )
-
-                if existing_sample:
-                    deleted = await SpamRepository.delete_sample(existing_sample.id)
-                    if deleted:
-                        logger.info(
-                            f"误判反馈：已删除之前的正样本记录 [样本ID:{existing_sample.id}] "
-                            f"[文本长度:{len(cached_text)}]"
-                        )
-            else:
-                # ✅ 确认垃圾反馈：检查是否已存在 AI 自动入库的样本，避免重复
-                from src.repositories.spam_repo import SpamRepository
-
-                existing_sample = await SpamRepository.find_sample_by_text(
-                    cached_text, is_spam=True
-                )
-
-                if existing_sample and existing_sample.labeled_by == -1:
-                    deleted = await SpamRepository.delete_sample(existing_sample.id)
-                    if deleted:
-                        logger.info(
-                            f"确认垃圾反馈：已删除 AI 自动入库的样本 [样本ID:{existing_sample.id}] "
-                            f"[文本长度:{len(cached_text)}]，将替换为管理员标注"
-                        )
-
-            # 添加新的样本记录
+            # 同文本去重与「管理员标注覆盖 AI/bot 自动标注」由 upsert_sample 统一处理，
+            # 误判反馈直接把已有正样本改写为负样本，不再先删后加
             await detector.add_feedback(
                 text=cached_text,
                 is_spam=is_spam,

@@ -258,15 +258,21 @@ class SpamDetector:
                 logger.error(f"AI 检测失败: {ai_result}")
                 ai_result = None
 
-            # 合并结果
-            return await self._merge_detection_results(
-                traditional_result, ai_result, text, user_id, activity, skip_auto_train
+            # 合并结果（含 AI 结果的活跃度调整），样本入库延后到调整完成之后
+            traditional_is_spam = traditional_result is not None and traditional_result["is_spam"]
+            merged_result = await self._merge_detection_results(
+                traditional_result, ai_result, user_id, activity
             )
 
         except Exception as e:
             logger.error(f"并行检测失败: {e}")
-            # 降级到传统检测
+            # 降级到传统检测（降级路径不产生 AI 样本）
             return await self.detect(text, user_id, chat_id, activity)
+
+        await self._collect_ai_training_sample(
+            merged_result, ai_result, traditional_is_spam, text, user_id, skip_auto_train
+        )
+        return merged_result
 
     async def detect_with_ai_context(
         self,
@@ -340,9 +346,11 @@ class SpamDetector:
                 logger.error(f"AI 上下文检测失败: {ai_result}")
                 ai_result = None
 
-            # 合并结果
+            # 合并结果（含 AI 结果的活跃度调整），样本入库延后到全部调整完成之后
+            # 先快照传统判定：上下文调整会原地修改结果，之后无法再区分来源
+            traditional_is_spam = traditional_result is not None and traditional_result["is_spam"]
             merged_result = await self._merge_detection_results(
-                traditional_result, ai_result, text, user_id, activity, skip_auto_train
+                traditional_result, ai_result, user_id, activity
             )
 
             # 应用上下文调整（降低误判）
@@ -351,11 +359,9 @@ class SpamDetector:
                     merged_result, text, message, context_messages, user_id
                 )
 
-            return merged_result
-
         except Exception as e:
             logger.error(f"并行上下文检测失败: {e}")
-            # 降级到传统检测
+            # 降级到传统检测（降级路径不产生 AI 样本）
             result = await self.detect(text, user_id, chat_id, activity)
             # 应用上下文调整
             if settings.context_consistency_enabled and context_messages:
@@ -364,27 +370,33 @@ class SpamDetector:
                 )
             return result
 
+        # 活跃度 + 上下文调整全部完成后，按最终判定决定样本入库
+        await self._collect_ai_training_sample(
+            merged_result, ai_result, traditional_is_spam, text, user_id, skip_auto_train
+        )
+        return merged_result
+
     async def _merge_detection_results(
         self,
         traditional: DetectionResult | None,
         ai: dict[str, Any] | None,
-        text: str,
         user_id: int,
         activity: int | None = None,
-        skip_auto_train: bool = False,
     ) -> DetectionResult:
-        """合并传统检测和 AI 检测结果
+        """合并传统检测和 AI 检测结果（纯合并，不做样本入库）
 
         合并策略：
         1. 传统检测为垃圾 → 使用传统结果
-        2. AI 检测为垃圾 → 使用 AI 结果 + 自动入库训练
+        2. AI 检测为垃圾 → 使用 AI 结果（应用活跃度调整）
         3. 都不是垃圾 → 使用传统结果（置信度 0.0）
         4. 任一检测失败 → 使用另一个结果
+
+        样本入库由 _collect_ai_training_sample 在所有调整完成后统一处理，
+        避免被活跃度/上下文改判为正常的消息进入垃圾训练集。
 
         Args:
             traditional: 传统检测结果
             ai: AI 检测结果
-            text: 原始文本
             user_id: 用户 ID
             activity: 用户活跃度
 
@@ -408,16 +420,6 @@ class SpamDetector:
         if traditional is None:
             logger.warning(f"传统检测失败，使用 AI 结果 [用户:{user_id}]")
             assert ai is not None  # 类型检查
-            if ai["is_spam"]:
-                # ✅ 确认模式下跳过 AI 自动入库，等待管理员确认
-                if not skip_auto_train:
-                    await self._handle_ai_spam_detection(text, ai, user_id)
-                else:
-                    logger.debug(f"确认模式：跳过 AI 自动入库 [用户:{user_id}]")
-            else:
-                # 处理高置信度负样本
-                if not skip_auto_train:
-                    await self._handle_ai_negative_detection(text, ai, user_id)
             # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
             ai_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
@@ -444,14 +446,9 @@ class SpamDetector:
             )
             return traditional
 
-        # 策略 2: AI 检测为垃圾 → 使用 AI 结果 + 自动入库训练
+        # 策略 2: AI 检测为垃圾 → 使用 AI 结果
         if ai["is_spam"]:
             logger.info(f"AI 检测为垃圾 [用户:{user_id}] [置信度:{ai['confidence']:.2f}]")
-            # ✅ 确认模式下跳过 AI 自动入库，等待管理员确认
-            if not skip_auto_train:
-                await self._handle_ai_spam_detection(text, ai, user_id)
-            else:
-                logger.debug(f"确认模式：跳过 AI 自动入库 [用户:{user_id}]")
             # AI 结果需要转换为 DetectionResult 格式 + 应用活跃度调整
             converted_result: DetectionResult = {
                 "is_spam": ai.get("is_spam", False),
@@ -465,12 +462,54 @@ class SpamDetector:
             # ✅ 应用活跃度调整
             return self._apply_activity_adjustment(converted_result, activity, user_id)
 
-        # 策略 3: 都不是垃圾 → 使用传统结果 + 检查是否入库负样本
+        # 策略 3: 都不是垃圾 → 使用传统结果
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
-        # 处理高置信度负样本
-        if not skip_auto_train:
-            await self._handle_ai_negative_detection(text, ai, user_id)
         return traditional
+
+    async def _collect_ai_training_sample(
+        self,
+        final_result: DetectionResult,
+        ai: dict[str, Any] | None,
+        traditional_is_spam: bool,
+        text: str,
+        user_id: int,
+        skip_auto_train: bool,
+    ) -> None:
+        """在全部置信度调整完成后，按最终判定决定 AI 样本入库
+
+        - 正样本：AI 判垃圾、合并采用了 AI 结果（传统未判垃圾）、且经活跃度/上下文
+          调整后最终仍为垃圾——被改判为正常的消息不进入垃圾训练集
+        - 负样本：AI 判正常且传统未判垃圾（沿用原语义，由置信度阈值二次过滤）
+        - 传统判垃圾时采用的是传统结果，与 AI 样本无关
+
+        Args:
+            final_result: 全部调整后的最终检测结果
+            ai: AI 检测原始结果（None 表示 AI 检测失败）
+            traditional_is_spam: 合并前传统检测是否判为垃圾（快照，不受原地调整影响）
+            text: 原始文本
+            user_id: 用户 ID
+            skip_auto_train: 确认模式下为 True，不入库等待管理员确认
+        """
+        if skip_auto_train:
+            logger.debug(f"确认模式：跳过 AI 自动入库 [用户:{user_id}]")
+            return
+        if ai is None or traditional_is_spam:
+            return
+
+        try:
+            if not ai["is_spam"]:
+                await self._handle_ai_negative_detection(text, ai, user_id)
+            elif final_result["is_spam"]:
+                await self._handle_ai_spam_detection(text, ai, user_id)
+            else:
+                logger.info(
+                    f"AI 判垃圾但经调整后改判正常，不入库正样本 [用户:{user_id}] "
+                    f"[AI 置信度:{ai.get('confidence', 0.0):.2f}] "
+                    f"[最终置信度:{final_result['confidence']:.2f}]"
+                )
+        except Exception as e:
+            # 样本处理失败不影响已完成的检测判定
+            logger.error(f"AI 样本处理失败 [用户:{user_id}]: {e}")
 
     async def _handle_ai_spam_detection(
         self, text: str, ai_result: dict[str, Any], user_id: int
@@ -885,32 +924,40 @@ class SpamDetector:
     async def add_feedback(
         self, text: str, is_spam: bool, labeled_by: int, confidence: float | None = None
     ) -> bool:
-        """添加管理员反馈样本
+        """写入反馈样本（同文本去重，人工标注优先；规则见 SpamRepository.upsert_sample）
 
         Args:
             text: 消息文本
             is_spam: 是否为垃圾
-            labeled_by: 标注者 ID
+            labeled_by: 标注者 ID（AI 保留 ID / bot ID 视为自动标注，其余为人工）
             confidence: 置信度
 
         Returns:
-            是否添加成功
+            是否写入成功；空文本、被人工标注保护而跳过、或入库失败时返回 False
         """
+        # 空文本不入库（如无文本无引用的跨聊天回复媒体消息）——空文档无训练价值
+        # 且干扰 retrain 语料
+        if not text.strip():
+            logger.debug("跳过空文本反馈样本入库（无可训练内容）")
+            return False
         try:
-            await SpamRepository.add_sample(
+            sample = await SpamRepository.upsert_sample(
                 text=text,
                 is_spam=is_spam,
                 confidence=confidence,
                 labeled_by=labeled_by,
             )
+            if sample is None:
+                logger.info(f"同文本已有人工标注，自动样本未写入 [标注者:{labeled_by}]")
+                return False
 
             logger.info(
-                f"已添加反馈样本 [标注者:{labeled_by}] 类型: {'垃圾' if is_spam else '正常'}"
+                f"已写入反馈样本 [标注者:{labeled_by}] 类型: {'垃圾' if is_spam else '正常'}"
             )
             return True
 
         except Exception as e:
-            logger.error(f"添加反馈样本失败: {e}")
+            logger.error(f"写入反馈样本失败: {e}")
             return False
 
     async def get_statistics(self) -> dict[str, Any]:

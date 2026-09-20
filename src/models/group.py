@@ -53,6 +53,14 @@ class Group(Base):
         comment="是否启用反频道马甲(禁止用户以频道身份发言)",
     )
 
+    # 跨聊天回复防护配置
+    anti_external_reply_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        comment="是否拦截跨聊天回复消息（Reply in Another Chat 引用外部消息预览的引流手法）",
+    )
+
     # 活跃度系统配置
     activity_enabled: Mapped[bool] = mapped_column(
         Boolean,

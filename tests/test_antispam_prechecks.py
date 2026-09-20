@@ -44,11 +44,16 @@ def _message(
     message.content_type = content_type
     message.caption = None
     message.message_id = 1
+    # MagicMock 未显式设置的属性自动生成 truthy mock，跨聊天回复字段必须显式置 None
+    message.external_reply = None
+    message.quote = None
     return message
 
 
-def _stub_precheck_deps(mocker, *, channel: bool = False, is_admin: bool = False):
-    """mock 掉 _run_message_prechecks 的外部依赖，返回 (channel, username, admin) 供断言。"""
+def _stub_precheck_deps(
+    mocker, *, channel: bool = False, is_admin: bool = False, extreply: bool = False
+):
+    """mock 掉 _run_message_prechecks 的外部依赖，返回 (channel, username, admin, extreply)。"""
     channel_mock = mocker.patch.object(
         antispam, "check_and_handle_channel_as_sender", new=AsyncMock(return_value=channel)
     )
@@ -58,7 +63,10 @@ def _stub_precheck_deps(mocker, *, channel: bool = False, is_admin: bool = False
     admin_mock = mocker.patch.object(
         antispam, "check_admin_permission_by_id", new=AsyncMock(return_value=is_admin)
     )
-    return channel_mock, username_mock, admin_mock
+    extreply_mock = mocker.patch.object(
+        antispam, "check_and_handle_external_reply", new=AsyncMock(return_value=extreply)
+    )
+    return channel_mock, username_mock, admin_mock, extreply_mock
 
 
 # ===== _is_registered_command =====
@@ -113,7 +121,7 @@ def test_is_registered_command_empty_text():
 async def test_prechecks_private_short_circuits(mocker) -> None:
     """私聊 → PRIVATE，后续依赖均不调用"""
     message = _message(chat_type="private", from_user=SimpleNamespace(id=42, username=None))
-    channel, username, admin = _stub_precheck_deps(mocker)
+    channel, username, admin, _ = _stub_precheck_deps(mocker)
 
     result = await antispam._run_message_prechecks(message, MagicMock())
 
@@ -129,7 +137,7 @@ async def test_prechecks_anonymous_before_channel(mocker) -> None:
         sender_chat=SimpleNamespace(id=CHAT_ID),
         from_user=SimpleNamespace(id=1087968824, username=None),
     )
-    channel, username, admin = _stub_precheck_deps(mocker)
+    channel, username, admin, _ = _stub_precheck_deps(mocker)
 
     result = await antispam._run_message_prechecks(message, MagicMock())
 
@@ -142,7 +150,7 @@ async def test_prechecks_anonymous_before_channel(mocker) -> None:
 async def test_prechecks_channel_handled(mocker) -> None:
     """频道马甲已消费 → CHANNEL_HANDLED（不进 from_user/username/admin）"""
     message = _message(from_user=SimpleNamespace(id=42, username=None))
-    _, username, admin = _stub_precheck_deps(mocker, channel=True)
+    _, username, admin, _ = _stub_precheck_deps(mocker, channel=True)
 
     result = await antispam._run_message_prechecks(message, MagicMock())
 
@@ -164,7 +172,7 @@ async def test_prechecks_channel_before_no_from_user(mocker) -> None:
 async def test_prechecks_no_from_user(mocker) -> None:
     """频道未消费 + 无 from_user → NO_FROM_USER"""
     message = _message(from_user=None)
-    _, username, admin = _stub_precheck_deps(mocker, channel=False)
+    _, username, admin, _ = _stub_precheck_deps(mocker, channel=False)
 
     result = await antispam._run_message_prechecks(message, MagicMock())
 
@@ -180,7 +188,7 @@ async def test_prechecks_registered_command_skips_when_enabled(mocker) -> None:
         text="/antispam",
     )
     antispam.set_registered_commands({"antispam"})
-    _, username, admin = _stub_precheck_deps(mocker, channel=False)
+    _, username, admin, _ = _stub_precheck_deps(mocker, channel=False)
 
     result = await antispam._run_message_prechecks(
         message, MagicMock(), skip_registered_commands=True
@@ -198,7 +206,7 @@ async def test_prechecks_command_passes_when_skip_disabled(mocker) -> None:
         text="/antispam",
     )
     antispam.set_registered_commands({"antispam"})
-    _, username, admin = _stub_precheck_deps(mocker, channel=False, is_admin=False)
+    _, username, admin, _ = _stub_precheck_deps(mocker, channel=False, is_admin=False)
 
     result = await antispam._run_message_prechecks(message, MagicMock())
 
@@ -229,11 +237,12 @@ async def test_prechecks_username_mapping_before_admin(mocker) -> None:
 async def test_prechecks_admin_exemption(mocker) -> None:
     """管理员 → ADMIN"""
     message = _message(from_user=SimpleNamespace(id=42, username="u"))
-    _stub_precheck_deps(mocker, channel=False, is_admin=True)
+    _, _, _, extreply = _stub_precheck_deps(mocker, channel=False, is_admin=True)
 
     result = await antispam._run_message_prechecks(message, MagicMock())
 
     assert result is antispam.SkipReason.ADMIN
+    extreply.assert_not_awaited()  # 管理员豁免先于跨聊天回复检测
 
 
 async def test_prechecks_all_pass_returns_none(mocker) -> None:
@@ -244,6 +253,18 @@ async def test_prechecks_all_pass_returns_none(mocker) -> None:
     result = await antispam._run_message_prechecks(message, MagicMock())
 
     assert result is None
+
+
+async def test_prechecks_external_reply_handled(mocker) -> None:
+    """跨聊天回复已消费 → EXTERNAL_REPLY_HANDLED（第 8 步，管理员豁免之后）"""
+    message = _message(from_user=SimpleNamespace(id=42, username="u"))
+    bot = MagicMock()
+    _, _, _, extreply = _stub_precheck_deps(mocker, channel=False, is_admin=False, extreply=True)
+
+    result = await antispam._run_message_prechecks(message, bot)
+
+    assert result is antispam.SkipReason.EXTERNAL_REPLY_HANDLED
+    extreply.assert_awaited_once_with(message, bot)
 
 
 # ===== update_username_mapping_if_needed: best-effort =====
@@ -333,7 +354,7 @@ async def test_prechecks_channel_before_registered_command(mocker) -> None:
         text="/antispam",
     )
     antispam.set_registered_commands({"antispam"})
-    _, username, admin = _stub_precheck_deps(mocker, channel=True)
+    _, username, admin, _ = _stub_precheck_deps(mocker, channel=True)
 
     result = await antispam._run_message_prechecks(
         message, MagicMock(), skip_registered_commands=True
