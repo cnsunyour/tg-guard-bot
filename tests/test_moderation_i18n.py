@@ -182,6 +182,11 @@ def test_render_warning_reason_system_code_uses_catalog() -> None:
     )
     # 历史兼容：修复前直接写入 warnings.reason 的中文也走同一 catalog key
     assert moderation_handler._render_warning_reason(localizer, "使用频道马甲发言") == expected
+    # 跨聊天回复系统警告
+    assert (
+        moderation_handler._render_warning_reason(localizer, "system:external_reply")
+        == "<moderation.warnings.system_reason.external_reply.label>"
+    )
 
 
 def test_render_warning_reason_free_text_escapes() -> None:

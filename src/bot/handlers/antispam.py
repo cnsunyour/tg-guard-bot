@@ -216,128 +216,23 @@ def has_url_entities(message: Message) -> bool:
     return False
 
 
-async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool:
-    """检测并处理频道马甲消息(统一处理函数)
-
-    Args:
-        message: 消息对象
-        bot: Bot 实例
-
-    Returns:
-        True 表示应跳过后续处理（频道马甲已处理，或关联频道消息），False 表示继续正常处理
-    """
-    # 类型缩小
-    assert message.chat
-
-    # 检查是否是频道类型发言
-    if not is_channel_as_sender(message):
-        return False
-
-    # 快速路径：Telegram 系统服务账号（777000 关联频道同步转发）/ Bot 自身，直接跳过
-    if message.from_user and should_skip_sender(message.from_user.id, bot.id):
-        logger.debug(f"跳过特殊来源消息（系统账号/Bot自身）[群组:{message.chat.id}]")
-        return True
-
-    # 检查群组是否启用反频道马甲
-    try:
-        group = await GroupRepository.get(message.chat.id)
-        if group and not group.anti_channel_enabled:
-            logger.debug(f"群组 {message.chat.id} 未启用反频道马甲功能，跳过频道马甲检测")
-            return False
-
-        # 排除群组关联频道（linked channel）的消息（双重保险）
-        try:
-            chat_info = await bot.get_chat(message.chat.id)
-            if (
-                chat_info.linked_chat_id is not None
-                and message.sender_chat is not None
-                and message.sender_chat.id == chat_info.linked_chat_id
-            ):
-                logger.debug(
-                    f"跳过群组关联频道消息 [群组:{message.chat.id}] "
-                    f"[关联频道:{message.sender_chat.id}]"
-                )
-                return True
-        except Exception as e:
-            logger.debug(f"获取群组关联频道信息失败，继续马甲检测: {e}")
-
-        # 频道马甲消息：删除消息并警告
-        channel_title = (
-            message.sender_chat.title if message.sender_chat and message.sender_chat.title else None
-        )
-        sender_chat_id = message.sender_chat.id if message.sender_chat else 0
-        channel_title_for_log = channel_title or "<unknown>"
-        logger.warning(
-            f"检测到频道马甲消息 [群组:{message.chat.id}] "
-            f"[频道:{channel_title_for_log}({sender_chat_id})]"
-        )
-
-        # 删除消息
-        with contextlib.suppress(Exception):
-            await message.delete()
-
-        # 群 locale 渲染警告(channel_title 是 Telegram 提供的群名,escape 后注入)
-        group_locale = await get_resolver().for_group(message.chat.id)
-        localizer = get_translator().for_locale(group_locale)
-        channel_title_display = escape_html(
-            channel_title or localizer.t("antispam.channel_impersonation.unknown_channel.label")
-        )
-
-        # 发送警告通知(如果有实际用户)
-        if message.from_user:
-            user_mention = format_user_mention(message.from_user)
-            warning_text = localizer.t(
-                "antispam.channel_impersonation.warning.user.message",
-                user=user_mention,
-                channel=channel_title_display,
-            )
-
-            # 发送警告并自动删除
-            warning_msg = await message.answer(warning_text, parse_mode="HTML")
-            await auto_delete_message(warning_msg, delay=30)
-
-            # 记录警告到数据库
-            moderation_service = ModerationService()
-            await moderation_service.warn_user(
-                bot=bot,
-                chat_id=message.chat.id,
-                user_id=message.from_user.id,
-                operator_id=bot.id,
-                reason="system:channel_impersonation",
-            )
-        else:
-            # 没有实际用户信息，仅在群组发送提示
-            warning_text = localizer.t(
-                "antispam.channel_impersonation.warning.anonymous.message",
-                channel=channel_title_display,
-            )
-            warning_msg = await message.answer(warning_text, parse_mode="HTML")
-            await auto_delete_message(warning_msg, delay=30)
-
-        logger.info(
-            f"已处理频道马甲消息 [群组:{message.chat.id}] "
-            f"[频道:{channel_title_for_log}({sender_chat_id})]"
-        )
-        return True
-
-    except Exception as e:
-        logger.error(f"处理频道马甲消息失败: {e}")
-        return False
-
-
-# 群组关联频道 ID 的 Redis 缓存 TTL（跨聊天回复防护查询用，miss 时 bot.get_chat 回填）
+# 群组关联频道 ID 的 Redis 缓存 TTL（反频道马甲与跨聊天回复共用，miss 时 bot.get_chat 回填）
 _LINKED_CHANNEL_CACHE_TTL_SECONDS = 600
 
-# 跨聊天回复 sample_text 中 quote 兜底截断长度（对齐 antispam_render._RECOGNIZED_TEXT_LIMIT）
-_EXTERNAL_REPLY_QUOTE_LIMIT = 200
+# 处置提示在群内的停留时间（秒），到期自动删除避免刷屏
+_NOTICE_AUTO_DELETE_SECONDS = 30
+
+# 系统警告 reason 稳定 code（持久化到 warnings.reason，展示层按 locale 渲染）
+_EXTERNAL_REPLY_WARNING_REASON = "system:external_reply"
 
 
 async def _get_linked_channel_id(message: Message, bot: Bot) -> int | None:
     """查询群组关联频道 ID（Redis 缓存 → miss 时 bot.get_chat 回填）。
 
+    反频道马甲（豁免关联频道身份发言）与跨聊天回复（豁免引用关联频道帖）共用。
     缓存值为 linked_chat_id 十进制串；无关联频道存空串（与 miss 区分的哨兵）。
-    get_chat 失败时返回 None 并按无关联频道处理（fail-punish，与频道马甲
-    「获取失败继续检测」先例一致——API 抖动窗口短，且有确认模式纠错）。
+    get_chat 失败时返回 None 并按无关联频道处理（fail-punish：API 抖动窗口短，
+    误删可由管理员纠正；反之放行则给攻击者留下稳定绕过口）。
     """
     cache_key = RedisKeys.chat_linked_channel(message.chat.id)
     redis = get_redis()
@@ -355,9 +250,7 @@ async def _get_linked_channel_id(message: Message, bot: Bot) -> int | None:
         chat_info = await bot.get_chat(message.chat.id)
         linked = chat_info.linked_chat_id
     except Exception as e:
-        logger.warning(
-            f"获取群组关联频道信息失败，继续跨聊天回复检测 [群组:{message.chat.id}]: {e}"
-        )
+        logger.warning(f"获取群组关联频道信息失败，按无关联频道处理 [群组:{message.chat.id}]: {e}")
         return None
 
     # 3. 回填缓存（失败不影响本次结果）
@@ -370,23 +263,182 @@ async def _get_linked_channel_id(message: Message, bot: Bot) -> int | None:
     return linked
 
 
+async def check_and_handle_channel_as_sender(message: Message, bot: Bot) -> bool:
+    """检测并处理频道马甲消息（以外部频道身份在群内发言）。
+
+    处置为「删除 + 群内提示（自动删除）」，**不记录用户警告**：Bot API 对以聊天
+    身份发送的消息，``from`` 出于向后兼容填的是假用户（频道身份固定为
+    Channel_Bot），无法定位真实操作者，记警告只会把计数错记到假用户名下。
+    对惯犯的处置能力（banChatSenderChat 按频道封禁）留待后续按需引入。
+
+    放行（返回 True，整体跳过后续检测——这些消息不是用户行为）：
+    - ``is_automatic_forward``：关联频道帖自动转发到讨论群（官方字段，早于
+      ``sender_chat`` 判定，不依赖 ``from`` 为 777000 的兼容假定）
+    - Telegram 系统账号 / Bot 自身（:func:`should_skip_sender` 快速路径）
+    - ``sender_chat`` 即本群关联频道（管理员手动以关联频道身份发言）
+
+    Args:
+        message: 消息对象
+        bot: Bot 实例
+
+    Returns:
+        True 表示应跳过后续处理（已处置或属放行来源），False 表示继续正常处理
+        （非频道身份、群未启用、或处置异常）。
+    """
+    # 类型缩小
+    assert message.chat
+
+    # 1. 关联频道自动转发：官方字段直接放行（放在 sender_chat 判定之前，
+    #    Bot API 未承诺自动转发消息必带 sender_chat）
+    if message.is_automatic_forward is True:
+        logger.debug(f"跳过关联频道自动转发 [群组:{message.chat.id}] [消息:{message.message_id}]")
+        return True
+
+    # 2. 非频道身份发言：不归本函数处理
+    if not is_channel_as_sender(message):
+        return False
+    sender_chat = message.sender_chat
+    assert sender_chat is not None  # is_channel_as_sender 已保证
+
+    # 3. 快速路径：Telegram 系统服务账号 / Bot 自身
+    if message.from_user and should_skip_sender(message.from_user.id, bot.id):
+        logger.debug(f"跳过特殊来源消息（系统账号/Bot自身）[群组:{message.chat.id}]")
+        return True
+
+    try:
+        # 4. 群开关（未建组按默认启用）
+        group = await GroupRepository.get(message.chat.id)
+        if group and not group.anti_channel_enabled:
+            logger.debug(f"群组 {message.chat.id} 未启用反频道马甲功能，跳过频道马甲检测")
+            return False
+
+        # 5. 关联频道身份发言放行（缓存查询；查询失败按无关联频道 fail-punish）
+        if sender_chat.id == await _get_linked_channel_id(message, bot):
+            logger.debug(
+                f"跳过群组关联频道消息 [群组:{message.chat.id}] [关联频道:{sender_chat.id}]"
+            )
+            return True
+
+        # 6. 频道马甲：删除 + 群内提示
+        channel_title = sender_chat.title or None
+        channel_title_for_log = channel_title or "<unknown>"
+        logger.warning(
+            f"检测到频道马甲消息 [群组:{message.chat.id}] "
+            f"[频道:{channel_title_for_log}({sender_chat.id})]"
+        )
+
+        try:
+            await message.delete()
+        except Exception as e:
+            # 删除失败（通常是权限缺失）仍发提示，让管理员知道有消息需要人工处理
+            logger.warning(
+                f"删除频道马甲消息失败，继续发送提示 "
+                f"[群组:{message.chat.id}] [消息:{message.message_id}]: {e}"
+            )
+
+        # 群 locale 渲染提示（channel_title 是频道方可控文本，escape 后注入）
+        group_locale = await get_resolver().for_group(message.chat.id)
+        localizer = get_translator().for_locale(group_locale)
+        channel_title_display = escape_html(
+            channel_title or localizer.t("antispam.channel_impersonation.unknown_channel.label")
+        )
+        notice = await message.answer(
+            localizer.t(
+                "antispam.channel_impersonation.notice.message", channel=channel_title_display
+            ),
+            parse_mode="HTML",
+        )
+        await auto_delete_message(notice, delay=_NOTICE_AUTO_DELETE_SECONDS)
+
+        logger.info(
+            f"已处理频道马甲消息 [群组:{message.chat.id}] "
+            f"[频道:{channel_title_for_log}({sender_chat.id})]"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"处理频道马甲消息失败: {e}")
+        return False
+
+
+async def _handle_external_reply_hit(message: Message, bot: Bot) -> None:
+    """跨聊天回复命中后的专用处置：删除 + 系统警告 + 群内提示。
+
+    不走 :func:`_route_spam_detection`：确认模式群会为每条命中生成一条一小时
+    存活的复核提示，垃圾账号连发时提示本身比垃圾更扰群。改为直接删除并累计
+    系统警告，由既有警告升级机制（禁言 → 踢出 → 封禁）截断连发。
+
+    不写训练样本、不缓存文本、不发反馈按钮：本检测是纯结构信号，正文通常是
+    无意义占位文字，入库只会污染分类器。
+
+    删除失败（通常是权限缺失）**不阻断**记警告：删除是消息处置、警告是账号
+    处置，二者独立；否则删除权限故障会同时让升级机制失效。
+
+    无 ``from_user``（正常调用链由 prechecks 第 4 步排除，仅防御外部直接调用）
+    时只删除消息：没有可记警告、可 mention 的账号。
+    """
+    user = message.from_user
+
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.warning(
+            f"删除跨聊天回复消息失败，继续记录警告 "
+            f"[群组:{message.chat.id}] [消息:{message.message_id}]: {e}"
+        )
+
+    if user is None:
+        logger.warning(
+            f"跨聊天回复消息无发送者，仅删除不记警告 "
+            f"[群组:{message.chat.id}] [消息:{message.message_id}]"
+        )
+        return
+
+    warned, warning_count, _auto_punished = await ModerationService.warn_user(
+        bot=bot,
+        chat_id=message.chat.id,
+        user_id=user.id,
+        operator_id=bot.id,
+        reason=_EXTERNAL_REPLY_WARNING_REASON,
+    )
+    if not warned:
+        # warn_user 内部已记录具体原因（管理员 / 数据库异常）
+        logger.error(f"跨聊天回复记录警告失败 [群组:{message.chat.id}] [用户:{user.id}]")
+
+    group_locale = await get_resolver().for_group(message.chat.id)
+    localizer = get_translator().for_locale(group_locale)
+    warning_line = (
+        localizer.t("antispam.external_reply.warning.line", warning_count=warning_count)
+        if warned
+        else ""
+    )
+    notice = await message.answer(
+        localizer.t(
+            "antispam.external_reply.deleted.message",
+            user=format_user_mention(user),
+            warning_line=warning_line,
+        ),
+        parse_mode="HTML",
+    )
+    await auto_delete_message(notice, delay=_NOTICE_AUTO_DELETE_SECONDS)
+
+
 async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
     """检测并处理跨聊天回复消息（Reply in Another Chat 引流防护）。
 
     攻击模式：已入群假人发送跨聊天回复，正文无意义，广告内容承载在指向
     外部频道消息的引用预览里（Bot API 不下发原消息文本，内容检测不可达）。
     本函数按纯结构信号检测 ``message.external_reply``，所有 origin 类型统一
-    对待，命中后生成合成检测结果交给 :func:`_route_spam_detection`（确认
-    模式群走管理员复核/集体投票，immediate 群直接删除+处罚）。
+    对待，命中后交 :func:`_handle_external_reply_hit` 直接删除 + 记警告，
+    **不经管理员确认 / 集体投票**。
 
     豁免（一律返回 False 让消息回归正常检测管线，不占用 skip）：
     - 论坛群跨 topic 回复：``external_reply.chat`` 即本群自身
     - 被回复消息来自本群关联频道（linked channel）
 
     设计边界：
-    - 路由后无条件返回 True，与所有现有检测路径语义一致（rule/ML/AI 命中后
-      处罚失败同样直接结束，不回退跑其它检测）；处罚/删除失败在
-      ``_apply_immediate_punishment`` 内部记 error 日志，由运维介入。
+    - 处置后无条件返回 True，与所有现有检测路径语义一致（命中后处置失败同样
+      直接结束，不回退跑其它检测）；删除 / 警告失败在处置函数内记日志。
     - 已注册命令（/spam 等）被更早注册的 router 的 Command handler 优先消费，
       不经过本检测；带引用预览的命令承载属低收益降级路径，不在本层覆盖。
 
@@ -395,7 +447,7 @@ async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
         bot: Bot 实例
 
     Returns:
-        True 表示已生成检测结果并路由（调用方跳过后续处理），False 表示继续。
+        True 表示已处置（调用方跳过后续处理），False 表示继续。
     """
     # 类型缩小
     assert message.chat
@@ -426,42 +478,17 @@ async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
         if source_chat_id is not None and source_chat_id == await _get_linked_channel_id(
             message, bot
         ):
-            logger.debug(
-                f"跳过关联频道跨聊天回复 [群组:{message.chat.id}] " f"[频道:{source_chat_id}]"
-            )
+            logger.debug(f"跳过关联频道跨聊天回复 [群组:{message.chat.id}] [频道:{source_chat_id}]")
             return False
 
-        # 4. 命中：合成检测结果走统一路由
-        # sample_text 回退链：正文 → caption → quote 截断。quote 是另一个聊天的
-        # 他人内容，仅作末位兜底，避免污染训练样本（add_feedback / 投票双向）。
-        quote_text = (
-            (message.quote.text or "")[:_EXTERNAL_REPLY_QUOTE_LIMIT] if message.quote else ""
-        )
-        sample_text = message.text or message.caption or quote_text or ""
-
-        origin_type = external.origin.type.value
-        source_message_id = external.message_id
-        result: dict[str, Any] = {
-            "is_spam": True,
-            "stage": "external_reply",
-            "confidence": 0.9,
-            "reasons": ["external_reply"],
-            "details": {
-                "sample_text": sample_text,
-                "origin_type": origin_type,
-                "source_chat_id": source_chat_id,
-                "source_message_id": source_message_id,
-            },
-        }
+        # 4. 命中：专用处置
         logger.warning(
             f"检测到跨聊天回复消息 [群组:{message.chat.id}] "
             f"[用户:{message.from_user.id if message.from_user else 'unknown'}] "
-            f"[origin:{origin_type}] [来源聊天:{source_chat_id}] "
-            f"[来源消息:{source_message_id}]"
+            f"[origin:{external.origin.type.value}] [来源聊天:{source_chat_id}] "
+            f"[来源消息:{external.message_id}]"
         )
-        await _route_spam_detection(
-            message, bot, result, group, message_type=SpamMessageType.external_reply
-        )
+        await _handle_external_reply_hit(message, bot)
         return True
 
     except Exception as e:
@@ -482,7 +509,7 @@ class SkipReason(enum.Enum):
     NO_FROM_USER = enum.auto()  # 无 from_user（频道身份等无真实发送者）
     REGISTERED_COMMAND = enum.auto()  # 已注册命令（仅文本处理器启用）
     ADMIN = enum.auto()  # 管理员（超管 + 群管，免于反垃圾检测）
-    EXTERNAL_REPLY_HANDLED = enum.auto()  # 跨聊天回复（已生成检测结果并路由）
+    EXTERNAL_REPLY_HANDLED = enum.auto()  # 跨聊天回复（已删除 + 记警告）
 
 
 def _is_registered_command(message: Message) -> bool:
@@ -517,8 +544,9 @@ async def _run_message_prechecks(
     顺序：私聊 → 匿名管理员 → 频道马甲(独立于 antispam 开关) → from_user →
     (可选)已注册命令 → username 映射 → 管理员豁免 → 跨聊天回复。
 
-    本函数非纯检查，含副作用：频道分支可能删消息/发警告/写 DB，username 映射
-    写 Redis（best-effort，见 :func:`update_username_mapping_if_needed`）。
+    本函数非纯检查，含副作用：频道分支可能删消息/发提示，跨聊天回复分支可能
+    删消息/记警告/发提示，username 映射写 Redis（best-effort，见
+    :func:`update_username_mapping_if_needed`）。
 
     Args:
         message: aiogram Message 对象
