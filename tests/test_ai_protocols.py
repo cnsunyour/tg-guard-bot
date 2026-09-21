@@ -33,6 +33,7 @@ from src.ml.ai_protocols import (
     ResponseTermination,
     StructuredOutputMode,
     TypeSafeSystemOneAdapter,
+    VisionImage,
     create_protocol_adapter,
 )
 
@@ -46,6 +47,7 @@ _VISION_RESULT = {
     "extracted_text": "promo",
 }
 _PNG_B64 = "aW1hZ2U="  # "image" 的 base64
+_VISION_IMAGE = VisionImage(b64=_PNG_B64, mime="image/png")
 # Jev 响应样例（含 OpenRouter 额外透传的 id / provider / usage.cost）
 _SYSTEMONE_RESPONSE: dict[str, Any] = {
     "id": "gen-dec-1",
@@ -164,8 +166,7 @@ async def test_openai_chat_text_and_vision_request_construction() -> None:
     try:
         assert await provider._call_api("hello") == _TEXT_RESULT
         assert (
-            await provider._call_api_vision("system", "inspect", _PNG_B64, "image/png")
-            == _VISION_RESULT
+            await provider._call_api_vision("system", "inspect", [_VISION_IMAGE]) == _VISION_RESULT
         )
     finally:
         await provider.close()
@@ -216,8 +217,7 @@ async def test_openai_responses_text_and_vision_request_construction() -> None:
     try:
         assert await provider._call_api("hello") == _TEXT_RESULT
         assert (
-            await provider._call_api_vision("system", "inspect", _PNG_B64, "image/png")
-            == _VISION_RESULT
+            await provider._call_api_vision("system", "inspect", [_VISION_IMAGE]) == _VISION_RESULT
         )
     finally:
         await provider.close()
@@ -279,8 +279,7 @@ async def test_anthropic_native_text_and_vision_request_construction() -> None:
     try:
         assert await provider._call_api("hello") == _TEXT_RESULT
         assert (
-            await provider._call_api_vision("system", "inspect", _PNG_B64, "image/png")
-            == _VISION_RESULT
+            await provider._call_api_vision("system", "inspect", [_VISION_IMAGE]) == _VISION_RESULT
         )
     finally:
         await provider.close()
@@ -375,8 +374,7 @@ async def test_openai_legacy_omits_schema_and_uses_json_object_for_vision() -> N
     try:
         assert await provider._call_api("hello") == _TEXT_RESULT
         assert (
-            await provider._call_api_vision("system", "inspect", _PNG_B64, "image/png")
-            == _VISION_RESULT
+            await provider._call_api_vision("system", "inspect", [_VISION_IMAGE]) == _VISION_RESULT
         )
     finally:
         await provider.close()
@@ -609,7 +607,7 @@ def test_typesafe_systemone_rejects_vision_payload() -> None:
     adapter = TypeSafeSystemOneAdapter(StructuredOutputMode.STRICT)
     with pytest.raises(ValueError, match="不支持 Vision"):
         adapter.build_vision_payload(
-            "jev-latest", "system", "text", _PNG_B64, "image/png", "low", VISION_RESULT_SCHEMA, 512
+            "jev-latest", "system", "text", [_VISION_IMAGE], "low", VISION_RESULT_SCHEMA, 512
         )
 
 
@@ -900,7 +898,7 @@ async def test_vision_coordinator_falls_back_on_termination() -> None:
     detector.vision_primary = primary
     detector.vision_backup = backup
     try:
-        result = await detector.detect_image_with_context(_PNG_B64, "image/png")
+        result = await detector.detect_image_with_context([_VISION_IMAGE])
     finally:
         await primary.close()
         await backup.close()

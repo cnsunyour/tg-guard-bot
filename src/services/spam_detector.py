@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, TypedDict
@@ -21,6 +21,7 @@ from src.ml.ai_detector import (
     _read_image_as_base64,
     get_ai_detector,
 )
+from src.ml.ai_protocols import VisionImage
 from src.ml.classifier import get_classifier
 from src.ml.embedder import get_embedder
 from src.ml.rule_engine import ReasonCode, get_rule_engine
@@ -776,9 +777,9 @@ class SpamDetector:
 
         return result
 
-    async def detect_image(
+    async def detect_images(
         self,
-        image_path: str,
+        image_paths: Sequence[str],
         user_id: int,
         chat_id: int,
         *,
@@ -787,13 +788,14 @@ class SpamDetector:
         activity: int | None = None,
         skip_auto_train: bool = False,
     ) -> DetectionResult:
-        """检测图片是否为垃圾信息（分支入口）
+        """检测一条图片消息是否为垃圾信息（分支入口）
 
-        优先走 AI Vision 直判（省一次 OCR 调用 + 保留视觉信息）。
-        Vision 不可用或失败时降级到 OCR → 文本管道。
+        同一条消息的一张或多张图片（照片 / 静态贴纸单图，动画贴纸多帧）合并为
+        **一次** Vision 请求整体判定：省去逐帧重复发送 system prompt 与上下文，
+        也避免同一贴纸产生多条训练样本。Vision 不可用或失败则放行不检测。
 
         Args:
-            image_path: 图片文件路径
+            image_paths: 图片文件路径（按展示顺序；动画帧按时间序）
             user_id: 用户 ID
             chat_id: 群组 ID
             caption: 图片文字说明（可选，Vision 会一起送 AI 判断）
@@ -804,7 +806,6 @@ class SpamDetector:
         Returns:
             检测结果字典
         """
-        # Vision 多模态直判（无 OCR 兜底：不可用/失败则放行不检测）
         empty_result: DetectionResult = {
             "is_spam": False,
             "confidence": 0.0,
@@ -815,14 +816,20 @@ class SpamDetector:
             "details": {},
         }
 
+        # 固化为 tuple：后续读图与请求期间顺序稳定
+        paths = tuple(image_paths)
+        if not paths:
+            logger.debug(f"没有可检测的图片，跳过图片检测 [用户:{user_id}]")
+            return empty_result
+
         if not self.ai_detector.vision_enabled:
             logger.debug(f"Vision 未启用或无可用 provider，跳过图片检测 [用户:{user_id}]")
             return empty_result
 
         try:
             locale = await get_resolver().for_group(chat_id)
-            return await self._detect_image_via_vision(
-                image_path=image_path,
+            return await self._detect_images_via_vision(
+                image_paths=paths,
                 user_id=user_id,
                 chat_id=chat_id,
                 caption=caption,
@@ -840,10 +847,10 @@ class SpamDetector:
 
         return empty_result
 
-    async def _detect_image_via_vision(
+    async def _detect_images_via_vision(
         self,
         *,
-        image_path: str,
+        image_paths: Sequence[str],
         user_id: int,
         chat_id: int,
         caption: str | None,
@@ -852,19 +859,26 @@ class SpamDetector:
         activity: int | None,
         skip_auto_train: bool,
     ) -> DetectionResult:
-        """AI Vision 直判图片（新路径，省一次 OCR 调用）"""
-        # 读图 + 大小检查（线程池执行，避免阻塞事件循环）
-        image_b64, mime, image_size = await run_in_executor(_read_image_as_base64, image_path)
+        """AI Vision 一次请求直判一组图片（省 OCR，多帧省重复请求）"""
+        # 逐张读图 + 单图大小上限检查（线程池执行，避免阻塞事件循环）
+        images: list[VisionImage] = []
+        total_bytes = 0
+        for image_path in image_paths:
+            image_b64, mime, image_size = await run_in_executor(_read_image_as_base64, image_path)
+            if image_size > settings.ai_spam_vision_max_image_bytes:
+                raise VisionUnsupportedError(
+                    f"图片超过 Vision 单图大小上限 {settings.ai_spam_vision_max_image_bytes} bytes "
+                    f"(实际 {image_size} bytes)"
+                )
+            total_bytes += image_size
+            images.append(VisionImage(b64=image_b64, mime=mime))
 
-        if image_size > settings.ai_spam_vision_max_image_bytes:
-            raise VisionUnsupportedError(
-                f"图片超过 Vision 大小上限 {settings.ai_spam_vision_max_image_bytes} bytes "
-                f"(实际 {image_size} bytes)"
-            )
+        logger.debug(
+            f"Vision 请求准备就绪 [用户:{user_id}] [图片数:{len(images)}] [总字节:{total_bytes}]"
+        )
 
         ai_result = await self.ai_detector.detect_image_with_context(
-            image_b64,
-            mime,
+            images,
             caption=caption,
             context_text=context_text,
             locale=locale,
@@ -887,6 +901,7 @@ class SpamDetector:
             "details": {
                 **ai_result.get("details", {}),
                 "recognized_text": extracted_text,
+                "image_count": len(images),
                 # 反馈样本兜底：Vision 无文字时用占位符避免空串污染训练
                 # （展示用 recognized_text 上方的纯 OCR；此处专供下游 feedback）
                 "sample_text": sample_text,

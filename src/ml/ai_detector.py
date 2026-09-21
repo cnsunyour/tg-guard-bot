@@ -14,6 +14,7 @@ import base64
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,6 +31,7 @@ from src.ml.ai_protocols import (
     ProtocolResponse,
     ResponseTerminatedError,
     ResponseTermination,
+    VisionImage,
     create_protocol_adapter,
 )
 
@@ -232,15 +234,16 @@ confidence 始终表示"是垃圾"的置信度/概率（保留两位小数）：
 
 重要：只返回 JSON，不要返回其他任何内容。"""
 
-# System Prompt - Vision 垃圾检测（图片 + 可选 caption + 可选上下文）
-SYSTEM_PROMPT_VISION = """你是垃圾信息检测助手。请识别图片内容（含文字、二维码、logo、版式），结合可选的图片文字说明（caption）判断该图片是否为垃圾信息。
+# System Prompt - Vision 垃圾检测（一张或多张图片 + 可选 caption + 可选上下文）
+# 措辞保持与图片数量无关，多帧说明放 user 段，system 段稳定以复用 prompt cache
+SYSTEM_PROMPT_VISION = """你是垃圾信息检测助手。请识别所提供图片的内容（含文字、二维码、logo、版式），结合可选的图片文字说明（caption）判断这条图片消息是否为垃圾信息。输入可能是同一条消息的多张图片（如动画的多帧），请整体判断。
 
 严格按照以下 JSON 格式返回结果，不要返回任何其他内容：
 {
   "is_spam": true 或 false,
   "confidence": 0.00-1.00 之间的数字（保留两位小数，"是垃圾"的概率）,
   "reason": "简短说明判断理由（一句话）",
-  "extracted_text": "图片中全部可读文字的完整提取（含二维码解码、水印联系方式；无则空串）"
+  "extracted_text": "所有图片中全部可读文字的合并提取（含二维码解码、水印联系方式；重复内容只保留一次；无则空串）"
 }
 
 **confidence 语义**：始终表示"是垃圾"的置信度
@@ -259,14 +262,14 @@ SYSTEM_PROMPT_VISION = """你是垃圾信息检测助手。请识别图片内容
 重要：只返回 JSON，不要返回其他任何内容。"""
 
 # System Prompt - Vision + 群组对话上下文
-SYSTEM_PROMPT_VISION_WITH_CONTEXT = """你是垃圾信息检测助手。结合图片内容、可选的图片文字说明（caption）和群组对话上下文，判断该图片是否为垃圾信息。
+SYSTEM_PROMPT_VISION_WITH_CONTEXT = """你是垃圾信息检测助手。结合所提供图片的内容、可选的图片文字说明（caption）和群组对话上下文，判断这条图片消息是否为垃圾信息。输入可能是同一条消息的多张图片（如动画的多帧），请整体判断。
 
 严格按照以下 JSON 格式返回结果，不要返回任何其他内容：
 {
   "is_spam": true 或 false,
   "confidence": 0.00-1.00 之间的数字（保留两位小数，"是垃圾"的概率）,
   "reason": "简短说明判断理由（一句话）",
-  "extracted_text": "图片中全部可读文字的完整提取（含二维码解码、水印联系方式；无则空串）"
+  "extracted_text": "所有图片中全部可读文字的合并提取（含二维码解码、水印联系方式；重复内容只保留一次；无则空串）"
 }
 
 **重要：请结合对话上下文进行判断**
@@ -345,6 +348,29 @@ def _build_system_prompt(base_prompt: str, locale: str | None) -> str:
         f"reason 字段必须只使用{language}返回；"
         "即使待检测内容或上述示例使用其他语言，也不要改变 reason 的输出语言。"
     )
+
+
+def _build_vision_user_text(
+    *, frame_count: int, caption: str | None, context_text: str | None
+) -> str:
+    """拼装 Vision 请求的 user 文本段（上下文 / caption / 判定指令）。
+
+    多帧说明只在 ``frame_count > 1`` 时追加：它描述的是本次请求的输入形态，
+    属于 user 侧事实；system prompt 保持与帧数无关以复用 prompt cache。
+    """
+    text_parts: list[str] = []
+    if context_text and context_text.strip():
+        text_parts.append(f"【群组对话上下文】\n{context_text}")
+    if caption:
+        text_parts.append(f"【图片说明 / caption】\n{caption}")
+    if frame_count > 1:
+        text_parts.append(
+            f"以上 {frame_count} 张图片是同一条动画贴纸/视频在不同时刻的画面（帧），"
+            "请将它们视为同一条消息整体判断：任一帧含垃圾信号即判定为垃圾；"
+            "extracted_text 合并各帧文字并去重。"
+        )
+    text_parts.append("请按约定的 JSON 格式返回对这条图片消息的垃圾判定结果。")
+    return "\n\n".join(text_parts)
 
 
 # ============================================================================
@@ -680,18 +706,16 @@ class AIServiceProvider(ABC):
 
     async def detect_image(
         self,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         *,
         caption: str | None = None,
         context_text: str | None = None,
         locale: str | None = None,
     ) -> AIDetectionResult:
-        """Vision 直判图片是否为垃圾（带重试）
+        """Vision 直判一条图片消息是否为垃圾（带重试）
 
         Args:
-            image_b64: base64 编码的图片内容
-            mime: 图片 MIME 类型（如 image/jpeg）
+            images: 同一条消息的图片（单图或动画多帧），按顺序送入同一次请求
             caption: 图片自带的文字说明（可选）
             context_text: 格式化后的群组对话上下文（可选）
             locale: 群组 locale，控制 reason 输出语言（None → 简体中文）
@@ -700,24 +724,24 @@ class AIServiceProvider(ABC):
             AIDetectionResult，details 含 extracted_text
 
         Raises:
+            ValueError: images 为空
             AIServiceError: 所有重试失败
         """
+        # 固化为 tuple：重试期间顺序稳定，且不受调用方后续修改影响
+        frames = tuple(images)
+        if not frames:
+            raise ValueError("Vision 检测至少需要一张图片")
+
         use_context = bool(context_text and context_text.strip())
         base_prompt = SYSTEM_PROMPT_VISION_WITH_CONTEXT if use_context else SYSTEM_PROMPT_VISION
         system_prompt = _build_system_prompt(base_prompt, locale)
-
-        text_parts: list[str] = []
-        if use_context:
-            text_parts.append(f"【群组对话上下文】\n{context_text}")
-        if caption:
-            text_parts.append(f"【图片说明 / caption】\n{caption}")
-        text_parts.append("请按约定的 JSON 格式返回对该图片的垃圾判定结果。")
-
-        user_text = "\n\n".join(text_parts)
+        user_text = _build_vision_user_text(
+            frame_count=len(frames), caption=caption, context_text=context_text
+        )
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                raw = await self._call_api_vision(system_prompt, user_text, image_b64, mime)
+                raw = await self._call_api_vision(system_prompt, user_text, frames)
                 detection = self._process_vision_result(raw, locale)
                 detection.attempt_count = attempt + 1
                 return detection
@@ -748,13 +772,13 @@ class AIServiceProvider(ABC):
         self,
         system_prompt: str,
         user_text: str,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
     ) -> dict[str, Any]:
         """发起 Vision HTTP 请求，返回协议无关的结构化结果。
 
         Vision 的 content blocks 构造（OpenAI ``image_url`` / Responses
-        ``input_image`` / Anthropic ``source.base64``）由 adapter 处理。
+        ``input_image`` / Anthropic ``source.base64``）由 adapter 处理，
+        多张图片在同一请求内按顺序展开。
         """
         url = self.adapter.build_url(self.config.api_base)
         headers = self.adapter.build_headers(self.config.api_key)
@@ -762,8 +786,7 @@ class AIServiceProvider(ABC):
             self.config.model,
             system_prompt,
             user_text,
-            image_b64,
-            mime,
+            images,
             settings.ai_spam_vision_detail,
             VISION_RESULT_SCHEMA,
             self.config.max_output_tokens,
@@ -1492,18 +1515,16 @@ class HybridAIDetector:
 
     async def detect_image_with_context(
         self,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         *,
         caption: str | None = None,
         context_text: str | None = None,
         locale: str | None = None,
     ) -> dict[str, Any]:
-        """带上下文的 Vision 直判图片（主备回退）
+        """带上下文的 Vision 直判图片消息（主备回退）
 
         Args:
-            image_b64: base64 编码的图片
-            mime: 图片 MIME 类型
+            images: 同一条消息的图片（单图或动画多帧），一次请求整体判定
             caption: 图片说明（可选）
             context_text: 格式化后的群组对话上下文（可选）
             locale: 群组 locale，控制 reason 输出语言
@@ -1544,8 +1565,7 @@ class HybridAIDetector:
             try:
                 logger.debug(f"🖼️ 尝试使用 {provider.name} Vision 检测...")
                 result = await provider.detect_image(
-                    image_b64,
-                    mime,
+                    images,
                     caption=caption,
                     context_text=context_text,
                     locale=locale,
@@ -1768,16 +1788,16 @@ class AISpamDetector:
 
     async def detect_image_with_context(
         self,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         *,
         caption: str | None = None,
         context_text: str | None = None,
         locale: str | None = None,
     ) -> dict[str, Any]:
-        """Vision 直判图片（带上下文 + 主备回退）
+        """Vision 直判图片消息（带上下文 + 主备回退）
 
         Args:
+            images: 同一条消息的图片（单图或动画多帧）
             locale: 群组 locale，控制 reason 输出语言
 
         Raises:
@@ -1787,7 +1807,7 @@ class AISpamDetector:
         if not self.vision_enabled:
             raise VisionUnsupportedError("Vision 未启用或无可用 provider")
         return await self._detector.detect_image_with_context(
-            image_b64, mime, caption=caption, context_text=context_text, locale=locale
+            images, caption=caption, context_text=context_text, locale=locale
         )
 
     async def close(self):

@@ -602,7 +602,7 @@ TURNSTILE_SITE_KEY=
 
 #### AI Vision 多模态检测配置（可选）
 
-用于检测图片/贴纸垃圾内容，支持主备双服务商自动回退。
+用于检测图片/贴纸垃圾内容，支持主备双服务商自动回退。动画贴纸（TGS / WebM）抽取 1/3、2/3 两帧后**合并为一次多图请求**整体判定（省去逐帧重复发送 prompt 与上下文），因此 Vision 模型需支持单请求多图（OpenAI / Anthropic / DeepSeek / OpenRouter 等主流服务商均支持）。
 
 **最简配置**（复用文本 key/base）：
 ```env

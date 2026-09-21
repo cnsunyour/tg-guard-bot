@@ -2049,9 +2049,9 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         await bot.download(photo, destination=temp_file_path)
         logger.debug(f"图片已下载到临时文件: {temp_file_path}")
 
-        # 检测图片（Vision 直判优先，失败降级 OCR）
-        result = await detector.detect_image(
-            image_path=temp_file_path,
+        # 检测图片（Vision 直判，不可用则放行）
+        result = await detector.detect_images(
+            image_paths=[temp_file_path],
             user_id=message.from_user.id,
             chat_id=message.chat.id,
             caption=caption,
@@ -2170,6 +2170,8 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
 
     # PIL 各工厂返回不同具体类型（ImageFile/Image），函数级统一按基类声明
     img: Image.Image
+    # 动画贴纸抽样帧的 PNG 路径（TGS / WebM 分支共用，合并为一次 Vision 请求）
+    frame_paths: list[str]
 
     # 使用 context manager 确保临时文件清理
     try:
@@ -2208,7 +2210,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     f"文件大小: {sticker.file_size} bytes"
                 )
 
-                # 提取首帧和中间帧进行检测
+                # 抽取 1/3、2/3 两帧，合并为一次 Vision 请求整体判定
                 try:
                     # TGS = gzip-compressed Lottie JSON
                     tgs_path = Path(tgs_file_path)
@@ -2289,29 +2291,34 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     # 导入 TGS 动画
                     anim = import_tgs(str(tgs_file_path))
 
-                    # 循环检测每一帧
-                    for frame_idx in check_indices:
-                        relative_pos = frame_idx - int(ip)
-                        logger.debug(
-                            f"渲染第 {frame_idx} 帧 "
-                            f"(相对位置: {relative_pos}/{total_frames}, 进度: {relative_pos / total_frames:.1%})"
-                        )
-
-                        with managed_temp_file(suffix=".png") as png_file_path:
+                    # 先把全部抽样帧渲染成 PNG（ExitStack 同时持有多个临时文件），
+                    # 再合并为一次 Vision 请求整体判定，避免逐帧重复发送 prompt/上下文
+                    with contextlib.ExitStack() as frame_files:
+                        frame_paths = []
+                        for frame_idx in check_indices:
+                            relative_pos = frame_idx - int(ip)
+                            logger.debug(
+                                f"渲染第 {frame_idx} 帧 "
+                                f"(相对位置: {relative_pos}/{total_frames}, "
+                                f"进度: {relative_pos / total_frames:.1%})"
+                            )
+                            png_file_path = frame_files.enter_context(
+                                managed_temp_file(suffix=".png")
+                            )
                             # 渲染当前帧为 PNG
                             export_png(anim, png_file_path, frame=frame_idx)
                             logger.debug(f"第 {frame_idx} 帧已渲染为 PNG: {png_file_path}")
 
                             # ✅ 使用 context manager 打开图片并全面处理颜色模式
                             with Image.open(png_file_path) as img:
-                                # 转换为 RGB（OCR 需要）
+                                # 转换为 RGB（Vision 统一输入）
                                 if img.mode in ("RGBA", "LA", "P"):
                                     # 将透明背景转为白色
                                     background = Image.new("RGB", img.size, (255, 255, 255))
                                     if img.mode == "P":
                                         img = img.convert("RGBA")
                                     if img.mode in ("RGBA", "LA"):
-                                        background.paste(img, mask=img.split()[-1])  # alpha channel
+                                        background.paste(img, mask=img.split()[-1])  # alpha
                                     else:
                                         background.paste(img)
                                     background.save(png_file_path, "PNG")
@@ -2319,21 +2326,18 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                                     # 其他模式直接转 RGB
                                     img.convert("RGB").save(png_file_path, "PNG")
 
-                            # 检测当前帧（Vision 直判优先，失败降级 OCR）
-                            result = await detector.detect_image(
-                                image_path=png_file_path,
-                                user_id=message.from_user.id,
-                                chat_id=message.chat.id,
-                                caption=sticker_caption,
-                                context_text=sticker_context_text,
-                                activity=activity,
-                                skip_auto_train=sticker_skip_auto_train,
-                            )
+                            frame_paths.append(png_file_path)
 
-                            # 如果检测到垃圾，立即停止检测
-                            if result["is_spam"]:
-                                logger.info(f"第 {frame_idx} 帧检测到垃圾，停止后续检测")
-                                break
+                        # 多帧合并为一次 Vision 请求
+                        result = await detector.detect_images(
+                            image_paths=frame_paths,
+                            user_id=message.from_user.id,
+                            chat_id=message.chat.id,
+                            caption=sticker_caption,
+                            context_text=sticker_context_text,
+                            activity=activity,
+                            skip_auto_train=sticker_skip_auto_train,
+                        )
 
                 except Exception as e:
                     # ✅ 使用 logger.exception 保留堆栈跟踪
@@ -2381,9 +2385,9 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         logger.error(f"贴纸格式转换失败: {e}")
                         return
 
-                    # 检测贴纸图片（Vision 直判优先，失败降级 OCR）
-                    result = await detector.detect_image(
-                        image_path=png_file_path,
+                    # 检测贴纸图片（Vision 直判，不可用则放行）
+                    result = await detector.detect_images(
+                        image_paths=[png_file_path],
                         user_id=message.from_user.id,
                         chat_id=message.chat.id,
                         caption=sticker_caption,
@@ -2403,7 +2407,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                     f"文件大小: {sticker.file_size} bytes"
                 )
 
-                # 提取首帧和中间帧进行检测（方案B）
+                # 抽取 1/3、2/3 两帧，合并为一次 Vision 请求整体判定
                 try:
                     # 读取所有帧
                     frames = list(iio.imiter(webm_file_path, plugin="pyav"))
@@ -2426,15 +2430,20 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         f"将检测第 {check_indices} 帧 (1/3 和 2/3 位置, 总帧数: {total_frames})"
                     )
 
-                    # 循环检测每一帧
-                    for frame_idx in check_indices:
-                        frame = frames[frame_idx]
-                        logger.debug(
-                            f"检测第 {frame_idx} 帧 "
-                            f"(进度: {frame_idx}/{total_frames}={frame_idx / total_frames:.1%}, shape={frame.shape})"
-                        )
-
-                        with managed_temp_file(suffix=".png") as png_file_path:
+                    # 先把全部抽样帧保存成 PNG（ExitStack 同时持有多个临时文件），
+                    # 再合并为一次 Vision 请求整体判定，避免逐帧重复发送 prompt/上下文
+                    with contextlib.ExitStack() as frame_files:
+                        frame_paths = []
+                        for frame_idx in check_indices:
+                            frame = frames[frame_idx]
+                            logger.debug(
+                                f"提取第 {frame_idx} 帧 "
+                                f"(进度: {frame_idx}/{total_frames}={frame_idx / total_frames:.1%}, "
+                                f"shape={frame.shape})"
+                            )
+                            png_file_path = frame_files.enter_context(
+                                managed_temp_file(suffix=".png")
+                            )
                             # 转换为 PIL Image 并保存
                             img = Image.fromarray(frame)
                             # 转换为 RGB（如果需要）
@@ -2442,22 +2451,18 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                                 img = img.convert("RGB")
                             img.save(png_file_path, "PNG")
                             logger.debug(f"第 {frame_idx} 帧已保存为 PNG: {png_file_path}")
+                            frame_paths.append(png_file_path)
 
-                            # 检测当前帧（Vision 直判优先，失败降级 OCR）
-                            result = await detector.detect_image(
-                                image_path=png_file_path,
-                                user_id=message.from_user.id,
-                                chat_id=message.chat.id,
-                                caption=sticker_caption,
-                                context_text=sticker_context_text,
-                                activity=activity,
-                                skip_auto_train=sticker_skip_auto_train,
-                            )
-
-                            # 如果检测到垃圾，立即停止检测
-                            if result["is_spam"]:
-                                logger.info(f"第 {frame_idx} 帧检测到垃圾，停止后续检测")
-                                break
+                        # 多帧合并为一次 Vision 请求
+                        result = await detector.detect_images(
+                            image_paths=frame_paths,
+                            user_id=message.from_user.id,
+                            chat_id=message.chat.id,
+                            caption=sticker_caption,
+                            context_text=sticker_context_text,
+                            activity=activity,
+                            skip_auto_train=sticker_skip_auto_train,
+                        )
 
                 except Exception as e:
                     logger.error(f"视频贴纸帧提取失败: {e}")

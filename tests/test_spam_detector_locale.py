@@ -1,6 +1,6 @@
 """SpamDetector locale 透传测试（3c14）。
 
-验证 detect_with_ai / detect_with_ai_context / detect_image 用 chat_id 解析 locale
+验证 detect_with_ai / detect_with_ai_context / detect_images 用 chat_id 解析 locale
 （get_resolver().for_group）并透传给 ai_detector。
 """
 
