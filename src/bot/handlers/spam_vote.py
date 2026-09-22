@@ -165,7 +165,7 @@ async def edit_vote_progress(
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=prompt_message_id,
-            text=f"{prompt_base}\n\n{build_vote_progress(localizer, up, down, threshold)}",
+            text=f"{prompt_base}\n{build_vote_progress(localizer, up, down, threshold)}",
             reply_markup=await _rebuild_prompt_keyboard(localizer, chat_id, orig_msg_id, session),
             disable_web_page_preview=True,
         )
@@ -358,7 +358,7 @@ async def finalize_vote_if_ready(
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=prompt_message_id,
-                text=f"{prompt_base}\n\n{result_text}",
+                text=f"{prompt_base}\n{result_text}",
                 reply_markup=None,
                 disable_web_page_preview=True,
             )

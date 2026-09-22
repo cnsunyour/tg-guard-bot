@@ -1478,7 +1478,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             )
 
             # 构建消息 header（包含管理员 mention）
-            report_header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+            report_header = f"🔔 {admin_mentions}\n" if admin_mentions else ""
 
             submitted_text = localizer.t(
                 "moderation.spam.report.submitted.message",
@@ -1488,7 +1488,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
             )
             # 投票进度行（首票已计入：举报者≠offender 时 1/阈值）
             progress_line = (
-                "\n\n"
+                "\n"
                 + build_vote_progress(
                     localizer,
                     up=(

@@ -156,6 +156,14 @@ async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localiz
     assert message.answer.await_args.kwargs["disable_web_page_preview"] is True
     # prompt 发出后安排与 state TTL 一致的自动删除（兜底未处理残留）
     auto_delete.assert_awaited_once_with(message.answer.return_value, delay=review_ttl)
+    # 管理员 header 与正文单换行相接，不留空行；投票进度重建用的 prompt_base
+    # 必须与实际发送正文逐字一致（含 header 与分隔符），否则进度编辑会改写提示
+    sent_text = message.answer.await_args.args[0]
+    assert sent_text.startswith("🔔 @admins\n")
+    assert "\n\n" not in sent_text
+    antispam.record_vote_prompt.assert_awaited_once_with(
+        CHAT_ID, ORIG_MSG_ID, message.answer.return_value.message_id, sent_text
+    )
 
 
 async def test_review_producer_does_not_send_when_state_already_exists(mocker, localizer) -> None:
@@ -606,7 +614,7 @@ async def test_apply_immediate_punishment_selects_action_and_records_feedback(
         message_id=ORIG_MSG_ID,
     )
     keyboard.assert_called_once_with(localizer, OFFENDER_ID, ORIG_MSG_ID)
-    message.answer.assert_awaited_once_with("🔔 @admins\n\nprocessed", reply_markup="keyboard")
+    message.answer.assert_awaited_once_with("🔔 @admins\nprocessed", reply_markup="keyboard")
     auto_delete.assert_awaited_once_with(message.answer.return_value)
     detector.add_feedback.assert_awaited_once_with(
         text="recognized text", is_spam=True, labeled_by=999, confidence=confidence

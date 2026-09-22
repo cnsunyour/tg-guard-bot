@@ -798,7 +798,7 @@ async def _handle_spam_with_review(
         group_locale = await get_resolver().for_group(message.chat.id)
         localizer = get_translator().for_locale(group_locale)
         prompt = build_review_prompt(localizer, state, offender_mention)
-        header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+        header = f"🔔 {admin_mentions}\n" if admin_mentions else ""
         vote_row = (
             build_vote_row(localizer, message.message_id, vote_session.vote_id)
             if vote_session
@@ -920,7 +920,7 @@ async def _apply_immediate_punishment(
             punishment_key=punishment_key,
             message_id=message.message_id,
         )
-        header = f"🔔 {admin_mentions}\n\n" if admin_mentions else ""
+        header = f"🔔 {admin_mentions}\n" if admin_mentions else ""
         alert_msg = await message.answer(
             header + text,
             reply_markup=build_immediate_keyboard(
@@ -2994,7 +2994,7 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                     # 与发送时一致关闭网页预览：编辑会按新正文重新生成预览，
                     # 不显式关闭则原因中的可疑域名会在此刻渲染出卡片。
                     await message.edit_text(
-                        f"{message.text or ''}\n\n{completed_text}",
+                        f"{message.text or ''}\n{completed_text}",
                         reply_markup=None,
                         disable_web_page_preview=True,
                     )
@@ -3132,7 +3132,7 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         operator_mention = format_trusted_user_mention(callback.from_user)
         feedback_result = build_feedback_result(localizer, is_spam, operator_mention)
         await message.edit_text(
-            f"{message.text or ''}\n\n{feedback_result}",
+            f"{message.text or ''}\n{feedback_result}",
             reply_markup=None,
         )
 

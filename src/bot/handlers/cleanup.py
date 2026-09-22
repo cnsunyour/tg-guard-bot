@@ -588,7 +588,7 @@ async def _show_cleanup_result(
     )
 
     if result.errors:
-        text += "\n\n" + localizer.t(
+        text += "\n" + localizer.t(
             "cleanup.result.errors_header.message", error_count=len(result.errors)
         )
         for error in result.errors[:5]:

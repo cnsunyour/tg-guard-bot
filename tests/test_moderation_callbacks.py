@@ -451,6 +451,77 @@ async def test_report_guard_discards_after_locked_processing(mocker) -> None:
 
 
 @pytest.mark.unit
+async def test_cmd_spam_prompt_layout_matches_recorded_vote_base() -> None:
+    """有投票会话时：正文 = 管理员 header + 举报文案 + 单换行 + 首票进度，全程无空行；
+    record_vote_prompt 存的 base 必须与正文去掉进度行后逐字一致（进度编辑据此重建）。"""
+    message = MagicMock(spec=Message)
+    message.chat = SimpleNamespace(id=-1001234567890, type="supergroup")
+    message.from_user = SimpleNamespace(id=100200300)
+    message.text = "/spam"
+    message.reply_to_message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        message_id=77,
+        text="spam text",
+        caption=None,
+        content_type="text",
+    )
+    reply = MagicMock(spec=Message)
+    reply.message_id = 9001
+    message.answer = AsyncMock(return_value=reply)
+    localizer = _localizer()
+    vote_session = SimpleNamespace(vote_id="0123456789abcdef", threshold=5)
+    record_prompt = AsyncMock(return_value=True)
+
+    with (
+        patch.object(
+            moderation,
+            "check_admin_permission_strict_message",
+            new=AsyncMock(return_value=False),
+        ),
+        patch.object(moderation, "parse_spam_args", return_value=(False, None)),
+        patch.object(
+            moderation.ReportRepository,
+            "count_user_reports",
+            new=AsyncMock(return_value=0),
+        ),
+        patch.object(
+            moderation.ReportRepository,
+            "create_report",
+            new=AsyncMock(return_value=SimpleNamespace(id=123)),
+        ),
+        patch.object(
+            moderation.ReportRepository,
+            "count_pending_reports",
+            new=AsyncMock(return_value=1),
+        ),
+        patch.object(moderation, "get_vote_session", new=AsyncMock(return_value=None)),
+        patch.object(moderation.GroupRepository, "get", new=AsyncMock(return_value=None)),
+        patch.object(moderation, "create_vote_session", new=AsyncMock(return_value=vote_session)),
+        patch.object(moderation, "cast_vote", new=AsyncMock()),
+        patch.object(moderation, "record_vote_prompt", new=record_prompt),
+        patch.object(
+            moderation,
+            "get_spam_handler_admins_mention",
+            new=AsyncMock(return_value="@admins"),
+        ),
+        patch.object(moderation, "auto_delete_message", new=AsyncMock()),
+    ):
+        await moderation.cmd_spam(message, AsyncMock(), localizer)
+
+    submitted = localizer.t(
+        "moderation.spam.report.submitted.message",
+        report_id=123,
+        reason="<moderation.spam.reason.default.label>",
+        pending_count=1,
+    )
+    progress = localizer.t("spam_vote.progress.message", up=1, down=0, threshold=5)
+    sent_text = message.answer.await_args.args[0]
+    assert sent_text == f"🔔 @admins\n{submitted}\n{progress}"
+    assert "\n\n" not in sent_text
+    record_prompt.assert_awaited_once_with(-1001234567890, 77, 9001, f"🔔 @admins\n{submitted}")
+
+
+@pytest.mark.unit
 async def test_cmd_spam_with_active_session_still_reports_and_limits() -> None:
     """已有投票会话时 /spam 仍走频率限制 + 举报落库（投票不得绕过契约）。
 

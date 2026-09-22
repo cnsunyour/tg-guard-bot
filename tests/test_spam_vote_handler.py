@@ -252,9 +252,31 @@ async def test_callback_threshold_triggers_ban(mocker, localizer) -> None:
         group_id=CHAT_ID, message_id=ORIG_MSG_ID, status="approved", handled_by=VOTER_ID
     )
     bot.delete_message.assert_awaited_once_with(CHAT_ID, ORIG_MSG_ID)
-    # 结果段编辑进提示消息（移除按钮）+ 30s 自删
-    assert bot.edit_message_text.await_args.kwargs["reply_markup"] is None
+    # 结果段以单换行追加到存储的 prompt_base 之后（不留空行），移除按钮 + 30s 自删
+    edit_kwargs = bot.edit_message_text.await_args.kwargs
+    assert edit_kwargs["text"] == "base\nspam_vote.spam.completed.message"
+    assert edit_kwargs["reply_markup"] is None
     auto_delete.assert_awaited_once_with(callback.message, delay=30)
+
+
+async def test_edit_vote_progress_appends_progress_with_single_newline(mocker, localizer) -> None:
+    """进度编辑 = 存储的 prompt_base + 单换行 + 进度行；与发送时的分隔符一致，不产生空行。"""
+    session = _session()
+    mocker.patch.object(handler, "get_vote_session", new=AsyncMock(return_value=session))
+    mocker.patch.object(handler, "get_vote_prompt", new=AsyncMock(return_value=(555, "base")))
+    mocker.patch.object(handler, "_rebuild_prompt_keyboard", new=AsyncMock(return_value="keyboard"))
+    bot = MagicMock()
+    bot.edit_message_text = AsyncMock()
+
+    await handler.edit_vote_progress(bot, CHAT_ID, ORIG_MSG_ID, 1, 3, 5)
+
+    bot.edit_message_text.assert_awaited_once_with(
+        chat_id=CHAT_ID,
+        message_id=555,
+        text="base\nspam_vote.progress.message",
+        reply_markup="keyboard",
+        disable_web_page_preview=True,
+    )
 
 
 async def test_callback_ham_threshold_keeps_message(mocker, localizer) -> None:

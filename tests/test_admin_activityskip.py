@@ -153,7 +153,7 @@ async def test_global_threshold_uniform_override(mocker) -> None:
     assert report.kwargs["global_mode"] == "<admin.activityskip.global_mode.uniform.label>"
     assert report.kwargs["threshold_source"] == "<admin.activityskip.source.global.label>"
     assert report.kwargs["warning_block"] == (
-        "<admin.activityskip.warning.global_override.message:{'global_threshold': 30}>\n\n"
+        "<admin.activityskip.warning.global_override.message:{'global_threshold': 30}>\n"
     )
 
 
@@ -190,7 +190,7 @@ async def test_global_threshold_negative_disabled(mocker) -> None:
     assert report.kwargs["global_mode"] == "<admin.activityskip.global_mode.disabled.label>"
     assert report.kwargs["threshold_source"] == "<admin.activityskip.source.disabled.label>"
     assert report.kwargs["warning_block"] == (
-        "<admin.activityskip.warning.globally_disabled.message>\n\n"
+        "<admin.activityskip.warning.globally_disabled.message>\n"
     )
 
 
@@ -205,7 +205,7 @@ async def test_success_block_rendered_after_setting(mocker) -> None:
         c for c in localizer.t.call_args_list if c.args == ("admin.activityskip.report.message",)
     )
     assert report.kwargs["success_block"] == (
-        "<admin.activityskip.result.saved.message:{'new_value': 50}>\n\n"
+        "<admin.activityskip.result.saved.message:{'new_value': 50}>\n"
     )
 
 
