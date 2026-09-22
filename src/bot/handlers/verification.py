@@ -92,7 +92,7 @@ router = Router(name="verification")
 type InitialDeliveryResult = Literal["sent", "undelivered", "busy"]
 
 # 群内验证引导消息的共享窗口（秒）：窗口内同群同 flow 只发一条，到期删除。
-# catalog 文案「此提示将在 30 秒后自动删除」与此值对应，调整时需同步三语文案。
+# 引导文案已不展示该时长（紧凑化后去掉），调整此值无需同步 catalog。
 _HINT_SHARE_WINDOW_SECONDS = 30
 
 # 安全释放 in-flight 锁的 Lua 脚本：仅当键值等于 owner token 时才删除，
@@ -1013,13 +1013,11 @@ async def _process_user_join(
             # 直接发送欢迎消息（不需要限制权限，按群 locale）
             group_locale = await get_resolver().for_group(chat_id)
             localizer = get_translator().for_locale(group_locale)
-            welcome_text = (
-                localizer.t("verification.join.group.welcome", user=format_user_mention(user))
-                + "\n\n"
-                + localizer.t(
-                    "verification.join.group.invited_by.message",
-                    inviter=format_trusted_user_mention(event.from_user),
-                )
+            welcome_text = localizer.t(
+                "verification.join.group.welcome", user=format_user_mention(user)
+            ) + localizer.t(
+                "verification.join.group.invited_by.message",
+                inviter=format_trusted_user_mention(event.from_user),
             )
             welcome_msg = await bot.send_message(chat_id=chat_id, text=welcome_text)
 
@@ -2277,7 +2275,7 @@ async def _build_hint_content(
 ) -> tuple[str, InlineKeyboardMarkup]:
     """按群 locale 构建 flow 对应的验证引导内容（发送与编辑共用同一套渲染）。
 
-    chat_title 获取失败时回退到语言无关的 chat_id，避免重新引入硬编码中文。
+    引导消息就发在该群内，正文不带群标题（省去一次 get_chat 调用）。
     mention_ids 非空时在正文前加一行匿名 mention（仅 join flow 有此文案）。
     """
     group_locale = await get_resolver().for_group(chat_id)
@@ -2285,11 +2283,6 @@ async def _build_hint_content(
 
     bot_info = await bot.get_me()
     bot_username = bot_info.username
-
-    chat_title = str(chat_id)
-    with contextlib.suppress(Exception):
-        chat = await bot.get_chat(chat_id)
-        chat_title = chat.title or chat_title
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -2305,17 +2298,14 @@ async def _build_hint_content(
         ]
     )
 
-    text = localizer.t(
-        f"verification.hint.{flow}.group.message",
-        chat_title=escape_html(chat_title),
-    )
+    text = localizer.t(f"verification.hint.{flow}.group.message")
     if flow == "join" and mention_ids:
         # anonymous_mentions_html 只由数字 user_id 拼成，是可信 HTML，不能再转义
         mention_line = localizer.t(
             "verification.hint.join.group.mentions",
             users=anonymous_mentions_html(mention_ids),
         )
-        text = f"{mention_line}\n\n{text}"
+        text = f"{mention_line}\n{text}"
 
     return text, keyboard
 

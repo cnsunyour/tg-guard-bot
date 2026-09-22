@@ -1532,7 +1532,7 @@ async def _show_activity_skip_config(
                 "admin.activityskip.warning.global_override.message",
                 global_threshold=global_threshold,
             )
-            + "\n\n"
+            + "\n"
         )
     elif global_threshold == 0:
         effective_threshold = group.activity_skip_threshold
@@ -1543,12 +1543,12 @@ async def _show_activity_skip_config(
         effective_threshold = 0
         threshold_source = localizer.t("admin.activityskip.source.disabled.label")
         global_mode = localizer.t("admin.activityskip.global_mode.disabled.label")
-        warning_block = localizer.t("admin.activityskip.warning.globally_disabled.message") + "\n\n"
+        warning_block = localizer.t("admin.activityskip.warning.globally_disabled.message") + "\n"
 
     # 成功块(仅在刚完成设置时渲染)
     if new_value is not None:
         success_block = (
-            localizer.t("admin.activityskip.result.saved.message", new_value=new_value) + "\n\n"
+            localizer.t("admin.activityskip.result.saved.message", new_value=new_value) + "\n"
         )
     else:
         success_block = ""

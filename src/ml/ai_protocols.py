@@ -36,6 +36,7 @@ Jev 不是语言模型：输入 ``state`` + typed questions，一次并行返回
 import json
 import math
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final, cast
@@ -93,6 +94,18 @@ class ProtocolResponse:
     termination: ResponseTermination
     result: dict[str, Any] | None = None
     detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VisionImage:
+    """Vision 请求中的一张图片（base64 内容 + MIME 类型）。
+
+    同一条消息的多张图片（如动画贴纸的多帧）按顺序组成一个序列，
+    由 adapter 展开为协议各自的多个 image content block。
+    """
+
+    b64: str
+    mime: str
 
 
 class ResponseTerminatedError(Exception):
@@ -243,13 +256,12 @@ class ProtocolAdapter(ABC):
         model: str,
         system_prompt: str,
         user_text: str,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         detail: str,
         schema: JSONSchema,
         max_output_tokens: int,
     ) -> dict[str, Any]:
-        """构造 Vision 检测请求体。"""
+        """构造 Vision 检测请求体（``images`` 按顺序展开为多个图片 block）。"""
         raise NotImplementedError
 
     @abstractmethod
@@ -312,29 +324,28 @@ class OpenAIChatAdapter(ProtocolAdapter):
         model: str,
         system_prompt: str,
         user_text: str,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         detail: str,
         schema: JSONSchema,
         max_output_tokens: int,
     ) -> dict[str, Any]:
+        # 文本在前、图片按序在后；detail 对每张图片独立生效
+        content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+        content.extend(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image.mime};base64,{image.b64}",
+                    "detail": detail,
+                },
+            }
+            for image in images
+        )
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime};base64,{image_b64}",
-                                "detail": detail,
-                            },
-                        },
-                    ],
-                },
+                {"role": "user", "content": content},
             ],
         }
         self._apply_format(payload, schema, vision=True)
@@ -426,27 +437,26 @@ class OpenAIResponsesAdapter(ProtocolAdapter):
         model: str,
         system_prompt: str,
         user_text: str,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         detail: str,
         schema: JSONSchema,
         max_output_tokens: int,
     ) -> dict[str, Any]:
+        # 文本在前、图片按序在后；detail 对每张图片独立生效
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": user_text}]
+        content.extend(
+            {
+                "type": "input_image",
+                "image_url": f"data:{image.mime};base64,{image.b64}",
+                "detail": detail,
+            }
+            for image in images
+        )
         payload: dict[str, Any] = {
             "model": model,
             "input": [
                 {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": user_text},
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:{mime};base64,{image_b64}",
-                            "detail": detail,
-                        },
-                    ],
-                },
+                {"role": "user", "content": content},
             ],
             "max_output_tokens": max_output_tokens,
         }
@@ -589,31 +599,33 @@ class AnthropicMessagesAdapter(ProtocolAdapter):
         model: str,
         system_prompt: str,
         user_text: str,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         detail: str,
         schema: JSONSchema,
         max_output_tokens: int,
     ) -> dict[str, Any]:
+        # 图片在前、文本在后（Anthropic 推荐顺序）；多图时按官方示例给每张图
+        # 加 "Image N:" 文本标签帮助模型区分帧序，单图保持原有 block 结构
+        label_images = len(images) > 1
+        content: list[dict[str, Any]] = []
+        for index, image in enumerate(images, start=1):
+            if label_images:
+                content.append({"type": "text", "text": f"Image {index}:"})
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image.mime,
+                        "data": image.b64,
+                    },
+                }
+            )
+        content.append({"type": "text", "text": user_text})
         payload: dict[str, Any] = {
             "model": model,
             "system": system_prompt,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime,
-                                "data": image_b64,
-                            },
-                        },
-                        {"type": "text", "text": user_text},
-                    ],
-                }
-            ],
+            "messages": [{"role": "user", "content": content}],
             "max_tokens": max_output_tokens,
         }
         self._apply_format(payload, schema)
@@ -741,8 +753,7 @@ class TypeSafeSystemOneAdapter(ProtocolAdapter):
         model: str,
         system_prompt: str,
         user_text: str,
-        image_b64: str,
-        mime: str,
+        images: Sequence[VisionImage],
         detail: str,
         schema: JSONSchema,
         max_output_tokens: int,

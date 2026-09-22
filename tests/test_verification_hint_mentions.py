@@ -82,8 +82,9 @@ async def test_join_hint_mentions_all_waiting_users(mocker) -> None:
     assert text.startswith("🔔 ")
     assert f'<a href="tg://user?id={USER_ID}">👤</a>' in text
     assert f'<a href="tg://user?id={LATE_USER_ID}">👤</a>' in text
-    # mention 行独立成段，原文案完整保留
-    assert "\n\n⚠️ <b>入群验证提示</b>" in text
+    # mention 行独立一行，紧接引导正文，中间不留空行
+    assert "\n⚠️ <b>入群验证</b>" in text
+    assert "\n\n" not in text
     # 聚合等待发生在快照之前
     handler.asyncio.sleep.assert_awaited_once_with(
         handler.settings.verification_hint_aggregation_delay
@@ -105,7 +106,7 @@ async def test_join_hint_without_users_keeps_original_text(mocker) -> None:
     await handler.handle_user_not_started_bot(bot, CHAT_ID, USER_ID)
 
     text = _sent_text(bot)
-    assert text.startswith("⚠️ <b>入群验证提示</b>")
+    assert text.startswith("⚠️ <b>入群验证</b>")
     assert "🔔" not in text
     assert "tg://user" not in text
     # 没有 mention 就没有渲染版本可提交
@@ -264,7 +265,7 @@ async def test_redis_failure_still_sends_plain_hint(mocker) -> None:
     await handler.handle_user_not_started_bot(bot, CHAT_ID, USER_ID)
 
     text = _sent_text(bot)
-    assert text.startswith("⚠️ <b>入群验证提示</b>")
+    assert text.startswith("⚠️ <b>入群验证</b>")
     assert "tg://user" not in text
 
 

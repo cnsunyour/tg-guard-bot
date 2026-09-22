@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.12.1] - 2026-09-23
+
+### 新增功能
+
+#### 群消息紧凑化 📐
+- 三语 catalog 改写 121 个群内出站消息：首行 emoji + 结论，字段用「｜」同行拼接，不再用空行分段；usage / 错误消息只留语法 + `/help` 指引，面板只留状态 + 摘要 + 操作入口
+- 删除与操作无关的说明句（自动删除倒计时、「帮助模型…」等）；欢迎消息与「由管理员邀请」合成一行，入群引导改为直接指令句并去掉群标题
+- 帮助正文（`/help`）与私聊消息保持原样，不受影响
+
+#### 动画贴纸 Vision 检测合并为一次请求 🎞
+- TGS / WebM 贴纸抽取的两帧原本逐帧各发一次 Vision 请求，system prompt、群组上下文重复发送且每帧独立入库训练样本；现合并为一次多图请求整体判定，一条贴纸只落一条训练样本
+- OpenAI Chat / Responses 按序展开多个 image block，Anthropic 多图时按官方示例加 `Image N:` 标签；system prompt 与帧数无关（利于 prompt cache），多帧说明只在多图时追加到 user 段
+- 单图大小上限仍按每帧检查，任一帧超限整组放行
+
+### Bug 修复
+
+#### 跨聊天回复防护在生产上失效 🔗
+- aiogram 的 `TelegramObject` 配置了 `use_enum_values=True`，真实解析出的 `origin.type` 是纯 str，命中日志行取 `.value` 抛 `AttributeError`，被外层异常吞掉后返回 False，导致跨聊天回复引流消息整体放行（日志表现为 `处理跨聊天回复消息失败: 'str' object has no attribute 'value'`）
+- 改为 `getattr` 兜底兼容 str / 枚举两种形态；测试 mock 对齐真实结构，新增用 `ExternalReplyInfo.model_validate` 解析四种 origin 的回归测试（修复前必失败）
+
+### 代码质量
+
+- 新增 `tests/test_vision_multiframe.py` 覆盖多图 adapter 结构、prompt 多帧说明、provider 单次调用与 `SpamDetector` 多帧路径
+- 紧凑化相关测试补充发送正文与 `record_vote_prompt` 存储 base 一致、投票进度 / 终局编辑单换行断言
+
 ## [1.12.0] - 2026-09-21
 
 ### 新增功能
