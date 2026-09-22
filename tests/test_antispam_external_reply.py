@@ -39,12 +39,13 @@ def _external(
     return SimpleNamespace(
         chat=SimpleNamespace(id=source_chat_id) if source_chat_id is not None else None,
         message_id=source_message_id,
-        # 对齐 aiogram 结构：origin.type 是 MessageOriginType（str 枚举），.value 取 str
-        origin=SimpleNamespace(type=SimpleNamespace(value=origin_type)),
+        # 对齐真实解析结果：origin.type 声明为 Literal[MessageOriginType.X]，但 pydantic 2
+        # 反序列化 Telegram 更新时保留原始 str（仅默认值才是枚举成员）
+        origin=SimpleNamespace(type=origin_type),
     )
 
 
-def _message(*, external: SimpleNamespace | None, text: str | None = "无意义正文") -> MagicMock:
+def _message(*, external: object | None, text: str | None = "无意义正文") -> MagicMock:
     """构造 Message mock（external 为 None 时表示普通消息）。"""
     message = MagicMock()
     message.chat = SimpleNamespace(id=CHAT_ID, type="supergroup", title="Test")
@@ -201,6 +202,38 @@ async def test_all_origins_unified_hit(mocker, origin_type: str) -> None:
     """四种 origin 统一命中（用户决策：不做 origin 分级）"""
     hit, _, bot = _stub_detection(mocker)
     message = _message(external=_external(origin_type=origin_type, source_chat_id=None))
+
+    assert await antispam.check_and_handle_external_reply(message, bot) is True
+    hit.assert_awaited_once_with(message, bot)
+
+
+@pytest.mark.parametrize(
+    "origin_payload",
+    [
+        {
+            "type": "channel",
+            "chat": {"id": -100999, "type": "channel", "title": "Ads"},
+            "message_id": 7,
+        },
+        {"type": "user", "sender_user": {"id": 1, "is_bot": False, "first_name": "a"}},
+        {"type": "hidden_user", "sender_user_name": "hidden"},
+        {"type": "chat", "sender_chat": {"id": -100555, "type": "supergroup", "title": "G"}},
+    ],
+    ids=["channel", "user", "hidden_user", "chat"],
+)
+async def test_real_external_reply_object_hits(mocker, origin_payload: dict) -> None:
+    """回归：用 aiogram 真实解析的 ExternalReplyInfo 命中（线上曾因 origin.type 为
+    str 而 .value 抛错，异常被吞后整体放行）"""
+    from aiogram.types import ExternalReplyInfo
+
+    hit, _, bot = _stub_detection(mocker)
+    payload: dict = {"origin": {**origin_payload, "date": 1700000000}}
+    if origin_payload["type"] == "channel":
+        payload["chat"] = origin_payload["chat"]
+        payload["message_id"] = origin_payload["message_id"]
+    external = ExternalReplyInfo.model_validate(payload)
+    assert isinstance(external.origin.type, str)
+    message = _message(external=external)
 
     assert await antispam.check_and_handle_external_reply(message, bot) is True
     hit.assert_awaited_once_with(message, bot)

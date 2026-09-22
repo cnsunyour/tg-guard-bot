@@ -482,10 +482,13 @@ async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
             return False
 
         # 4. 命中：专用处置
+        # origin.type 声明为 Literal[MessageOriginType.X]，但 pydantic 2 反序列化真实
+        # 更新时保留原始 str（仅默认值才是枚举成员），不能直接取 .value
+        origin_type = getattr(external.origin.type, "value", external.origin.type)
         logger.warning(
             f"检测到跨聊天回复消息 [群组:{message.chat.id}] "
             f"[用户:{message.from_user.id if message.from_user else 'unknown'}] "
-            f"[origin:{external.origin.type.value}] [来源聊天:{source_chat_id}] "
+            f"[origin:{origin_type}] [来源聊天:{source_chat_id}] "
             f"[来源消息:{external.message_id}]"
         )
         await _handle_external_reply_hit(message, bot)
