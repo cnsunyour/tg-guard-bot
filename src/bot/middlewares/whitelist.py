@@ -25,6 +25,9 @@ class WhitelistMiddleware(BaseMiddleware):
 
     只允许 Bot 在白名单群组中提供服务
     非白名单群组会自动退出
+
+    在 message observer 上以 outer middleware 注册：无论消息类型是否有 handler
+    都先过白名单，避免无 handler 的消息类型绕过后续闸门（见 main.py 注释）。
     """
 
     async def __call__(
@@ -61,6 +64,13 @@ class WhitelistMiddleware(BaseMiddleware):
 
         # 私聊不检查白名单
         if not chat_id or chat_type == ChatType.PRIVATE:
+            return await handler(event, data)
+
+        # 入群 / 退群 service message 放行：Bot 自身被加入非白名单群的退群动作由
+        # events.on_bot_added_to_group（my_chat_member）负责；本中间件以 outer 挂在
+        # message observer 上会同时收到对应的 new_chat_members 通知，若不放行会
+        # 重复发提示 + 重复 leave_chat
+        if isinstance(event, Message) and (event.new_chat_members or event.left_chat_member):
             return await handler(event, data)
 
         # 检查群组是否在白名单

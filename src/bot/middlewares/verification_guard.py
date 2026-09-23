@@ -22,6 +22,9 @@ class VerificationGuardMiddleware(BaseMiddleware):
     """删除新成员入群短窗口内发送的群消息，并阻断后续处理。
 
     设计要点：
+    - 以 outer middleware 挂在 message observer：在 handler 匹配之前执行，没有专用
+      handler 的消息类型（如 game / invoice）同样受拦截，不会因「无 handler 即不进
+      inner 中间件」而绕过。
     - 仅对新发的群组 Message 生效（不处理 edited_message / callback_query）。
     - 跳过私聊、服务消息、频道马甲、匿名管理员、超级管理员、系统账号与 Bot 自身。
     - Redis 查询失败时 fail-open 放行，绝不因基础设施抖动误删普通用户消息。

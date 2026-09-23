@@ -256,6 +256,47 @@ async def test_block_even_if_delete_fails(middleware, mock_bot):
     mock_bot.delete_message.assert_awaited_once()
 
 
+# ==================== outer middleware 语义（无 handler 类型也拦截） ====================
+
+
+@pytest.mark.asyncio
+async def test_outer_guard_blocks_message_type_without_handler():
+    """以 outer 注册时，没有任何 handler 匹配的消息类型（如 dice）也必须被删除。
+
+    aiogram 的 inner middleware 只在 handler 匹配后执行；若误改回 inner 注册，
+    没有专用 handler 的消息类型会整体绕过入群短窗口拦截。本测试走真实 Dispatcher
+    且不注册任何 handler，锁定 outer 语义。
+    """
+    from datetime import UTC, datetime
+
+    from aiogram import Bot, Dispatcher
+    from aiogram.types import Chat, Dice, Update, User
+
+    bot = MagicMock(spec=Bot)
+    bot.id = 999000999
+    bot.delete_message = AsyncMock()
+    mock_redis = MagicMock()
+    mock_redis.exists = AsyncMock(return_value=1)
+
+    dp = Dispatcher()
+    dp.message.outer_middleware(VerificationGuardMiddleware())
+    update = Update(
+        update_id=1,
+        message=Message(
+            message_id=42,
+            date=datetime.now(UTC),
+            chat=Chat(id=-1001234567890, type="supergroup"),
+            from_user=User(id=100200300, is_bot=False, first_name="u"),
+            dice=Dice(emoji="🎲", value=6),
+        ),
+    )
+
+    with _patch_redis(mock_redis):
+        await dp.feed_update(bot, update)
+
+    bot.delete_message.assert_awaited_once_with(chat_id=-1001234567890, message_id=42)
+
+
 # ==================== 键名格式 ====================
 
 

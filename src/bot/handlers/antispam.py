@@ -19,6 +19,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    PhotoSize,
     ReplyParameters,
 )
 from loguru import logger
@@ -1975,9 +1976,22 @@ async def on_message(message: Message, bot: Bot) -> None:
         await ContextService.record_message(message)
 
 
-@router.message(F.photo)
+def _photo_sizes(message: Message) -> list[PhotoSize]:
+    """取图片消息可下载的尺寸列表（升序，末位最大）。
+
+    ``live_photo`` 的 ``file_id`` 指向短视频文件，Vision 直判只用其静态预览
+    ``live_photo.photo``；预览缺失时返回空列表，由调用方跳过视觉检测。
+    """
+    if message.photo:
+        return message.photo
+    if message.live_photo and message.live_photo.photo:
+        return message.live_photo.photo
+    return []
+
+
+@router.message(F.photo | F.live_photo)
 async def on_photo_message(message: Message, bot: Bot) -> None:
-    """处理图片消息，检测垃圾"""
+    """处理图片 / 实况照片消息，检测垃圾（同一 Vision 直判链路）"""
     reason = await _run_message_prechecks(message, bot)
     if reason is not None:
         return
@@ -1991,7 +2005,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
         return
 
     # ✅ 活跃度系统：检查是否允许发送非文本消息
-    if await check_non_text_message(message, bot, "photo", group.activity_enabled):
+    if await check_non_text_message(message, bot, message.content_type, group.activity_enabled):
         return  # 活跃度不足，消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任（activity 变量后续也用于 Vision 置信度调整）
@@ -2022,8 +2036,12 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     detector = get_detector()
 
     # 下载图片到临时文件
-    if not message.photo:
-        logger.warning("图片消息缺少 photo 数据")
+    photo_sizes = _photo_sizes(message)
+    if not photo_sizes:
+        logger.warning(
+            f"图片消息缺少可下载的 photo 数据，跳过视觉检测 "
+            f"[类型:{message.content_type}] [群组:{message.chat.id}] [用户:{message.from_user.id}]"
+        )
         return
 
     # ✅ 构建 Vision 直判需要的上下文：caption + 群组对话上下文
@@ -2047,7 +2065,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     skip_auto_train = bool(group and group.spam_confirm_enabled)
 
     with managed_temp_file(suffix=".jpg") as temp_file_path:
-        photo = message.photo[-1]  # 获取最大尺寸的图片
+        photo = photo_sizes[-1]  # 获取最大尺寸的图片
         logger.debug(f"开始下载图片 [file_id:{photo.file_id}]")
         await bot.download(photo, destination=temp_file_path)
         logger.debug(f"图片已下载到临时文件: {temp_file_path}")
@@ -2494,9 +2512,29 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         logger.error(f"贴纸检测失败: {e}")
 
 
-@router.message(F.video)
-async def on_video_message(message: Message, bot: Bot) -> None:
-    """处理视频消息（活跃度检查）"""
+@router.message(
+    # 富媒体：仅受非文本活跃度门槛约束，内容本身不做垃圾检测
+    F.video
+    | F.animation
+    | F.voice
+    | F.video_note
+    | F.document
+    | F.audio
+    # 结构化消息：用户可主动发送但无文本载荷可检测，同样按非文本处理；
+    # 若不注册 handler，这些类型会连 inner 中间件（CAS 等）一起绕过
+    | F.contact
+    | F.poll
+    | F.location
+    | F.venue
+    | F.checklist
+    | F.story
+    | F.dice
+)
+async def on_activity_only_message(message: Message, bot: Bot) -> None:
+    """处理只做活跃度检查的非文本消息（富媒体 + 结构化消息）。
+
+    活跃度门槛按 ``message.content_type`` 记日志，不区分具体类型做额外处理。
+    """
     reason = await _run_message_prechecks(message, bot)
     if reason is not None:
         return
@@ -2510,120 +2548,9 @@ async def on_video_message(message: Message, bot: Bot) -> None:
         group = None
 
     # 活跃度检查
-    if await check_non_text_message(
-        message, bot, "video", group.activity_enabled if group else True
-    ):
-        return
-
-
-@router.message(F.animation)
-async def on_animation_message(message: Message, bot: Bot) -> None:
-    """处理 GIF 动画消息（活跃度检查）"""
-    reason = await _run_message_prechecks(message, bot)
-    if reason is not None:
-        return
-    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
-
-    # 检查群组配置
-    try:
-        group = await GroupRepository.get(message.chat.id)
-    except Exception as e:
-        logger.debug(f"获取群组配置失败（非关键）: {e}")
-        group = None
-
-    # 活跃度检查
-    if await check_non_text_message(
-        message, bot, "animation", group.activity_enabled if group else True
-    ):
-        return
-
-
-@router.message(F.voice)
-async def on_voice_message(message: Message, bot: Bot) -> None:
-    """处理语音消息（活跃度检查）"""
-    reason = await _run_message_prechecks(message, bot)
-    if reason is not None:
-        return
-    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
-
-    # 检查群组配置
-    try:
-        group = await GroupRepository.get(message.chat.id)
-    except Exception as e:
-        logger.debug(f"获取群组配置失败（非关键）: {e}")
-        group = None
-
-    # 活跃度检查
-    if await check_non_text_message(
-        message, bot, "voice", group.activity_enabled if group else True
-    ):
-        return
-
-
-@router.message(F.video_note)
-async def on_video_note_message(message: Message, bot: Bot) -> None:
-    """处理视频笔记消息（活跃度检查）"""
-    reason = await _run_message_prechecks(message, bot)
-    if reason is not None:
-        return
-    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
-
-    # 检查群组配置
-    try:
-        group = await GroupRepository.get(message.chat.id)
-    except Exception as e:
-        logger.debug(f"获取群组配置失败（非关键）: {e}")
-        group = None
-
-    # 活跃度检查
-    if await check_non_text_message(
-        message, bot, "video_note", group.activity_enabled if group else True
-    ):
-        return
-
-
-@router.message(F.document)
-async def on_document_message(message: Message, bot: Bot) -> None:
-    """处理文件消息（活跃度检查）"""
-    reason = await _run_message_prechecks(message, bot)
-    if reason is not None:
-        return
-    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
-
-    # 检查群组配置
-    try:
-        group = await GroupRepository.get(message.chat.id)
-    except Exception as e:
-        logger.debug(f"获取群组配置失败（非关键）: {e}")
-        group = None
-
-    # 活跃度检查
-    if await check_non_text_message(
-        message, bot, "document", group.activity_enabled if group else True
-    ):
-        return
-
-
-@router.message(F.audio)
-async def on_audio_message(message: Message, bot: Bot) -> None:
-    """处理音频消息（活跃度检查）"""
-    reason = await _run_message_prechecks(message, bot)
-    if reason is not None:
-        return
-    assert message.from_user is not None  # 类型缩小：prechecks 通过即非空
-
-    # 检查群组配置
-    try:
-        group = await GroupRepository.get(message.chat.id)
-    except Exception as e:
-        logger.debug(f"获取群组配置失败（非关键）: {e}")
-        group = None
-
-    # 活跃度检查
-    if await check_non_text_message(
-        message, bot, "audio", group.activity_enabled if group else True
-    ):
-        return
+    await check_non_text_message(
+        message, bot, message.content_type, group.activity_enabled if group else True
+    )
 
 
 @router.edited_message(F.text)
@@ -2727,11 +2654,13 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
         )
 
 
-@router.edited_message(F.photo)
+@router.edited_message(F.photo | F.live_photo)
 async def on_edited_photo_message(message: Message, bot: Bot) -> None:
-    """处理编辑后的图片消息（检测 caption 中的垃圾文字）
+    """处理编辑后的图片 / 实况照片消息（检测 caption 中的垃圾文字）
 
-    注意：Telegram 不允许更换图片，只能编辑 caption
+    Note:
+        用户编辑时可替换媒体本身；本处理器只复检 caption，不重新做图片视觉检测
+        （已知取舍：编辑替换成垃圾图片不会被复检）。
     """
     reason = await _run_message_prechecks(message, bot)
     if reason is not None:

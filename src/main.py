@@ -168,10 +168,18 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     # 设置到反垃圾模块
     antispam.set_registered_commands(registered_commands)
 
+    # 消息中间件分两层注册（aiogram 语义）：
+    # - outer_middleware：在 handler 匹配之前执行，无论消息类型是否有 handler 都会运行。
+    #   放廉价的安全闸门（白名单 / 入群短窗口 / 宵禁），确保没有专用 handler 的消息类型
+    #   （如 game / invoice 等）不会绕过这些检查。
+    # - middleware（inner）：仅在某个 handler 匹配后执行。放依赖 handler 语义的逻辑
+    #   （命令自动删除）与较重的检查（CAS / 用户状态查询）。
+    # 两层均只挂在 message observer；edited_message 不算「发送」，不经这些闸门。
+
     # ✅ 注册白名单中间件（最高优先级）
     from src.bot.middlewares import WhitelistMiddleware
 
-    dp.message.middleware(WhitelistMiddleware())
+    dp.message.outer_middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
     # ✅ 覆盖加入请求（Approve New Members 模式）：非白名单群的 join request
     # 不进入 verification 处理（避免 approve/限制等副作用），并触发退群。
@@ -181,7 +189,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     # 删除新成员在 restrict 生效前抢发的群消息，命中即阻断后续处理
     from src.bot.middlewares import VerificationGuardMiddleware
 
-    dp.message.middleware(VerificationGuardMiddleware())
+    dp.message.outer_middleware(VerificationGuardMiddleware())
 
     # ✅ 注册速率限制中间件
     # 说明：
@@ -194,14 +202,16 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     # ✅ 注册宵禁中间件（在白名单之后，自动删除之前）
     from src.bot.middlewares import CurfewMiddleware
 
-    dp.message.middleware(CurfewMiddleware())
+    dp.message.outer_middleware(CurfewMiddleware())
 
-    # ✅ 注册自动删除中间件（在群组中自动删除命令消息和响应）
+    # ✅ 注册自动删除中间件（在群组中自动删除命令消息和响应）—— inner：只对命中 handler 的命令生效
     from src.bot.middlewares import AutoDeleteMiddleware
 
     dp.message.middleware(AutoDeleteMiddleware(response_delay=30))
 
-    # ✅ 注册 CAS 黑名单检查中间件（在白名单和限流之后，handler 之前）
+    # ✅ 注册 CAS 黑名单检查中间件（在白名单和限流之后，handler 之前）—— inner：
+    # 用户可发的全部消息类型均已有 handler（见 antispam.py），故 inner 也能覆盖；
+    # 保持 inner 可避免对无 handler 的 service message 发起外部查询
     # 同时包含用户状态检测（restricted/scam/fake/deleted）
     if settings.cas_enabled or settings.user_status_check_enabled:
         from src.bot.middlewares import CASCheckMiddleware
