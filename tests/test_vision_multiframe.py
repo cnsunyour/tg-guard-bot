@@ -254,5 +254,6 @@ async def test_detect_images_size_limit_raises_inside_vision_path(tmp_path) -> N
             context_text=None,
             locale="en",
             activity=None,
+            activity_skip_threshold=0,
             skip_auto_train=True,
         )

@@ -424,7 +424,9 @@ class Settings(BaseSettings):
     )
     activity_skip_spam_check_threshold: int = Field(
         default=0,
-        description="活跃度跳过垃圾检测全局阈值（>0=全局统一阈值，=0=使用群组配置，<0=全局禁用）",
+        description="活跃度跳过垃圾检测全局阈值（>0=全局统一阈值，=0=使用群组配置，<0=全局禁用）。"
+        "生效阈值同时是置信度修正区间上限：活跃度 1→阈值 按对数爬升到最大修正；"
+        "未启用豁免时沿用活跃度 10 起的旧公式",
     )
     activity_decay_floor: int = Field(
         default=1,

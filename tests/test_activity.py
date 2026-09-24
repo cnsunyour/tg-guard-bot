@@ -1,5 +1,6 @@
-"""测试活跃度服务：衰减下限与非文本消息拦截"""
+"""测试活跃度服务：衰减下限、非文本消息拦截与置信度修正区间"""
 
+import math
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -243,3 +244,72 @@ async def test_record_text_message_none_keeps_legacy_behavior():
         mock_redis.get.side_effect = ["3", today]
         assert await ActivityService.record_text_message(1, 100) == 4
         assert mock_redis.set.call_count == 2
+
+
+# ===== 置信度修正区间 =====
+
+
+@pytest.fixture
+def _max_reduction_015(monkeypatch):
+    """固定最大修正 0.15，避免依赖运行环境配置"""
+    monkeypatch.setattr("src.services.activity.settings.activity_max_confidence_reduction", 0.15)
+
+
+@pytest.mark.usefixtures("_max_reduction_015")
+@pytest.mark.parametrize("skip_threshold", [0, -1])
+@pytest.mark.parametrize(
+    ("activity", "expected"),
+    [(0, 0.0), (1, 0.0), (9, 0.0), (10, 0.01), (20, 0.05), (40, 0.10), (80, 0.15), (160, 0.15)],
+)
+def test_confidence_reduction_keeps_legacy_curve_when_skip_disabled(
+    activity, expected, skip_threshold
+):
+    """未启用豁免（阈值 <= 0）：沿用活跃度 10 起的 log2 旧公式，逐点不变"""
+    reduction = ActivityService.calculate_confidence_reduction(
+        activity, skip_threshold=skip_threshold
+    )
+    assert reduction == pytest.approx(expected)
+
+
+@pytest.mark.usefixtures("_max_reduction_015")
+def test_confidence_reduction_defaults_to_legacy_curve():
+    """省略阈值等价于未启用豁免（兼容未传阈值的调用方）"""
+    assert ActivityService.calculate_confidence_reduction(20) == pytest.approx(0.05)
+    assert ActivityService.calculate_confidence_reduction(5) == 0.0
+
+
+@pytest.mark.usefixtures("_max_reduction_015")
+@pytest.mark.parametrize(
+    ("skip_threshold", "activity", "expected"),
+    [
+        (10, 0, 0.0),
+        (10, 1, 0.0),  # 起点：衰减到下限（默认 1）的用户不修正
+        (10, 2, 0.15 * math.log(2) / math.log(10)),
+        (10, 5, 0.15 * math.log(5) / math.log(10)),
+        (10, 9, 0.15 * math.log(9) / math.log(10)),
+        (10, 10, 0.15),  # 达到阈值即满额（仅不做豁免的编辑图片 caption 路径会用到）
+        (10, 50, 0.15),
+        (100, 10, 0.075),  # ln10 / ln100 = 1/2
+        (2, 1, 0.0),
+        (2, 2, 0.15),
+        (1, 0, 0.0),
+        (1, 1, 0.15),
+    ],
+)
+def test_confidence_reduction_ramps_from_one_to_skip_threshold(skip_threshold, activity, expected):
+    """启用豁免：活跃度 1→阈值 按 ln 曲线爬升到最大修正"""
+    reduction = ActivityService.calculate_confidence_reduction(
+        activity, skip_threshold=skip_threshold
+    )
+    assert reduction == pytest.approx(expected)
+
+
+@pytest.mark.usefixtures("_max_reduction_015")
+@pytest.mark.parametrize("skip_threshold", [3, 10, 100])
+def test_confidence_reduction_is_monotonic_within_ramp(skip_threshold):
+    """启用豁免时修正值随活跃度单调不减（旧公式在 10→11 处有 0.01→0.0069 的回落）"""
+    values = [
+        ActivityService.calculate_confidence_reduction(activity, skip_threshold=skip_threshold)
+        for activity in range(skip_threshold + 2)
+    ]
+    assert values == sorted(values)

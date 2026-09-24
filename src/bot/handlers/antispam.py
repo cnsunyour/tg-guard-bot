@@ -1854,6 +1854,21 @@ async def on_antiextreply_toggle(callback: CallbackQuery, localizer: BoundLocali
         )
 
 
+def _resolve_activity_skip_threshold(group: Group | None) -> tuple[int, str]:
+    """解析有效的活跃度检测豁免阈值及其来源（来源仅用于日志）
+
+    全局配置 > 0 时全局统一；= 0 时取群组配置（未建组视为 0）；< 0 时全局禁用。
+    返回的阈值 <= 0 表示未启用豁免。该值同时决定置信度修正区间，见
+    ActivityService.calculate_confidence_reduction。
+    """
+    global_threshold = settings.activity_skip_spam_check_threshold
+    if global_threshold > 0:
+        return global_threshold, "全局配置"
+    if global_threshold == 0:
+        return (group.activity_skip_threshold if group else 0), "群组配置"
+    return 0, "全局禁用"
+
+
 @router.message(F.text)
 async def on_message(message: Message, bot: Bot) -> None:
     """处理所有文本消息，检测垃圾"""
@@ -1879,7 +1894,6 @@ async def on_message(message: Message, bot: Bot) -> None:
     is_special_message = is_external_forward(message) or has_url_entities(message)
 
     # 记录活跃度（管理员已在上面跳过，不会记录）
-    activity = None
     if is_special_message:
         # 外部转发/带链接消息：按非文本消息处理
         if await check_non_text_message(
@@ -1897,32 +1911,16 @@ async def on_message(message: Message, bot: Bot) -> None:
             message.chat.id, message.from_user.id, text=message.text
         )
 
-    # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    if activity is not None:
-        global_threshold = settings.activity_skip_spam_check_threshold
-
-        # 确定最终阈值（全局配置优先）
-        if global_threshold > 0:
-            # 全局阈值 > 0：使用全局配置
-            final_threshold = global_threshold
-            threshold_source = "全局配置"
-        elif global_threshold == 0:
-            # 全局阈值 = 0：使用群组配置
-            final_threshold = group.activity_skip_threshold if group else 0
-            threshold_source = "群组配置"
-        else:
-            # 全局阈值 < 0：全局禁用
-            final_threshold = 0
-            threshold_source = "全局禁用"
-
-        if final_threshold > 0 and activity >= final_threshold:
-            logger.debug(
-                f"跳过垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
-            )
-            # ✅ 记录高活跃度用户消息到上下文
-            await ContextService.record_message(message)
-            return  # 直接返回，不进行垃圾检测
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任（阈值同时决定下方检测的置信度修正区间）
+    activity_skip_threshold, threshold_source = _resolve_activity_skip_threshold(group)
+    if activity_skip_threshold > 0 and activity >= activity_skip_threshold:
+        logger.debug(
+            f"跳过垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+            f"[活跃度:{activity}] [阈值:{activity_skip_threshold}] [来源:{threshold_source}]"
+        )
+        # ✅ 记录高活跃度用户消息到上下文
+        await ContextService.record_message(message)
+        return  # 直接返回，不进行垃圾检测
 
     # 获取检测器
     detector = get_detector()
@@ -1960,6 +1958,7 @@ async def on_message(message: Message, bot: Bot) -> None:
         user_id=message.from_user.id,
         chat_id=message.chat.id,
         activity=activity,
+        activity_skip_threshold=activity_skip_threshold,
         context_text=context_text,
         context_messages=context_messages_raw,
         message=message,
@@ -2021,25 +2020,13 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
     if await check_non_text_message(message, bot, message.content_type, group.activity_enabled):
         return  # 活跃度不足，消息已被删除
 
-    # ✅ 活跃度跳过检测：高活跃度用户直接信任（activity 变量后续也用于 Vision 置信度调整）
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任（activity 与阈值后续也用于 Vision 置信度调整）
     activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-    global_threshold = settings.activity_skip_spam_check_threshold
-
-    # 确定最终阈值（全局配置优先）
-    if global_threshold > 0:
-        final_threshold = global_threshold
-        threshold_source = "全局配置"
-    elif global_threshold == 0:
-        final_threshold = group.activity_skip_threshold if group else 0
-        threshold_source = "群组配置"
-    else:
-        final_threshold = 0
-        threshold_source = "全局禁用"
-
-    if final_threshold > 0 and activity >= final_threshold:
+    activity_skip_threshold, threshold_source = _resolve_activity_skip_threshold(group)
+    if activity_skip_threshold > 0 and activity >= activity_skip_threshold:
         logger.debug(
             f"跳过图片垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-            f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            f"[活跃度:{activity}] [阈值:{activity_skip_threshold}] [来源:{threshold_source}]"
         )
         # 记录到上下文
         await ContextService.record_message(message)
@@ -2091,6 +2078,7 @@ async def on_photo_message(message: Message, bot: Bot) -> None:
             caption=caption,
             context_text=context_text,
             activity=activity,
+            activity_skip_threshold=activity_skip_threshold,
             skip_auto_train=skip_auto_train,
         )
     # 注意：临时文件在退出 with 块时自动删除
@@ -2140,25 +2128,13 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
         return  # 消息已被删除
 
     # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    # activity 变量在后续 detect_image 也会用到，提升作用域
+    # activity 与阈值在后续 detect_images 也会用到（Vision 置信度调整），提升作用域
     activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
-    global_threshold = settings.activity_skip_spam_check_threshold
-
-    # 确定最终阈值（全局配置优先）
-    if global_threshold > 0:
-        final_threshold = global_threshold
-        threshold_source = "全局配置"
-    elif global_threshold == 0:
-        final_threshold = group.activity_skip_threshold if group else 0
-        threshold_source = "群组配置"
-    else:
-        final_threshold = 0
-        threshold_source = "全局禁用"
-
-    if final_threshold > 0 and activity >= final_threshold:
+    activity_skip_threshold, threshold_source = _resolve_activity_skip_threshold(group)
+    if activity_skip_threshold > 0 and activity >= activity_skip_threshold:
         logger.debug(
             f"跳过贴纸垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-            f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
+            f"[活跃度:{activity}] [阈值:{activity_skip_threshold}] [来源:{threshold_source}]"
         )
         # 记录到上下文
         await ContextService.record_message(message)
@@ -2370,6 +2346,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             caption=sticker_caption,
                             context_text=sticker_context_text,
                             activity=activity,
+                            activity_skip_threshold=activity_skip_threshold,
                             skip_auto_train=sticker_skip_auto_train,
                         )
 
@@ -2427,6 +2404,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                         caption=sticker_caption,
                         context_text=sticker_context_text,
                         activity=activity,
+                        activity_skip_threshold=activity_skip_threshold,
                         skip_auto_train=sticker_skip_auto_train,
                     )
 
@@ -2495,6 +2473,7 @@ async def on_sticker_message(message: Message, bot: Bot) -> None:
                             caption=sticker_caption,
                             context_text=sticker_context_text,
                             activity=activity,
+                            activity_skip_threshold=activity_skip_threshold,
                             skip_auto_train=sticker_skip_auto_train,
                         )
 
@@ -2592,26 +2571,14 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
     # 获取活跃度（用于降低检测阈值）
     activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
 
-    # ✅ 活跃度跳过检测：高活跃度用户直接信任
-    if activity is not None:
-        global_threshold = settings.activity_skip_spam_check_threshold
-
-        if global_threshold > 0:
-            final_threshold = global_threshold
-            threshold_source = "全局配置"
-        elif global_threshold == 0:
-            final_threshold = group.activity_skip_threshold if group else 0
-            threshold_source = "群组配置"
-        else:
-            final_threshold = 0
-            threshold_source = "全局禁用"
-
-        if final_threshold > 0 and activity >= final_threshold:
-            logger.debug(
-                f"跳过编辑消息垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
-                f"[活跃度:{activity}] [阈值:{final_threshold}] [来源:{threshold_source}]"
-            )
-            return
+    # ✅ 活跃度跳过检测：高活跃度用户直接信任（阈值同时决定下方检测的置信度修正区间）
+    activity_skip_threshold, threshold_source = _resolve_activity_skip_threshold(group)
+    if activity_skip_threshold > 0 and activity >= activity_skip_threshold:
+        logger.debug(
+            f"跳过编辑消息垃圾检测 [群组:{message.chat.id}] [用户:{message.from_user.id}] "
+            f"[活跃度:{activity}] [阈值:{activity_skip_threshold}] [来源:{threshold_source}]"
+        )
+        return
 
     # 获取检测器
     detector = get_detector()
@@ -2644,6 +2611,7 @@ async def on_edited_text_message(message: Message, bot: Bot) -> None:
         user_id=message.from_user.id,
         chat_id=message.chat.id,
         activity=activity,
+        activity_skip_threshold=activity_skip_threshold,
         context_text=context_text,
         skip_auto_train=skip_auto_train,
     )
@@ -2693,6 +2661,8 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
     if message.caption:
         # 获取活跃度（用于降低检测阈值）
         activity = await ActivityService.get_activity(message.chat.id, message.from_user.id)
+        # 编辑图片 caption 不做检测豁免（既有行为），阈值只用于置信度修正区间
+        activity_skip_threshold, _ = _resolve_activity_skip_threshold(group)
 
         # 检测器
         detector = get_detector()
@@ -2724,6 +2694,7 @@ async def on_edited_photo_message(message: Message, bot: Bot) -> None:
             user_id=message.from_user.id,
             chat_id=message.chat.id,
             activity=activity,
+            activity_skip_threshold=activity_skip_threshold,
             context_text=context_text,
             skip_auto_train=skip_auto_train,
         )

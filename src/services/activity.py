@@ -24,7 +24,7 @@ class ActivityService:
 
     活跃度用途:
     - 非文本消息限制: group.activity_enabled=True 时，活跃度 == 0（从未发言）才不能发非文本
-    - 置信度修正: 活跃度越高，垃圾检测误判率越低（始终生效）
+    - 置信度修正: 活跃度越高，垃圾检测误判率越低（始终生效；修正区间随检测豁免阈值变化）
     - 检测豁免: activity >= threshold 时，跳过垃圾检测（始终生效）
     - 宵禁门槛: 宵禁期间根据活跃度控制发言权限（始终生效）
     """
@@ -120,7 +120,7 @@ class ActivityService:
             # persist_decay=False：仅读取活跃度也不写回，避免重置衰减时钟
             current = await ActivityService.get_activity(chat_id, user_id, persist_decay=False)
             logger.debug(
-                f"忽略超短消息的活跃度奖励 " f"[群组:{chat_id}] [用户:{user_id}] [活跃度:{current}]"
+                f"忽略超短消息的活跃度奖励 [群组:{chat_id}] [用户:{user_id}] [活跃度:{current}]"
             )
             return current
 
@@ -210,25 +210,39 @@ class ActivityService:
         return new_activity
 
     @staticmethod
-    def calculate_confidence_reduction(activity: int) -> float:
+    def calculate_confidence_reduction(activity: int, skip_threshold: int = 0) -> float:
         """根据活跃度计算反垃圾置信度减少值
 
-        使用对数公式，实现边际递减效应
+        修正区间随检测豁免阈值变化，均为对数曲线（边际递减）：
 
-        公式: confidence_reduction = 0.01 * log2(activity / 10)
-        - activity = 10: 0.01
-        - activity = 20: 0.02
-        - activity = 40: 0.03
-        - activity = 80: 0.04
-        - activity = 160: 0.05
-        - 最大减少: activity_max_confidence_reduction (默认 0.15)
+        - skip_threshold > 0（已启用豁免）：活跃度 1 → 阈值爬升，
+          reduction = max × ln(activity) / ln(skip_threshold)。达到阈值即满额且优先判断
+          （阈值为 1 时活跃度 1 也取满额）——这类用户本会跳过检测，满额只作用于不做
+          豁免判断的编辑图片 caption 复检；未达阈值时活跃度 <= 1 为 0。
+          max 为 0.15、阈值 10 时：2→0.045、5→0.105、9→0.143
+        - skip_threshold <= 0（未启用豁免，新部署默认）：沿用固定公式
+          reduction = 0.05 × log2(activity / 10)，活跃度 < 10 为 0、= 10 为 0.01，
+          max 为 0.15 时活跃度 80 封顶
+
+        max 即 activity_max_confidence_reduction（默认 0.15）。
 
         Args:
             activity: 用户活跃度
+            skip_threshold: 有效检测豁免阈值（全局 / 群组配置解析后的值），<= 0 表示未启用
 
         Returns:
-            置信度减少值 (负数，范围 0 到 -activity_max_confidence_reduction)
+            置信度减少值 (非负，范围 0 到 activity_max_confidence_reduction)，调用方从置信度中减去
         """
+        max_reduction = settings.activity_max_confidence_reduction
+
+        if skip_threshold > 0:
+            if activity >= skip_threshold:
+                return max_reduction
+            if activity <= 1:
+                return 0.0
+            # 此处 1 < activity < skip_threshold，故 skip_threshold >= 3，ln 分母恒为正
+            return max_reduction * math.log(activity) / math.log(skip_threshold)
+
         if activity < 10:
             return 0.0
 
@@ -240,5 +254,4 @@ class ActivityService:
         reduction = 0.05 * math.log2(activity / 10.0)
 
         # 限制最大减少值
-        max_reduction = settings.activity_max_confidence_reduction
         return min(reduction, max_reduction)

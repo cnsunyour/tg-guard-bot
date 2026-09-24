@@ -79,7 +79,13 @@ class SpamDetector:
         self.ai_detector = get_ai_detector()
 
     async def detect(
-        self, text: str, user_id: int, chat_id: int, activity: int | None = None
+        self,
+        text: str,
+        user_id: int,
+        chat_id: int,
+        activity: int | None = None,
+        *,
+        activity_skip_threshold: int = 0,
     ) -> DetectionResult:
         """检测文本是否为垃圾信息
 
@@ -88,6 +94,7 @@ class SpamDetector:
             user_id: 用户 ID
             chat_id: 群组 ID
             activity: 用户活跃度（可选），用于置信度调整
+            activity_skip_threshold: 有效检测豁免阈值，决定置信度修正区间（<= 0 为未启用）
 
         Returns:
             检测结果字典
@@ -151,7 +158,9 @@ class SpamDetector:
             )
 
             # 应用活跃度置信度调整
-            result = self._apply_activity_adjustment(result, activity, user_id)
+            result = self._apply_activity_adjustment(
+                result, activity, user_id, activity_skip_threshold=activity_skip_threshold
+            )
             return result
 
         # Stage 2: ML 分类器（捕获变体）
@@ -173,7 +182,9 @@ class SpamDetector:
                     )
 
                     # 应用活跃度置信度调整
-                    result = self._apply_activity_adjustment(result, activity, user_id)
+                    result = self._apply_activity_adjustment(
+                        result, activity, user_id, activity_skip_threshold=activity_skip_threshold
+                    )
                     return result
 
             except Exception as e:
@@ -196,7 +207,9 @@ class SpamDetector:
                     logger.info(f"Stage 3 检测到垃圾信息 [用户:{user_id}] 相似度: {similarity:.2f}")
 
                     # 应用活跃度置信度调整
-                    result = self._apply_activity_adjustment(result, activity, user_id)
+                    result = self._apply_activity_adjustment(
+                        result, activity, user_id, activity_skip_threshold=activity_skip_threshold
+                    )
                     return result
 
             except Exception as e:
@@ -213,6 +226,8 @@ class SpamDetector:
         chat_id: int,
         activity: int | None = None,
         skip_auto_train: bool = False,
+        *,
+        activity_skip_threshold: int = 0,
     ) -> DetectionResult:
         """并行检测入口 - 同时运行传统三阶段管道和 AI API 检测
 
@@ -222,13 +237,16 @@ class SpamDetector:
             chat_id: 群组 ID
             activity: 用户活跃度（可选）
             skip_auto_train: 是否跳过 AI 自动入库（确认模式下使用）
+            activity_skip_threshold: 有效检测豁免阈值，决定置信度修正区间（<= 0 为未启用）
 
         Returns:
             合并后的检测结果字典
         """
         # 如果 AI 检测未启用，直接使用传统三阶段
         if not self.ai_detector.enabled:
-            return await self.detect(text, user_id, chat_id, activity)
+            return await self.detect(
+                text, user_id, chat_id, activity, activity_skip_threshold=activity_skip_threshold
+            )
 
         # 对短文本保持与传统预过滤一致，避免无谓 AI 调用
         min_length = settings.spam_min_text_length
@@ -236,13 +254,25 @@ class SpamDetector:
             from src.core.utils import calculate_normalized_length
 
             if calculate_normalized_length(text) < min_length:
-                return await self.detect(text, user_id, chat_id, activity)
+                return await self.detect(
+                    text,
+                    user_id,
+                    chat_id,
+                    activity,
+                    activity_skip_threshold=activity_skip_threshold,
+                )
 
         # 并行执行传统检测和 AI 检测
         try:
             locale = await get_resolver().for_group(chat_id)
             results = await asyncio.gather(
-                self.detect(text, user_id, chat_id, activity),  # 传统三阶段
+                self.detect(
+                    text,
+                    user_id,
+                    chat_id,
+                    activity,
+                    activity_skip_threshold=activity_skip_threshold,
+                ),  # 传统三阶段
                 self.ai_detector.detect(text, locale=locale),  # AI API 检测
                 return_exceptions=True,
             )
@@ -262,13 +292,19 @@ class SpamDetector:
             # 合并结果（含 AI 结果的活跃度调整），样本入库延后到调整完成之后
             traditional_is_spam = traditional_result is not None and traditional_result["is_spam"]
             merged_result = await self._merge_detection_results(
-                traditional_result, ai_result, user_id, activity
+                traditional_result,
+                ai_result,
+                user_id,
+                activity,
+                activity_skip_threshold=activity_skip_threshold,
             )
 
         except Exception as e:
             logger.error(f"并行检测失败: {e}")
             # 降级到传统检测（降级路径不产生 AI 样本）
-            return await self.detect(text, user_id, chat_id, activity)
+            return await self.detect(
+                text, user_id, chat_id, activity, activity_skip_threshold=activity_skip_threshold
+            )
 
         await self._collect_ai_training_sample(
             merged_result, ai_result, traditional_is_spam, text, user_id, skip_auto_train
@@ -285,6 +321,8 @@ class SpamDetector:
         context_messages: list[dict] | None = None,
         message: Any = None,
         skip_auto_train: bool = False,
+        *,
+        activity_skip_threshold: int = 0,
     ) -> DetectionResult:
         """带上下文的并行检测入口 - 同时运行传统三阶段管道和 AI 上下文检测
 
@@ -297,13 +335,16 @@ class SpamDetector:
             context_messages: 原始上下文消息列表（给 Embedding 用）
             message: Telegram Message 对象（用于回复链检测）
             skip_auto_train: 是否跳过 AI 自动入库（确认模式下使用）
+            activity_skip_threshold: 有效检测豁免阈值，决定置信度修正区间（<= 0 为未启用）
 
         Returns:
             合并后的检测结果字典
         """
         # 如果 AI 检测未启用，直接使用传统三阶段
         if not self.ai_detector.enabled:
-            result = await self.detect(text, user_id, chat_id, activity)
+            result = await self.detect(
+                text, user_id, chat_id, activity, activity_skip_threshold=activity_skip_threshold
+            )
             # 应用上下文调整（即使没有 AI 也可以用 Embedding）
             if settings.context_consistency_enabled and context_messages:
                 result = await self._apply_context_adjustment(
@@ -317,7 +358,13 @@ class SpamDetector:
             from src.core.utils import calculate_normalized_length
 
             if calculate_normalized_length(text) < min_length:
-                result = await self.detect(text, user_id, chat_id, activity)
+                result = await self.detect(
+                    text,
+                    user_id,
+                    chat_id,
+                    activity,
+                    activity_skip_threshold=activity_skip_threshold,
+                )
                 if settings.context_consistency_enabled and context_messages:
                     result = await self._apply_context_adjustment(
                         result, text, message, context_messages, user_id
@@ -328,7 +375,13 @@ class SpamDetector:
         try:
             locale = await get_resolver().for_group(chat_id)
             results = await asyncio.gather(
-                self.detect(text, user_id, chat_id, activity),  # 传统三阶段
+                self.detect(
+                    text,
+                    user_id,
+                    chat_id,
+                    activity,
+                    activity_skip_threshold=activity_skip_threshold,
+                ),  # 传统三阶段
                 self.ai_detector.detect_with_context(
                     text, context_text, locale=locale
                 ),  # AI 上下文检测
@@ -351,7 +404,11 @@ class SpamDetector:
             # 先快照传统判定：上下文调整会原地修改结果，之后无法再区分来源
             traditional_is_spam = traditional_result is not None and traditional_result["is_spam"]
             merged_result = await self._merge_detection_results(
-                traditional_result, ai_result, user_id, activity
+                traditional_result,
+                ai_result,
+                user_id,
+                activity,
+                activity_skip_threshold=activity_skip_threshold,
             )
 
             # 应用上下文调整（降低误判）
@@ -363,7 +420,9 @@ class SpamDetector:
         except Exception as e:
             logger.error(f"并行上下文检测失败: {e}")
             # 降级到传统检测（降级路径不产生 AI 样本）
-            result = await self.detect(text, user_id, chat_id, activity)
+            result = await self.detect(
+                text, user_id, chat_id, activity, activity_skip_threshold=activity_skip_threshold
+            )
             # 应用上下文调整
             if settings.context_consistency_enabled and context_messages:
                 result = await self._apply_context_adjustment(
@@ -383,6 +442,8 @@ class SpamDetector:
         ai: dict[str, Any] | None,
         user_id: int,
         activity: int | None = None,
+        *,
+        activity_skip_threshold: int = 0,
     ) -> DetectionResult:
         """合并传统检测和 AI 检测结果（纯合并，不做样本入库）
 
@@ -400,6 +461,7 @@ class SpamDetector:
             ai: AI 检测结果
             user_id: 用户 ID
             activity: 用户活跃度
+            activity_skip_threshold: 有效检测豁免阈值，决定置信度修正区间（<= 0 为未启用）
 
         Returns:
             合并后的检测结果
@@ -432,7 +494,9 @@ class SpamDetector:
                 "details": ai.get("details", {}),
             }
             # ✅ 应用活跃度调整
-            return self._apply_activity_adjustment(ai_result, activity, user_id)
+            return self._apply_activity_adjustment(
+                ai_result, activity, user_id, activity_skip_threshold=activity_skip_threshold
+            )
 
         # AI 检测失败 → 使用传统结果
         if ai is None:
@@ -461,7 +525,12 @@ class SpamDetector:
                 "details": ai.get("details", {}),
             }
             # ✅ 应用活跃度调整
-            return self._apply_activity_adjustment(converted_result, activity, user_id)
+            return self._apply_activity_adjustment(
+                converted_result,
+                activity,
+                user_id,
+                activity_skip_threshold=activity_skip_threshold,
+            )
 
         # 策略 3: 都不是垃圾 → 使用传统结果
         logger.debug(f"传统和 AI 都认为不是垃圾 [用户:{user_id}]")
@@ -624,7 +693,12 @@ class SpamDetector:
             logger.error(f"AI 负样本入库失败 [用户:{user_id}]: {e}")
 
     def _apply_activity_adjustment(
-        self, result: DetectionResult, activity: int | None, user_id: int
+        self,
+        result: DetectionResult,
+        activity: int | None,
+        user_id: int,
+        *,
+        activity_skip_threshold: int,
     ) -> DetectionResult:
         """应用活跃度置信度调整
 
@@ -632,27 +706,29 @@ class SpamDetector:
             result: 检测结果字典
             activity: 用户活跃度
             user_id: 用户 ID
+            activity_skip_threshold: 有效检测豁免阈值，决定修正区间
+                （见 ActivityService.calculate_confidence_reduction）
 
         Returns:
             调整后的检测结果
         """
-        # 如果未提供活跃度或活跃度过低，不调整
-        if activity is None or activity < 10:
-            return result
-
-        # 如果未检测到垃圾，不调整
-        if not result["is_spam"]:
+        # 未提供活跃度或未检测到垃圾，不调整
+        if activity is None or not result["is_spam"]:
             return result
 
         # 导入 ActivityService（延迟导入避免循环依赖）
         from src.services.activity import ActivityService
 
+        # 计算置信度减少值；不在修正区间内（减少值为 0）则不调整
+        reduction = ActivityService.calculate_confidence_reduction(
+            activity, skip_threshold=activity_skip_threshold
+        )
+        if reduction <= 0:
+            return result
+
         # 保存原始置信度
         original_confidence = result["confidence"]
         result["original_confidence"] = original_confidence
-
-        # 计算置信度减少值
-        reduction = ActivityService.calculate_confidence_reduction(activity)
         result["activity_reduction"] = reduction
 
         # 应用调整
@@ -667,12 +743,14 @@ class SpamDetector:
             result["is_spam"] = False
             logger.info(
                 f"活跃度置信度调整 [用户:{user_id}] [活跃度:{activity}] "
+                f"[豁免阈值:{activity_skip_threshold}] "
                 f"{original_confidence:.2f} -> {adjusted_confidence:.2f} (减少 {reduction:.2f}), "
                 f"不再判定为垃圾"
             )
         else:
             logger.debug(
                 f"活跃度置信度调整 [用户:{user_id}] [活跃度:{activity}] "
+                f"[豁免阈值:{activity_skip_threshold}] "
                 f"{original_confidence:.2f} -> {adjusted_confidence:.2f} (减少 {reduction:.2f}), "
                 f"仍判定为垃圾"
             )
@@ -786,6 +864,7 @@ class SpamDetector:
         caption: str | None = None,
         context_text: str | None = None,
         activity: int | None = None,
+        activity_skip_threshold: int = 0,
         skip_auto_train: bool = False,
     ) -> DetectionResult:
         """检测一条图片消息是否为垃圾信息（分支入口）
@@ -801,6 +880,7 @@ class SpamDetector:
             caption: 图片文字说明（可选，Vision 会一起送 AI 判断）
             context_text: 格式化后的群组对话上下文（可选，仅 Vision 使用）
             activity: 用户活跃度（用于 Vision 路径的置信度调整）
+            activity_skip_threshold: 有效检测豁免阈值，决定置信度修正区间（<= 0 为未启用）
             skip_auto_train: 确认模式下跳过自动入库训练样本
 
         Returns:
@@ -836,6 +916,7 @@ class SpamDetector:
                 context_text=context_text,
                 locale=locale,
                 activity=activity,
+                activity_skip_threshold=activity_skip_threshold,
                 skip_auto_train=skip_auto_train,
             )
         except VisionUnsupportedError as e:
@@ -857,6 +938,7 @@ class SpamDetector:
         context_text: str | None,
         locale: str | None,
         activity: int | None,
+        activity_skip_threshold: int,
         skip_auto_train: bool,
     ) -> DetectionResult:
         """AI Vision 一次请求直判一组图片（省 OCR，多帧省重复请求）"""
@@ -914,7 +996,9 @@ class SpamDetector:
 
         # 活跃度调整（与 AI 文本分支保持一致；Vision 已消费 context，跳过上下文一致性调整）
         if result["is_spam"]:
-            result = self._apply_activity_adjustment(result, activity, user_id)
+            result = self._apply_activity_adjustment(
+                result, activity, user_id, activity_skip_threshold=activity_skip_threshold
+            )
 
         # 样本入库（正样本 / 高置信度负样本），确认模式下跳过避免重复
         if not skip_auto_train:

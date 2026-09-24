@@ -138,9 +138,9 @@ async def test_positive_sample_collected_after_adjustments_when_still_spam(
     original_activity = detector._apply_activity_adjustment
     original_context = detector._apply_context_adjustment
 
-    def spy_activity(*args):
+    def spy_activity(*args, **kwargs):
         order.append("activity")
-        return original_activity(*args)
+        return original_activity(*args, **kwargs)
 
     async def spy_context(*args):
         order.append("context")
