@@ -70,10 +70,14 @@ def _stub_detection(
     redis_cached: str | None = None,
     linked_chat_id: int | None = None,
     get_chat_error: Exception | None = None,
+    activity: int = 0,
 ):
     """打桩检测函数的外部依赖，返回 (hit, redis_mock, bot)。"""
     group = SimpleNamespace(anti_external_reply_enabled=enabled) if group_exists else None
     mocker.patch.object(antispam.GroupRepository, "get", new=AsyncMock(return_value=group))
+    mocker.patch.object(
+        antispam.ActivityService, "get_activity", new=AsyncMock(return_value=activity)
+    )
     hit = mocker.patch.object(antispam, "_handle_external_reply_hit", new=AsyncMock())
 
     redis_mock = MagicMock()
@@ -139,6 +143,15 @@ async def test_group_none_defaults_enabled(mocker) -> None:
 
     assert await antispam.check_and_handle_external_reply(message, bot) is True
     hit.assert_awaited_once_with(message, bot)
+
+
+async def test_active_user_passes(mocker) -> None:
+    """活跃度 > 0 → False（放行回归正常管线），不处置"""
+    hit, _, bot = _stub_detection(mocker, activity=1)
+    message = _message(external=_external())
+
+    assert await antispam.check_and_handle_external_reply(message, bot) is False
+    hit.assert_not_awaited()
 
 
 # ===== 检测：豁免（论坛同群 / 关联频道）=====

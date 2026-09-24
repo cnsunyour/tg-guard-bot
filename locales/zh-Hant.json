@@ -121,7 +121,7 @@
   "admin.groupset.menu.antiextreply.button": "🔗 跨聊天回覆防護設定",
   "admin.groupset.menu.antiextreply.disable.button": "❌ 停用跨聊天回覆防護",
   "admin.groupset.menu.antiextreply.enable.button": "✅ 啟用跨聊天回覆防護",
-  "admin.groupset.menu.antiextreply.message": "🔗 跨聊天回覆防護：{status}\n啟用後刪除「在其他聊天中回覆」的訊息並記錄警告（論壇跨話題、引用本群組關聯頻道除外）",
+  "admin.groupset.menu.antiextreply.message": "🔗 跨聊天回覆防護：{status}\n啟用後活躍度為 0 的新成員發「在其他聊天中回覆」的訊息會被刪除並記錄警告（論壇跨話題、引用本群組關聯頻道除外）",
   "admin.groupset.menu.antispam.button": "🛡️ 反垃圾設定",
   "admin.groupset.menu.antispam.disable.button": "❌ 停用反垃圾",
   "admin.groupset.menu.antispam.enable.button": "✅ 啟用反垃圾",

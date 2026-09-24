@@ -436,6 +436,7 @@ async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
     豁免（一律返回 False 让消息回归正常检测管线，不占用 skip）：
     - 论坛群跨 topic 回复：``external_reply.chat`` 即本群自身
     - 被回复消息来自本群关联频道（linked channel）
+    - 发送者活跃度 > 0（曾在本群发过有效文本，与非文本消息门槛一致）
 
     设计边界：
     - 处置后无条件返回 True，与所有现有检测路径语义一致（命中后处置失败同样
@@ -482,7 +483,20 @@ async def check_and_handle_external_reply(message: Message, bot: Bot) -> bool:
             logger.debug(f"跳过关联频道跨聊天回复 [群组:{message.chat.id}] [频道:{source_chat_id}]")
             return False
 
-        # 4. 命中：专用处置
+        # 4. 活跃度豁免：曾在本群发过言（活跃度 > 0）的用户放行，只拦新人
+        if message.from_user is not None:
+            # 仅判资格，不写回懒惰衰减（避免重置衰减时钟）
+            activity = await ActivityService.get_activity(
+                message.chat.id, message.from_user.id, persist_decay=False
+            )
+            if activity > 0:
+                logger.debug(
+                    f"跳过跨聊天回复（活跃度放行） [群组:{message.chat.id}] "
+                    f"[用户:{message.from_user.id}] [活跃度:{activity}]"
+                )
+                return False
+
+        # 5. 命中：专用处置
         # origin.type 声明为 Literal[MessageOriginType.X]，但 pydantic 2 反序列化真实
         # 更新时保留原始 str（仅默认值才是枚举成员），不能直接取 .value
         origin_type = getattr(external.origin.type, "value", external.origin.type)
@@ -604,8 +618,7 @@ async def _run_message_prechecks(
     if await check_admin_permission_by_id(bot, message.chat.id, user.id):
         return _skip(SkipReason.ADMIN)
 
-    # 8. 跨聊天回复：结构信号检测（管理员已在第 7 步豁免；位于活跃度逻辑
-    #    之前，高活跃度用户不豁免——防高活跃度账号被盗用场景）
+    # 8. 跨聊天回复：结构信号检测（管理员已在第 7 步豁免；仅拦截活跃度为 0 的新人）
     if await check_and_handle_external_reply(message, bot):
         return _skip(SkipReason.EXTERNAL_REPLY_HANDLED)
 

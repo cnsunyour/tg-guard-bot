@@ -121,7 +121,7 @@
   "admin.groupset.menu.antiextreply.button": "🔗 跨聊天回复防护配置",
   "admin.groupset.menu.antiextreply.disable.button": "❌ 禁用跨聊天回复防护",
   "admin.groupset.menu.antiextreply.enable.button": "✅ 启用跨聊天回复防护",
-  "admin.groupset.menu.antiextreply.message": "🔗 跨聊天回复防护：{status}\n启用后删除「在其它聊天中回复」的消息并记警告（论坛跨话题、引用本群关联频道除外）",
+  "admin.groupset.menu.antiextreply.message": "🔗 跨聊天回复防护：{status}\n启用后活跃度为 0 的新成员发「在其它聊天中回复」的消息会被删除并记警告（论坛跨话题、引用本群关联频道除外）",
   "admin.groupset.menu.antispam.button": "🛡️ 反垃圾配置",
   "admin.groupset.menu.antispam.disable.button": "❌ 禁用反垃圾",
   "admin.groupset.menu.antispam.enable.button": "✅ 启用反垃圾",

@@ -121,7 +121,7 @@
   "admin.groupset.menu.antiextreply.button": "🔗 External-reply protection",
   "admin.groupset.menu.antiextreply.disable.button": "❌ Disable external-reply protection",
   "admin.groupset.menu.antiextreply.enable.button": "✅ Enable external-reply protection",
-  "admin.groupset.menu.antiextreply.message": "🔗 External-reply guard: {status}\nDeletes \"reply in another chat\" messages and records a warning (forum topics and the linked channel exempt)",
+  "admin.groupset.menu.antiextreply.message": "🔗 External-reply guard: {status}\n\"Reply in another chat\" messages from new members (activity 0) are deleted with a warning (forum topics and the linked channel exempt)",
   "admin.groupset.menu.antispam.button": "🛡️ Anti-spam",
   "admin.groupset.menu.antispam.disable.button": "❌ Disable anti-spam",
   "admin.groupset.menu.antispam.enable.button": "✅ Enable anti-spam",
