@@ -3,17 +3,22 @@
 将 ``VerificationService`` 返回的结构化挑战按 locale 渲染为 Telegram 可发送的
 ``(text, keyboard, photo)``。所有类型文案走 catalog：
 
-- math：完整 message（``verification.math.challenge.<flow>.message``，含 expression）
-- 其余：body（``verification.<type>.challenge.body.message``）+ 共享信封
-  （``verification.challenge.envelope.<flow>.message``）
+- math：独立 envelope/body（``verification.math.challenge.envelope.<flow>.message``
+  + ``verification.math.challenge.body.message``），题面表达式渲染进图片
+- 文字题（math/slider/qa/emoji/honeypot）：题面核心经 ``src/services/text_image``
+  渲染为随机化 PNG，caption 只保留信封与说明，题面不再以文本暴露
+- slider/qa/emoji/honeypot：body（``verification.<type>.challenge.body.message``）
+  + 共享信封（``verification.challenge.envelope.<flow>.message``）
 - 题库：QA 文案 ``verification.qa.bank.<id>.*``，Emoji 描述
   ``verification.emoji.bank.<id>.description``
 - 按钮：captcha / honeypot / webapp 按钮文案各自 catalog key
 
-所有用户可控文本（username / chat_title / expression）在此统一 ``escape_html``，
+所有用户可控文本（username / chat_title）在此统一 ``escape_html``，
 调用方传入原始文本即可。题库文案来自受信任 catalog，原样插入不转义。
+题面文本进入图片渲染，不经 HTML 转义。
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, assert_never
 
@@ -25,9 +30,11 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
+from loguru import logger
 
 from src.core.i18n.translator import BoundLocalizer
 from src.core.utils import escape_html
+from src.services.text_image import render_slider_image, render_text_image
 from src.services.verification import (
     CaptchaChallenge,
     EmojiChallenge,
@@ -86,11 +93,43 @@ def _inline_choices(
 
 
 def _envelope(localizer: BoundLocalizer, flow: VerificationFlow, chat_title: str, body: str) -> str:
-    """非 math 验证的共享信封：标题 + 来源群 + body（body 已是可信 HTML）"""
+    """验证信封：标题 + 来源群 + body（body 已是可信 HTML）
+
+    math 图片化后从「完整 message」并入标准结构，与其余类型共用信封。
+    """
     return localizer.t(
         f"verification.challenge.envelope.{flow}.message",
         chat_title=chat_title,
         body=body,
+    )
+
+
+def _text_challenge_payload(
+    *,
+    localizer: BoundLocalizer,
+    flow: VerificationFlow,
+    safe_chat_title: str,
+    body: str,
+    keyboard: VerificationKeyboard,
+    question: str,
+    render_photo: Callable[[], BufferedInputFile],
+) -> RenderedChallenge:
+    """文字题统一装配：图片优先，渲染失败降级为文本题面。
+
+    验证是入群关键路径，图片渲染不能成为单点失败——降级时题面回填 caption
+    （回到图片化之前的文本形态），保证用户始终能读到题目并完成验证。
+    """
+    try:
+        photo: BufferedInputFile | None = render_photo()
+    except Exception:
+        logger.exception("题面图片渲染失败，降级为文本题面")
+        photo = None
+    if photo is None:
+        body = f"{body}\n\n❓ {escape_html(question)}"
+    return RenderedChallenge(
+        text=_envelope(localizer, flow, safe_chat_title, body),
+        keyboard=keyboard,
+        photo=photo,
     )
 
 
@@ -151,10 +190,11 @@ def render_verification_challenge(
     username: str,
     chat_title: str | None,
 ) -> RenderedChallenge:
-    """按 locale 渲染验证挑战为可发送消息
+    """按 locale 渲染验证挑战为可发送消息（caption + 可选题面图片）
 
-    math 用完整 catalog message；其余类型 body + 共享信封。username / chat_title
-    / expression 在此统一 escape_html，调用方传原始文本。
+    文字题（math/slider/qa/emoji/honeypot）题面渲染进随机化图片，caption 只保留
+    信封与说明；captcha/puzzle 沿用既有 photo。username / chat_title 在此统一
+    escape_html，调用方传原始文本；题面文本进图片，不经转义。
     """
     safe_username = escape_html(username)
     safe_chat_title = (
@@ -168,29 +208,50 @@ def render_verification_challenge(
         keyboard: VerificationKeyboard = _inline_choices(
             "verify_math", chat_id, user_id, labels, labels, row_size=2
         )
-        text = localizer.t(
-            f"verification.math.challenge.{flow}.message",
+        body = localizer.t(
+            "verification.math.challenge.body.message",
             username=safe_username,
-            chat_title=safe_chat_title,
-            expression=escape_html(challenge.expression),
             timeout=timeout,
         )
-        return RenderedChallenge(text=text, keyboard=keyboard)
+        return _text_challenge_payload(
+            localizer=localizer,
+            flow=flow,
+            safe_chat_title=safe_chat_title,
+            body=body,
+            keyboard=keyboard,
+            question=f"{challenge.expression} = ?",
+            render_photo=lambda: render_text_image(
+                f"{challenge.expression} = ?", locale=localizer.locale
+            ),
+        )
 
     if isinstance(challenge, SliderChallenge):
         if len(challenge.cells) != 4:
             raise ValueError("滑块验证必须包含 4 个位置")
+        green_positions = [index for index, cell in enumerate(challenge.cells) if cell == "🟩"]
+        if len(green_positions) != 1:
+            raise ValueError("滑块验证必须恰好包含一个绿色方块")
         body = localizer.t(
             "verification.slider.challenge.body.message",
             username=safe_username,
             timeout=timeout,
-            cells="".join(challenge.cells),
         )
         keyboard = _inline_choices(
-            "verify_slider", chat_id, user_id, challenge.cells, ("0", "1", "2", "3"), row_size=4
+            "verify_slider",
+            chat_id,
+            user_id,
+            ("1", "2", "3", "4"),
+            ("0", "1", "2", "3"),
+            row_size=4,
         )
-        return RenderedChallenge(
-            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        return _text_challenge_payload(
+            localizer=localizer,
+            flow=flow,
+            safe_chat_title=safe_chat_title,
+            body=body,
+            keyboard=keyboard,
+            question="".join(challenge.cells),
+            render_photo=lambda: render_slider_image(green_positions[0]),
         )
 
     if isinstance(challenge, QAChallenge):
@@ -211,13 +272,18 @@ def render_verification_challenge(
             "verification.qa.challenge.body.message",
             username=safe_username,
             timeout=timeout,
-            question=question,
         )
         keyboard = _inline_choices(
             "verify_qa", chat_id, user_id, options, ("0", "1", "2", "3"), row_size=2
         )
-        return RenderedChallenge(
-            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        return _text_challenge_payload(
+            localizer=localizer,
+            flow=flow,
+            safe_chat_title=safe_chat_title,
+            body=body,
+            keyboard=keyboard,
+            question=question,
+            render_photo=lambda: render_text_image(question, locale=localizer.locale),
         )
 
     if isinstance(challenge, EmojiChallenge):
@@ -228,13 +294,18 @@ def render_verification_challenge(
             "verification.emoji.challenge.body.message",
             username=safe_username,
             timeout=timeout,
-            description=description,
         )
         keyboard = _inline_choices(
             "verify_emoji", chat_id, user_id, challenge.emojis, ("0", "1", "2", "3"), row_size=2
         )
-        return RenderedChallenge(
-            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        return _text_challenge_payload(
+            localizer=localizer,
+            flow=flow,
+            safe_chat_title=safe_chat_title,
+            body=body,
+            keyboard=keyboard,
+            question=description,
+            render_photo=lambda: render_text_image(description, locale=localizer.locale),
         )
 
     if isinstance(challenge, CaptchaChallenge):
@@ -275,10 +346,17 @@ def render_verification_challenge(
             "verification.honeypot.challenge.body.message",
             username=safe_username,
             timeout=timeout,
-            expression=escape_html(challenge.expression),
         )
-        return RenderedChallenge(
-            text=_envelope(localizer, flow, safe_chat_title, body), keyboard=keyboard
+        return _text_challenge_payload(
+            localizer=localizer,
+            flow=flow,
+            safe_chat_title=safe_chat_title,
+            body=body,
+            keyboard=keyboard,
+            question=f"{challenge.expression} = ?",
+            render_photo=lambda: render_text_image(
+                f"{challenge.expression} = ?", locale=localizer.locale
+            ),
         )
 
     if isinstance(challenge, PuzzleChallenge):

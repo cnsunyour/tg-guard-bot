@@ -573,7 +573,7 @@ async def send_verification_message(
 
     # 根据是否有图片选择发送方式
     if rendered.photo is not None:
-        # captcha / puzzle 验证：发送图片
+        # 图片类验证（captcha/puzzle + 文字题图片化）：发送图片，题面在图内
         return await bot.send_photo(
             chat_id=user_id,
             photo=rendered.photo,

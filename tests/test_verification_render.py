@@ -1,7 +1,7 @@
 """验证挑战渲染层测试。
 
 覆盖 3a-1/3a-2a 核心契约：
-- 8 种 challenge 类型渲染（math 完整 message，其余 body + 共享信封）
+- 8 种 challenge 类型渲染（文字题题面进图片，caption 只含信封与说明）
 - 题库文案走 catalog（QA option_order 映射原始选项；Emoji description）
 - callback_data 格式与原实现一致
 - escape_html 正确（无双重转义、无遗漏）
@@ -75,11 +75,12 @@ def _photo() -> BufferedInputFile:
 
 def test_math_render_uses_catalog_and_four_buttons() -> None:
     rendered = _render(MathChallenge(expression="3 + 5", choices=(8, 3, 12, 7)))
-    assert "3 + 5" in rendered.text
+    # 题面进图片，caption 不再包含表达式
+    assert "3 + 5" not in rendered.text
     assert "Alice" in rendered.text
     assert "TestGroup" in rendered.text
     assert "120" in rendered.text
-    assert rendered.photo is None
+    assert rendered.photo is not None
     buttons = _buttons(rendered)
     assert [b.text for b in buttons] == ["8", "3", "12", "7"]
     assert {b.callback_data for b in buttons} == {
@@ -96,7 +97,10 @@ def test_math_render_escapes_username_chat_title_expression() -> None:
     assert "<b>x</b>" not in rendered.text
     assert "&lt;b&gt;x&lt;/b&gt;" in rendered.text
     assert "A&amp;B" in rendered.text
-    assert "1 &lt; 2 &amp; 3" in rendered.text
+    # 表达式（原始与转义形式）都不进 caption，仅进图片
+    assert "1 < 2 & 3" not in rendered.text
+    assert "1 &lt; 2 &amp; 3" not in rendered.text
+    assert rendered.photo is not None
 
 
 # ===== slider =====
@@ -104,9 +108,12 @@ def test_math_render_escapes_username_chat_title_expression() -> None:
 
 def test_slider_render_join_envelope_and_buttons() -> None:
     rendered = _render(SliderChallenge(cells=("🟩", "⬜", "⬜", "⬜")))
-    assert "🟩⬜⬜⬜" in rendered.text
+    # 方格序列进图片，caption 不再包含；按钮为位置数字标签
+    assert "🟩⬜⬜⬜" not in rendered.text
     assert "群组验证通知" in rendered.text
     assert "您加入了群组" in rendered.text
+    assert rendered.photo is not None
+    assert [b.text for b in _buttons(rendered)] == ["1", "2", "3", "4"]
     assert [b.callback_data for b in _buttons(rendered)] == [
         f"verify_slider:{_CHAT_ID}:{_USER_ID}:{i}" for i in range(4)
     ]
@@ -122,9 +129,10 @@ def test_slider_render_join_request_envelope() -> None:
 
 
 def test_qa_render_shows_question_and_options_from_catalog() -> None:
-    """option_order[i]=origin：第 i 个按钮显示原始选项 origin 的文案"""
+    """option_order[i]=origin：第 i 个按钮显示原始选项 origin 的文案；题面进图片"""
     rendered = _render(QAChallenge(question_id="months_in_year", option_order=(3, 0, 2, 1)))
-    assert "一年有多少个月？" in rendered.text
+    assert "一年有多少个月？" not in rendered.text
+    assert rendered.photo is not None
     buttons = _buttons(rendered)
     # origin: a=10个月 b=11个月 c=13个月 d=12个月；option_order (3,0,2,1)
     assert [b.text for b in buttons] == ["12个月", "10个月", "13个月", "11个月"]
@@ -168,7 +176,9 @@ def test_qa_render_rejects_invalid_option_order(bad_order: tuple[int, ...]) -> N
 
 def test_emoji_render_shows_description_from_catalog() -> None:
     rendered = _render(EmojiChallenge(description_id="happy", emojis=("😊", "😢", "😡", "😴")))
-    assert "开心" in rendered.text
+    # 描述进图片，caption 不再包含
+    assert "开心" not in rendered.text
+    assert rendered.photo is not None
     assert [b.text for b in _buttons(rendered)] == ["😊", "😢", "😡", "😴"]
 
 
@@ -245,7 +255,9 @@ def test_honeypot_render_trap_and_answer_buttons(decoy: str, expected_text: str)
     assert [b.callback_data for b in rows[1]] == [
         f"verify_honeypot:{_CHAT_ID}:{_USER_ID}:{v}" for v in (2, 8, 4)
     ]
-    assert "3 + 5" in rendered.text
+    # 表达式进图片，caption 不再包含
+    assert "3 + 5" not in rendered.text
+    assert rendered.photo is not None
 
 
 # ===== puzzle =====
@@ -274,6 +286,30 @@ def test_webapp_render_reply_keyboard_with_url() -> None:
     assert rendered.photo is None
 
 
+# ===== 图片渲染失败降级 =====
+
+
+def test_qa_render_degrades_to_text_question_when_photo_fails(mocker) -> None:
+    """图片渲染异常时降级为文本题面（题面回填 caption），不阻断验证主流程"""
+    mocker.patch(
+        "src.bot.handlers.verification_render.render_text_image",
+        side_effect=OSError("字体不可用"),
+    )
+    rendered = _render(QAChallenge(question_id="months_in_year", option_order=(3, 0, 2, 1)))
+    assert rendered.photo is None
+    assert "一年有多少个月？" in rendered.text
+
+
+def test_math_render_degrades_to_text_expression_when_photo_fails(mocker) -> None:
+    mocker.patch(
+        "src.bot.handlers.verification_render.render_text_image",
+        side_effect=OSError("字体不可用"),
+    )
+    rendered = _render(MathChallenge(expression="3 + 5", choices=(8, 3, 12, 7)))
+    assert rendered.photo is None
+    assert "3 + 5 = ?" in rendered.text
+
+
 # ===== 选项数量校验 =====
 
 
@@ -285,6 +321,14 @@ def test_math_invalid_choice_count_raises() -> None:
 def test_slider_invalid_cell_count_raises() -> None:
     with pytest.raises(ValueError):
         _render(SliderChallenge(cells=("🟩", "⬜")))
+
+
+def test_slider_without_exactly_one_green_raises() -> None:
+    """无绿色或多绿色方格时 render 应抛 ValueError（图片渲染需唯一正确位置）"""
+    with pytest.raises(ValueError, match="绿色方块"):
+        _render(SliderChallenge(cells=("⬜", "⬜", "⬜", "⬜")))
+    with pytest.raises(ValueError, match="绿色方块"):
+        _render(SliderChallenge(cells=("🟩", "🟩", "⬜", "⬜")))
 
 
 # ===== 题库 / catalog 引用完整性（防题库加 id 但漏 catalog key，反之亦然） =====
