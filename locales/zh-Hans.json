@@ -881,5 +881,8 @@
   "verification.webapp.error.expired.private.message": "❌ <b>验证失败</b>\n\n验证请求已过期，请重新尝试。",
   "verification.webapp.error.generic.private.message": "❌ <b>验证失败</b>\n\n处理验证时发生错误，请重新尝试。如果问题持续，请联系管理员。",
   "verification.webapp.error.invalid_token.private.message": "❌ <b>验证失败</b>\n\n验证令牌无效或已使用，请重新尝试。",
-  "verification.webapp.error.signature.private.message": "❌ <b>验证失败</b>\n\n签名验证失败，请联系管理员检查配置。"
+  "verification.webapp.error.signature.private.message": "❌ <b>验证失败</b>\n\n签名验证失败，请联系管理员检查配置。",
+  "verification.script.challenge.body.message": "👋 欢迎 {username}！\n\n请在 {timeout} 秒内完成下方管理员自定义的验证题。",
+  "verification.script.challenge.input.button": "✏️ 回复答案",
+  "verification.callback.script_retry.toast": "⏳ 验证服务暂时不可用，请稍后重试"
 }

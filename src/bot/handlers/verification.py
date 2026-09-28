@@ -57,6 +57,8 @@ from src.services.username_mapping import UsernameMappingService
 from src.services.verification import (
     CaptchaChallenge,
     PreparedChallenge,
+    ScriptPrepareFallback,
+    ScriptVerifyUnavailable,
     VerificationChallenge,
     VerificationService,
 )
@@ -125,7 +127,10 @@ if not session or not deadline_ms then
     return 0
 end
 
-if not string.match(state_raw, "^captcha:[^:]+$") then
+-- Lua pattern 无 alternation 语法：先提取类型段再比较
+-- （`(captcha|script)` 会被当作字面量，同时打断 captcha 与脚本两条路径）
+local state_kind = string.match(state_raw, "^([^:]+):[^:]+$")
+if not (state_kind == "captcha" or state_kind == "script") then
     return 0
 end
 
@@ -517,9 +522,31 @@ async def prepare_verification_challenge(
     chat_id: int,
     user_id: int,
     *,
+    session_id: str,
     locale: str,
+    username: str = "",
 ) -> PreparedChallenge:
-    """按群配置执行纯 prepare；random 在 service 内解析为具体类型，不写正式 Redis 键。"""
+    """按群配置执行纯 prepare；random 在 service 内解析为具体类型，不写正式 Redis 键。
+
+    群启用自定义验证脚本（custom_verify_enabled + active_revision_id）时优先走
+    脚本题；脚本/沙盒故障（ScriptPrepareFallback）回落群组原有 verification_type
+    ——回落是单次降级，不改动群配置。
+    """
+    if getattr(group, "custom_verify_enabled", False) and group.active_revision_id is not None:
+        try:
+            return await VerificationService.prepare_script_challenge(
+                group,
+                chat_id,
+                user_id,
+                session_id=session_id,
+                locale=locale,
+                username=username,
+            )
+        except ScriptPrepareFallback as exc:
+            logger.warning(
+                f"自定义脚本出题失败，回落群组原验证类型 "
+                f"[群组:{chat_id}] [用户:{user_id}]: {exc}"
+            )
     return await VerificationService.prepare_challenge(
         group.verification_type,
         chat_id,
@@ -536,6 +563,8 @@ async def send_verification_message(
     flow: VerificationFlow,
     username: str,
     timeout: int,
+    *,
+    state_token: str = "",
 ):
     """发送验证消息到用户私聊
 
@@ -569,6 +598,7 @@ async def send_verification_message(
         timeout=timeout,
         username=username,
         chat_title=chat_title,
+        state_token=state_token,
     )
 
     # 根据是否有图片选择发送方式
@@ -642,7 +672,12 @@ async def _start_initial_verification(
 
     try:
         prepared = await prepare_verification_challenge(
-            group, chat_id, user_id, locale=private_locale
+            group,
+            chat_id,
+            user_id,
+            session_id=session_id,
+            locale=private_locale,
+            username=username,
         )
         committed = await verification_service.commit_challenge(
             chat_id,
@@ -673,6 +708,7 @@ async def _start_initial_verification(
                 flow=flow,
                 username=username,
                 timeout=timeout,
+                state_token=prepared.state_value.removeprefix("script:"),
             )
         except TelegramForbiddenError:
             # 用户未启动 Bot：release 为 undelivered，保留状态供 /start 恢复
@@ -1369,6 +1405,120 @@ async def on_choice_verify(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer(localizer.t("verification.callback.failed.toast"), show_alert=True)
 
 
+@router.callback_query(F.data.regexp(r"^verify_script:"))
+async def on_script_verify(callback: CallbackQuery, bot: Bot) -> None:
+    """处理自定义脚本题按钮（verify_script:chat_id:user_id:index）- 私聊模式
+
+    与 on_choice_verify 的差异：答案不是 token 相等而是沙盒程序判定；callback 只带
+    按钮索引，逻辑值从服务端映射解析（resolve_script_option）。失败语义：
+    - 沙盒故障（ScriptVerifyUnavailable）→ 不消费 session，toast 重试
+    - expired / correct / wrong 语义与其余题型一致（wrong 即 ban 1h 终局）
+    """
+    if not callback.data or not callback.message:
+        await _answer_default_toast(callback, "verification.callback.invalid_data.toast")
+        return
+
+    try:
+        parts = callback.data.split(":")
+        # token 段：出题时算入 session 的主键 token，旧验证消息按钮与新会话必不匹配
+        if len(parts) != 5:
+            raise ValueError("脚本验证 callback 字段错误")
+        _, chat_id_str, user_id_str, state_token, index = parts
+        chat_id = int(chat_id_str)
+        user_id = int(user_id_str)
+        if not state_token or len(state_token) != 16 or ":" in state_token:
+            raise ValueError("脚本验证 token 格式错误")
+    except (TypeError, ValueError):
+        await _answer_default_toast(callback, "verification.callback.invalid_data.toast")
+        return
+
+    try:
+        # not_yours：点击者显式语言偏好（同 on_choice_verify 模式）
+        if callback.from_user.id != user_id:
+            clicker_locale = await get_resolver().for_user(callback.from_user.id)
+            clicker_localizer = get_translator().for_locale(clicker_locale)
+            await callback.answer(
+                clicker_localizer.t("verification.callback.not_yours.toast"), show_alert=True
+            )
+            return
+
+        private_locale = await get_resolver().for_private_from_group(
+            user_id=user_id, group_chat_id=chat_id
+        )
+        localizer = get_translator().for_locale(private_locale)
+
+        # 快照 + deadline binding：索引映射与脚本判定都绑定同一快照，防 session 切换
+        verification_service = VerificationService()
+        clear_token = await verification_service.capture_clear_token(chat_id, user_id)
+        deadline_value = clear_token.deadline_value or ""
+
+        answer = await verification_service.resolve_script_option(
+            chat_id,
+            user_id,
+            index,
+            expected_deadline_value=deadline_value,
+            expected_state_token=state_token,
+        )
+        if answer is None:
+            # 索引非法/越界/状态缺失/竞态：与 expired 同语义（不处罚）
+            await callback.answer(
+                localizer.t("verification.callback.expired.toast"), show_alert=False
+            )
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        try:
+            answer_result = await verification_service.verify_script_answer(
+                chat_id,
+                user_id,
+                answer,
+                expected_deadline_value=deadline_value,
+                expected_state_token=state_token,
+            )
+        except ScriptVerifyUnavailable:
+            # 基础设施故障不计答错：保留 session 与验证消息，让用户重试
+            logger.warning(f"脚本判定暂不可用 [群组:{chat_id}] [用户:{user_id}]")
+            await callback.answer(
+                localizer.t("verification.callback.script_retry.toast"), show_alert=True
+            )
+            return
+
+        if answer_result.status == "expired":
+            await callback.answer(
+                localizer.t("verification.callback.expired.toast"), show_alert=False
+            )
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            return
+
+        if answer_result.status == "correct":
+            is_join_request = answer_result.flow == "join_request"
+            await handle_verification_success(
+                bot, callback, chat_id, user_id, is_join_request=is_join_request
+            )
+        else:
+            # 答错即 ban 1h（与全部题型一致的终局语义），claim_failure 已原子消费 session
+            is_join_request = answer_result.flow == "join_request"
+            await callback.answer(
+                localizer.t("verification.callback.wrong_answer.toast"), show_alert=True
+            )
+            if is_join_request:
+                await decline_join_request(bot, chat_id, user_id)
+            await bot.ban_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                until_date=utcnow() + timedelta(hours=1),
+            )
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id=user_id, message_id=callback.message.message_id)
+            logger.info(f"用户 {user_id} 自定义脚本题验证失败")
+
+    except Exception as e:
+        logger.error(f"处理脚本验证失败: {e}")
+        await _answer_default_toast(callback, "verification.callback.failed.toast")
+
+
 @router.callback_query(F.data.startswith("verify_captcha_input:"))
 async def on_captcha_input_request(callback: CallbackQuery) -> None:
     """处理验证码输入请求 - 私聊模式"""
@@ -1598,10 +1748,12 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
         deadline_value = clear_token.deadline_value or ""
         deadline_session = deadline_value.rpartition(":")[0] if ":" in deadline_value else ""
 
-        # 校验 state 是 captcha + waiting session 匹配当前 deadline session
+        # 校验 state 是 captcha 或 script（脚本文本作答复用 waiting 机制）+
+        # waiting session 匹配当前 deadline session
         state_value = clear_token.state_value
-        state_is_captcha = state_value is not None and state_value.startswith("captcha:")
-        if not state_is_captcha or not deadline_session or not message_id_str.isdigit():
+        state_kind = state_value.partition(":")[0] if state_value is not None else ""
+        state_is_text_challenge = state_kind in ("captcha", "script")
+        if not state_is_text_challenge or not deadline_session or not message_id_str.isdigit():
             await _clear_captcha_waiting_if_match(chat_id, user_id, waiting_value)
             return
 
@@ -1622,10 +1774,24 @@ async def on_captcha_text_input(message: Message, bot: Bot) -> None:
                 return
 
         # 验证答案（expected_deadline_value 堵校验后到 verify_answer MGET 间的 session 切换；
-        # correct/wrong 均在内部原子 claim，与 timeout 互斥）
-        answer_result = await verification_service.verify_answer(
-            chat_id, user_id, text_input, expected_deadline_value=deadline_value
-        )
+        # correct/wrong 均在内部原子 claim，与 timeout 互斥）。script 前缀走沙盒程序判定，
+        # 文本原样传给脚本（不 trim/不转大写——大小写语义由脚本自定）
+        try:
+            if state_kind == "script":
+                answer_result = await verification_service.verify_script_answer(
+                    chat_id, user_id, message.text or "", expected_deadline_value=deadline_value
+                )
+            else:
+                answer_result = await verification_service.verify_answer(
+                    chat_id, user_id, text_input, expected_deadline_value=deadline_value
+                )
+        except ScriptVerifyUnavailable:
+            # 基础设施故障不计答错：保留 waiting 与 session，提示重试
+            logger.warning(f"脚本判定暂不可用（文本模式）[群组:{chat_id}] [用户:{user_id}]")
+            await message.answer(
+                localizer.t("verification.callback.script_retry.toast"), show_alert=False
+            )
+            return
 
         if answer_result.status == "expired":
             # timeout 已 claim 或 session 已切换：不恢复权限，也不执行失败处罚
@@ -3006,9 +3172,21 @@ async def _recover_verification_challenge(
         return
 
     try:
-        prepared = await verification_service.prepare_challenge(
-            challenge_type, chat_id, user_id, locale=private_locale
-        )
+        if challenge_type == "script":
+            # 脚本会话恢复：重新出题（同 session → token 会话绑定一致）；沙盒/脚本
+            # 故障回落群组原 verification_type（含管理员已停用脚本的场景）
+            group = await GroupRepository.get(chat_id)
+            prepared = await prepare_verification_challenge(
+                group,
+                chat_id,
+                user_id,
+                session_id=reservation.session_id,
+                locale=private_locale,
+            )
+        else:
+            prepared = await verification_service.prepare_challenge(
+                challenge_type, chat_id, user_id, locale=private_locale
+            )
         committed = await commit_recovery(
             reservation,
             state_value=prepared.state_value,
@@ -3032,6 +3210,7 @@ async def _recover_verification_challenge(
                 flow=flow,
                 username=username,
                 timeout=remaining_seconds,
+                state_token=prepared.state_value.removeprefix("script:"),
             )
         except TelegramForbiddenError:
             # /start 已启动 Bot，Forbidden 不该发生；保守 release preserve + 失败提示

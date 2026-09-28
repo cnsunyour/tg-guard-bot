@@ -881,5 +881,8 @@
   "verification.webapp.error.expired.private.message": "❌ <b>驗證失敗</b>\n\n驗證請求已過期，請重新嘗試。",
   "verification.webapp.error.generic.private.message": "❌ <b>驗證失敗</b>\n\n處理驗證時發生錯誤，請重新嘗試。若問題持續，請聯絡管理員。",
   "verification.webapp.error.invalid_token.private.message": "❌ <b>驗證失敗</b>\n\n驗證權杖無效或已使用，請重新嘗試。",
-  "verification.webapp.error.signature.private.message": "❌ <b>驗證失敗</b>\n\n簽章驗證失敗，請聯絡管理員檢查設定。"
+  "verification.webapp.error.signature.private.message": "❌ <b>驗證失敗</b>\n\n簽章驗證失敗，請聯絡管理員檢查設定。",
+  "verification.script.challenge.body.message": "👋 歡迎 {username}！\n\n請在 {timeout} 秒內完成下方管理員自訂的驗證題。",
+  "verification.script.challenge.input.button": "✏️ 回覆答案",
+  "verification.callback.script_retry.toast": "⏳ 驗證服務暫時不可用，請稍後重試"
 }

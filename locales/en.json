@@ -881,5 +881,8 @@
   "verification.webapp.error.expired.private.message": "❌ <b>Verification failed</b>\n\nThe verification request has expired. Please try again.",
   "verification.webapp.error.generic.private.message": "❌ <b>Verification failed</b>\n\nAn error occurred during verification. Please try again. If the problem persists, contact an administrator.",
   "verification.webapp.error.invalid_token.private.message": "❌ <b>Verification failed</b>\n\nThe verification token is invalid or has already been used. Please try again.",
-  "verification.webapp.error.signature.private.message": "❌ <b>Verification failed</b>\n\nSignature verification failed. Please ask an administrator to check the configuration."
+  "verification.webapp.error.signature.private.message": "❌ <b>Verification failed</b>\n\nSignature verification failed. Please ask an administrator to check the configuration.",
+  "verification.script.challenge.body.message": "👋 Welcome {username}!\n\nPlease complete the custom verification below within {timeout} seconds.",
+  "verification.script.challenge.input.button": "✏️ Reply with answer",
+  "verification.callback.script_retry.toast": "⏳ Verification service temporarily unavailable, please try again shortly"
 }

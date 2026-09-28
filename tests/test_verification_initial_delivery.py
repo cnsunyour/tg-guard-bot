@@ -81,7 +81,7 @@ async def test_initial_send_promotes_real_message_id(mocker) -> None:
 
     assert result == "sent"
     handler.prepare_verification_challenge.assert_awaited_once_with(
-        group, -100, 42, locale="zh-Hant"
+        group, -100, 42, session_id="session-a", locale="zh-Hant", username="Alice"
     )
     promote.assert_awaited_once_with(reservation, "join", 9876)
 

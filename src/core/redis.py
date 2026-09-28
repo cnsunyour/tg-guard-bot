@@ -199,6 +199,17 @@ class RedisKeys:
         return f"verification_deadline:{chat_id}:{user_id}"
 
     @staticmethod
+    def verification_script_state(chat_id: int, user_id: int) -> str:
+        """自定义脚本验证的会话绑定负载键名（JSON）
+
+        存储 ``{"revision_id", "source_sha256", "language", "state",
+        "option_values", "locale", "issued_at_ms", "expires_at_ms", "username"}``，
+        TTL 与主键同步（PXAT deadline+grace）。读取侧重算 state token 与主键
+        比对，缺失/错配按 expired 处理（不消费 session）。
+        """
+        return f"verification_script_state:{chat_id}:{user_id}"
+
+    @staticmethod
     def verification_recovery(chat_id: int, user_id: int) -> str:
         """验证 UI delivery/recovery 状态机键名（不按 flow 分键）。
 

@@ -8,14 +8,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import secrets
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote
 
 from aiogram.types import BufferedInputFile
 from captcha.image import ImageCaptcha
+from loguru import logger
 
 from src.core.redis import RedisKeys, get_redis
 from src.data.verification.emoji_mapping import EMOJI_MAPPINGS
@@ -32,9 +35,13 @@ from src.services.verification_recovery import (
     commit_recovery,
 )
 
+if TYPE_CHECKING:
+    from src.models.custom_verification import CustomVerificationRevision
+
 # WebApp 验证的 5 个 provider 共用 WebAppChallenge，用 provider 字段区分
 type WebAppProvider = Literal["turnstile", "friendly", "hcaptcha", "mtcaptcha", "altcha"]
-# 所有可持久化的具体验证类型（random 在 prepare 阶段解析为具体类型，永不落库）
+# 所有可持久化的具体验证类型（random 在 prepare 阶段解析为具体类型，永不落库）。
+# script 由群级开关（custom_verify_enabled）独立启用，不经 /setverify 类型菜单
 type ConcreteVerificationType = Literal[
     "math",
     "slider",
@@ -48,6 +55,7 @@ type ConcreteVerificationType = Literal[
     "hcaptcha",
     "mtcaptcha",
     "altcha",
+    "script",
 ]
 # 蜜罐诱饵用稳定 code（非中文文案），renderer 按 locale 映射展示文本
 type HoneypotDecoy = Literal["skip", "direct", "human"]
@@ -182,6 +190,34 @@ class WebAppChallenge:
     webapp_url: str
 
 
+@dataclass(frozen=True, slots=True)
+class ScriptOptionSpec:
+    """脚本题的单个按钮：text 给用户看，value 回传脚本判定（不进 callback_data）"""
+
+    text: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptChallenge:
+    """自定义脚本验证：题面 + 可选按钮（空元组 = 文本作答模式）
+
+    题面/按钮文本来自脚本返回值（动态内容，render 层图片化题面并原样展示按钮）；
+    判定逻辑在沙盒内，bot 侧只做协议编排。
+    """
+
+    text: str
+    options: tuple[ScriptOptionSpec, ...] = ()
+
+
+class ScriptPrepareFallback(Exception):
+    """脚本题无法生成（未启用/沙盒不可用/协议故障）：调用方回落群组原验证类型。"""
+
+
+class ScriptVerifyUnavailable(Exception):
+    """脚本判定暂不可用（沙盒故障）：不消费 session，提示用户重试。"""
+
+
 type VerificationChallenge = (
     MathChallenge
     | SliderChallenge
@@ -191,6 +227,7 @@ type VerificationChallenge = (
     | HoneypotChallenge
     | PuzzleChallenge
     | WebAppChallenge
+    | ScriptChallenge
 )
 
 
@@ -200,11 +237,16 @@ class PreparedChallenge:
 
     只有 ``commit_challenge`` 可把 state_value/auxiliary_state 写入正式 verification 状态键，
     保证 prepare 阶段无 Redis 副作用（恢复路径可安全重试）。
+
+    ``script_state`` 是脚本题的会话绑定负载（revision/option 映射/私有 state/locale/
+    issued_at），由 ``commit_challenge`` 在主键提交成功后写入独立键——写入失败只降级
+    （verify 读不到该键按 expired 重试），不影响主键事务。
     """
 
     challenge: VerificationChallenge
     state_value: str
     auxiliary_state: str | None = None
+    script_state: str | None = None
 
 
 class VerificationService:
@@ -772,12 +814,27 @@ class VerificationService:
         ):
             return False
 
-        return await commit_recovery(
+        committed = await commit_recovery(
             reservation,
             state_value=prepared.state_value,
             auxiliary_state=prepared.auxiliary_state,
             flow=flow,
         )
+        if committed and prepared.script_state is not None:
+            # 脚本会话绑定负载与主键同生命周期（PXAT deadline+grace）。第二次 SET
+            # 非原子：写入失败/迟到时 verify 按 expired 重试，不影响主键事务
+            try:
+                await get_redis().set(
+                    RedisKeys.verification_script_state(chat_id, user_id),
+                    prepared.script_state,
+                    pxat=deadline_ms + VERIFICATION_GRACE_MS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"脚本状态键写入失败（verify 将按 expired 重试）"
+                    f"[群组:{chat_id}] [用户:{user_id}]: {exc}"
+                )
+        return committed
 
     @staticmethod
     async def commit_captcha_refresh(
@@ -807,6 +864,326 @@ class VerificationService:
             VERIFICATION_GRACE_MS,
         )
         return bool(committed)
+
+    # ========== 自定义脚本验证（群级开关启用，沙盒执行）==========
+    # 契约：脚本题的会话绑定负载（script_state）在主键 commit 成功后由
+    # commit_challenge 写入独立键；verify 读不到/错配按 expired（不消费 session），
+    # 沙盒故障抛 ScriptVerifyUnavailable（不计答错，提示重试）。
+
+    @staticmethod
+    def _script_json(value: Any) -> str:
+        """规范化序列化（sort_keys 保证 token 重算稳定）。"""
+        return json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+
+    @staticmethod
+    def _script_state_token(
+        session_id: str, revision_id: int, state: Any, option_values: list[str]
+    ) -> str:
+        """脚本题主键 token：绑定 session + revision + 私有 state + 选项映射。
+
+        session 纳入哈希是**会话身份绑定**的关键：不同会话即使题目内容完全
+        相同也必得不同 token——旧验证消息按钮携带的旧 token 与新会话主键
+        必不匹配，杜绝「旧按钮消费新会话」的误通过/误封禁；同时使脚本状态键
+        的迟到写入（旧会话载荷覆盖新键）在重算比对时被拒。读取路径重算比对；
+        hex 无冒号，满足 state_value 的 partition 协议。
+        """
+        payload = (
+            f"{session_id}:{revision_id}:{VerificationService._script_json(state)}:"
+            f"{VerificationService._script_json(option_values)}"
+        )
+        return f"script:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+
+    @staticmethod
+    async def prepare_script_challenge(
+        group,
+        chat_id: int,
+        user_id: int,
+        *,
+        session_id: str,
+        locale: str,
+        username: str = "",
+    ) -> PreparedChallenge:
+        """群自定义脚本出题：查启用状态 → 取 active revision → 沙盒 ask。
+
+        ``session_id`` 纳入主键 token 的会话绑定（见 _script_state_token）。
+        任何失败（未启用/无 revision/沙盒不可用/协议故障）抛
+        ScriptPrepareFallback，由 prepare_verification_challenge 统一回落
+        群组原 verification_type。
+        """
+        from src.repositories.custom_verification_repo import CustomVerificationRepository
+        from src.services.sandbox_client import (
+            SandboxLanguage,
+            SandboxProtocolError,
+            SandboxUnavailableError,
+            get_sandbox_client,
+        )
+
+        revision = await CustomVerificationRepository.get_active_revision(chat_id)
+        if revision is None:
+            raise ScriptPrepareFallback(f"群 {chat_id} 无生效的自定义验证脚本")
+
+        # ctx 时间预算按群验证超时估算（与 reservation deadline 毫秒级偏差对脚本无意义）
+        issued_at_ms, expires_at_ms = VerificationService._script_time_budget(
+            group.verification_timeout
+        )
+        ask_ctx = VerificationService._build_script_ctx(
+            chat_id=chat_id,
+            user_id=user_id,
+            revision=revision,
+            locale=locale,
+            username=username,
+            issued_at_ms=issued_at_ms,
+            expires_at_ms=expires_at_ms,
+            state=None,
+        )
+        if revision.language not in ("python", "javascript"):
+            raise ScriptPrepareFallback(f"不支持的语言: {revision.language}")
+        sandbox_language: SandboxLanguage = (
+            "python" if revision.language == "python" else "javascript"
+        )
+        try:
+            ask_result = await get_sandbox_client().execute_ask(
+                sandbox_language, revision.source, ask_ctx, timeout_ms=2000
+            )
+        except (SandboxUnavailableError, SandboxProtocolError) as exc:
+            raise ScriptPrepareFallback(f"脚本出题失败: {exc}") from exc
+
+        option_values = [option.value for option in ask_result.options]
+        script_payload = {
+            "revision_id": revision.id,
+            "source_sha256": revision.source_sha256,
+            "language": revision.language,
+            "state": ask_result.state,
+            "option_values": option_values,
+            # verify 重建 ctx 需要与 ask 一致的元数据，一并持久化
+            "locale": locale,
+            "issued_at_ms": issued_at_ms,
+            "expires_at_ms": expires_at_ms,
+            "username": username,
+        }
+        return PreparedChallenge(
+            challenge=ScriptChallenge(
+                text=ask_result.text,
+                options=tuple(
+                    ScriptOptionSpec(text=option.text, value=option.value)
+                    for option in ask_result.options
+                ),
+            ),
+            state_value=VerificationService._script_state_token(
+                session_id, revision.id, ask_result.state, option_values
+            ),
+            script_state=VerificationService._script_json(script_payload),
+        )
+
+    @staticmethod
+    def _script_time_budget(timeout_seconds: int) -> tuple[int, int]:
+        import time as _time
+
+        now_ms = int(_time.time() * 1000)
+        return now_ms, now_ms + timeout_seconds * 1000
+
+    @staticmethod
+    def _build_script_ctx(
+        *,
+        chat_id: int,
+        user_id: int,
+        revision: CustomVerificationRevision,
+        locale: str,
+        username: str,
+        issued_at_ms: int,
+        expires_at_ms: int,
+        state: Any,
+    ) -> dict[str, Any]:
+        """构造脚本契约 ctx（api_version=1，字段与 sandbox/protocol 对齐）。"""
+        return {
+            "api_version": 1,
+            "challenge_id": f"{chat_id}:{user_id}:{revision.id}",
+            "group_id": str(chat_id),
+            "user": {
+                "id": str(user_id),
+                "first_name": username or None,
+                "username": None,
+                "language_code": locale,
+            },
+            "locale": locale,
+            "issued_at": issued_at_ms,
+            "expires_at": expires_at_ms,
+            "attempt_no": 1,
+            "state": state,
+        }
+
+    @staticmethod
+    async def _read_script_snapshot(
+        chat_id: int,
+        user_id: int,
+        *,
+        expected_deadline_value: str,
+        expected_state_token: str | None = None,
+    ) -> tuple[str, str, dict[str, Any]] | None:
+        """读取脚本验证快照（主键 + deadline binding + 会话绑定负载 + token 重算）。
+
+        ``expected_state_token``：callback 携带的出题 token——旧验证消息按钮的
+        token 与当前主键必不匹配，据此把「旧按钮消费新会话」拦为 expired。
+        """
+        redis = get_redis()
+        stored_value, deadline_value = await redis.mget(
+            RedisKeys.verification(chat_id, user_id),
+            RedisKeys.verification_deadline(chat_id, user_id),
+        )
+        # deadline binding 前置：先于状态键读取与任何外部调用
+        if not stored_value or not deadline_value or deadline_value != expected_deadline_value:
+            return None
+        challenge_type, sep, token = stored_value.partition(":")
+        if challenge_type != "script" or not sep or not token or ":" in token:
+            return None
+        # callback 携带的出题 token 必须与当前主键一致：旧验证消息按钮的 token
+        # 属于旧 session，与新会话主键必不匹配 → expired（不消费新会话）
+        if expected_state_token is not None and expected_state_token != token:
+            return None
+
+        raw = await redis.get(RedisKeys.verification_script_state(chat_id, user_id))
+        if not raw:
+            return None
+
+        def _reject_constant(value: str) -> Any:
+            raise ValueError(f"非法 JSON 常量: {value}")
+
+        try:
+            payload = json.loads(raw, parse_constant=_reject_constant)
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        # 会话绑定负载的必读字段全量校验（verify 重建 ctx 依赖它们；缺失/类型
+        # 漂移/NaN 一律按无效状态归 expired，不走异常路径）
+        revision_id = payload.get("revision_id")
+        option_values = payload.get("option_values")
+        state = payload.get("state")
+        if (
+            type(revision_id) is not int
+            or revision_id <= 0
+            or not isinstance(payload.get("source_sha256"), str)
+            or not isinstance(payload.get("language"), str)
+            or not isinstance(payload.get("locale"), str)
+            or type(payload.get("issued_at_ms")) is not int
+            or type(payload.get("expires_at_ms")) is not int
+            or not isinstance(payload.get("username"), str)
+            or (not isinstance(state, dict | list | str | int | float | bool) and state is not None)
+            or not isinstance(option_values, list)
+            or not all(isinstance(value, str) for value in option_values)
+        ):
+            return None
+        # token 重算：session 取自 deadline 快照（同一来源），载荷与主键必须
+        # 完全同源——防脚本状态键迟到写入（旧会话载荷覆盖新键后被误用）
+        deadline_session = deadline_value.rpartition(":")[0]
+        if (
+            VerificationService._script_state_token(
+                deadline_session, revision_id, state, option_values
+            )
+            != stored_value
+        ):
+            return None
+        return stored_value, deadline_value, payload
+
+    @staticmethod
+    async def resolve_script_option(
+        chat_id: int,
+        user_id: int,
+        index_text: str,
+        *,
+        expected_deadline_value: str,
+        expected_state_token: str,
+    ) -> str | None:
+        """按钮索引 → 脚本逻辑值（索引合法性 + deadline binding + callback token 校验）。"""
+        if not index_text.isascii() or not index_text.isdecimal() or len(index_text) > 4:
+            return None
+        snapshot = await VerificationService._read_script_snapshot(
+            chat_id,
+            user_id,
+            expected_deadline_value=expected_deadline_value,
+            expected_state_token=expected_state_token,
+        )
+        if snapshot is None:
+            return None
+        option_values = snapshot[2]["option_values"]
+        position = int(index_text)
+        return option_values[position] if position < len(option_values) else None
+
+    @staticmethod
+    async def verify_script_answer(
+        chat_id: int,
+        user_id: int,
+        answer: str,
+        *,
+        expected_deadline_value: str,
+        expected_state_token: str | None = None,
+    ) -> VerifyResult:
+        """脚本题判定：对齐 verify_answer 慢校验骨架，判定来自沙盒。
+
+        - 沙盒正常返回 decision → pass/retry 走 claim_success/claim_failure 原子终局
+        - 沙盒故障/revision 缺失 → 抛 ScriptVerifyUnavailable（session 保留，提示重试）
+        - 状态无效/竞态 → expired（调用方静默退出且不处罚）
+        """
+        from src.repositories.custom_verification_repo import CustomVerificationRepository
+        from src.services.sandbox_client import (
+            SandboxLanguage,
+            SandboxProtocolError,
+            SandboxUnavailableError,
+            get_sandbox_client,
+        )
+
+        snapshot = await VerificationService._read_script_snapshot(
+            chat_id,
+            user_id,
+            expected_deadline_value=expected_deadline_value,
+            expected_state_token=expected_state_token,
+        )
+        if snapshot is None:
+            return VerifyResult(status="expired")
+        stored_value, deadline_value, payload = snapshot
+
+        revision = await CustomVerificationRepository.get_revision(payload["revision_id"])
+        if revision is None:
+            raise ScriptVerifyUnavailable("会话绑定的脚本版本不存在")
+        if (
+            revision.source_sha256 != payload["source_sha256"]
+            or revision.language != payload["language"]
+        ):
+            # DB 的 revision 与会话绑定不一致（理论不可达，防御性拒绝）
+            raise ScriptVerifyUnavailable("脚本版本与会话绑定不一致")
+
+        verify_ctx = VerificationService._build_script_ctx(
+            chat_id=chat_id,
+            user_id=user_id,
+            revision=revision,
+            locale=payload["locale"],
+            username=payload.get("username") or "",
+            issued_at_ms=payload["issued_at_ms"],
+            expires_at_ms=payload["expires_at_ms"],
+            state=payload["state"],
+        )
+        verify_ctx["input"] = answer
+        if revision.language not in ("python", "javascript"):
+            raise ScriptVerifyUnavailable(f"不支持的语言: {revision.language}")
+        verify_language: SandboxLanguage = (
+            "python" if revision.language == "python" else "javascript"
+        )
+        try:
+            verify_result = await get_sandbox_client().execute_verify(
+                verify_language, revision.source, verify_ctx, timeout_ms=2000
+            )
+        except (SandboxUnavailableError, SandboxProtocolError) as exc:
+            raise ScriptVerifyUnavailable(f"脚本判定暂不可用: {exc}") from exc
+
+        claim = claim_success if verify_result.decision == "pass" else claim_failure
+        flow = await claim(chat_id, user_id, stored_value, deadline_value)
+        if flow is None:
+            return VerifyResult(status="expired")
+        return VerifyResult(
+            status="correct" if verify_result.decision == "pass" else "wrong", flow=flow
+        )
 
     @staticmethod
     async def verify_choice_answer(

@@ -42,6 +42,7 @@ from src.services.verification import (
     MathChallenge,
     PuzzleChallenge,
     QAChallenge,
+    ScriptChallenge,
     SliderChallenge,
     VerificationChallenge,
     WebAppChallenge,
@@ -189,6 +190,7 @@ def render_verification_challenge(
     *,
     username: str,
     chat_title: str | None,
+    state_token: str = "",
 ) -> RenderedChallenge:
     """按 locale 渲染验证挑战为可发送消息（caption + 可选题面图片）
 
@@ -252,6 +254,44 @@ def render_verification_challenge(
             keyboard=keyboard,
             question="".join(challenge.cells),
             render_photo=lambda: render_slider_image(green_positions[0]),
+        )
+
+    if isinstance(challenge, ScriptChallenge):
+        # 自定义脚本题：题面来自脚本动态文本，图片化 + 失败降级复用文字题装配；
+        # 按钮模式 token 是索引（value 存服务端映射，不进 callback_data），
+        # 文本模式（无按钮）复用 captcha 输入协议按钮
+        if challenge.options:
+            # callback 携带出题 token：旧验证消息按钮的 token 与新会话主键必不
+            # 匹配（token 算入 session），旧按钮点击被拦为 expired
+            labels = tuple(option.text for option in challenge.options)
+            tokens = tuple(f"{state_token}:{index}" for index in range(len(challenge.options)))
+            keyboard = _inline_choices(
+                "verify_script", chat_id, user_id, labels, tokens, row_size=2
+            )
+        else:
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=localizer.t("verification.script.challenge.input.button"),
+                            callback_data=f"verify_captcha_input:{chat_id}:{user_id}",
+                        )
+                    ]
+                ]
+            )
+        body = localizer.t(
+            "verification.script.challenge.body.message",
+            username=safe_username,
+            timeout=timeout,
+        )
+        return _text_challenge_payload(
+            localizer=localizer,
+            flow=flow,
+            safe_chat_title=safe_chat_title,
+            body=body,
+            keyboard=keyboard,
+            question=challenge.text,
+            render_photo=lambda: render_text_image(challenge.text, locale=localizer.locale),
         )
 
     if isinstance(challenge, QAChallenge):
