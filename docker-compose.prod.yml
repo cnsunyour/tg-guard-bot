@@ -2,6 +2,23 @@
 # 使用方式: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 services:
+  sandbox:
+    # 资源限制（mem_limit/pids_limit）已在 docker-compose.yml 基线配置，此处
+    # 不再写 deploy.resources——compose 会把 pids_limit 规范化为
+    # deploy.resources.limits.pids，两文件同写 distinct 值会直接报错
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   bot:
     # 生产环境资源限制
     deploy:

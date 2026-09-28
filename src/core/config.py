@@ -377,6 +377,38 @@ class Settings(BaseSettings):
             "（AI 检测主备链路串行 × 重试）。默认 300 秒。"
         ),
     )
+
+    # ========== 自定义验证脚本（沙盒执行）==========
+    # 脚本在独立 sandbox 容器内执行（见 Dockerfile.sandbox 与 docker-compose.yml），
+    # bot 侧只做 HTTP 调用，绝无本地执行回退路径；沙盒不可用时回落群组原有验证方式
+    custom_verification_enabled: bool = Field(
+        default=False,
+        description="是否启用群自定义验证脚本功能（需沙盒服务与 AI 审查配置）",
+    )
+    sandbox_api_url: str = Field(
+        default="",
+        description="沙盒执行服务 URL（compose 内为 http://sandbox:8080），空=未部署",
+    )
+    sandbox_api_key: str = Field(
+        default="",
+        description="沙盒执行服务共享密钥（与容器 SANDBOX_API_KEY 一致，至少 32 字符）",
+    )
+    sandbox_request_timeout_seconds: float = Field(
+        default=6.0,
+        ge=2.0,
+        le=30.0,
+        description=(
+            "bot 调用沙盒执行的 HTTP 总超时（秒）。沙盒内 wall-clock 上限为"
+            "请求 timeout_ms + 启动余量，此处应覆盖完整往返（含网络与排队）。默认 6 秒。"
+        ),
+    )
+    sandbox_health_interval_seconds: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=600.0,
+        description="沙盒健康探测结果缓存时长（秒），期内复用上次探测结论。默认 30 秒。",
+    )
+
     verification_joining_window_seconds: int = Field(
         default=3,
         ge=1,
@@ -635,6 +667,22 @@ class Settings(BaseSettings):
                 "请在 .env 文件中设置 CAPTCHA_SIGNATURE_KEY\n"
                 "生成方法：openssl rand -hex 32"
             )
+
+        # 自定义验证脚本强依赖沙盒服务与共享密钥（internal 网络不是单向访问
+        # 控制，执行接口必须认证）。启用时不满足即拒绝启动，避免运行期才发现
+        # 全部验证请求走 fallback
+        if self.custom_verification_enabled:
+            if not self.sandbox_api_url.strip():
+                raise ValueError(
+                    "🔒 启用 CUSTOM_VERIFICATION_ENABLED 时必须配置 SANDBOX_API_URL\n"
+                    "compose 部署下默认为 http://sandbox:8080"
+                )
+            if len(self.sandbox_api_key.strip()) < 32:
+                raise ValueError(
+                    "🔒 启用 CUSTOM_VERIFICATION_ENABLED 时，SANDBOX_API_KEY 必须配置且"
+                    "至少 32 个字符\n"
+                    "生成方法：openssl rand -hex 32"
+                )
 
         # Vision 协议留空时继承文本协议；Jev 仅支持纯文本，继承到它会在首次图片
         # 检测时才失败，故只要 Vision 已启用就在启动期拒绝，要求显式配置 Vision 协议。

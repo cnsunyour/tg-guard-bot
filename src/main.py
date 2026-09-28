@@ -348,6 +348,15 @@ async def on_shutdown() -> None:
     except Exception as e:
         logger.warning(f"关闭 CAS 客户端失败: {e}")
 
+    # ✅ 关闭沙盒执行客户端（自定义验证脚本功能；未启用时为 no-op）
+    try:
+        from src.services.sandbox_client import close_sandbox_client
+
+        await close_sandbox_client()
+        logger.info("✅ 沙盒客户端已关闭")
+    except Exception as e:
+        logger.warning(f"关闭沙盒客户端失败: {e}")
+
     # ✅ 关闭宵禁调度器
     try:
         from src.services.curfew_scheduler import get_curfew_scheduler

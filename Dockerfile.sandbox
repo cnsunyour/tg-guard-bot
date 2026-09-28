@@ -1,0 +1,36 @@
+# 沙盒执行服务镜像：与 bot 主镜像完全独立（不同底座内容、不同用户、不同网络）。
+# 安全基线（与 docker-compose.yml 的 sandbox 服务配合生效）：
+# - 非 root（uid 65534 = nobody）运行
+# - 不含任何项目源码、机密或构建工具；rootfs 只读由 compose 施加
+# - 依赖钉最新稳定版（规范：见 CLAUDE.md 依赖版本管理）
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Node（Debian 仓库版）提供 JavaScript 脚本运行时。不钉小版本：跟随
+# Debian 安全更新是沙盒运行时的期望行为，主镜像 python:3.13-slim 同策略
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 精确钉版（安全组件要求可复现构建）；升级走依赖版本管理流程
+RUN pip install --upgrade pip && \
+    pip install "aiohttp==3.14.3" "pydantic==2.13.5"
+
+# 只复制沙盒服务本体（不含 src/、migrations、.env 等任何主项目内容）
+COPY sandbox/ ./sandbox/
+
+# 任务目录在生产由 tmpfs 挂载（compose）；镜像内建同权限目录供本地直跑
+RUN mkdir -p /tasks && chown -R 65534:65534 /app /tasks
+
+USER 65534:65534
+
+EXPOSE 8080
+
+CMD ["python", "-m", "sandbox.server"]

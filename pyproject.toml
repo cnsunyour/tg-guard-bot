@@ -197,7 +197,7 @@ ignore = [
 "tests/*" = ["ARG"]       # Ignore unused arguments in tests
 
 [tool.ruff.lint.isort]
-known-first-party = ["src"]
+known-first-party = ["src", "sandbox"]
 
 # ============================================================================
 # mypy - 静态类型检查

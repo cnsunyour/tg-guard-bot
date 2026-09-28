@@ -19,7 +19,37 @@ services:
       - ./logs:/app/logs
       - ./config:/app/config
     networks:
-      - tg-guard-network
+      # 双网络：bot 是唯一能同时触达业务网与沙盒网的组件。
+      # gw_priority 保证默认路由（Telegram 出站）确定性走业务网
+      tg-guard-network:
+        gw_priority: 1
+      sandbox-network:
+
+  # 沙盒执行服务：运行管理员自定义验证脚本，与 bot 主进程完全隔离
+  # （独立镜像、独立 internal 网络、只读 rootfs、无能力、非 root）。
+  # 安全模型与残余边界见 SECURITY.md「自定义验证脚本」一节
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    container_name: tg-guard-sandbox
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      # 每任务在 /tasks 下建独立 0700 子目录，结束即删；noexec 防落地可执行文件
+      - /tasks:size=64m,noexec,uid=65534,gid=65534,mode=0700
+    mem_limit: 512m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY:-}
+    # 不挂 .env、不挂任何宿主目录、无 ports 暴露
+    networks:
+      - sandbox-network
 
   postgres:
     image: postgres:16-alpine
@@ -69,3 +99,7 @@ volumes:
 networks:
   tg-guard-network:
     driver: bridge
+  # internal：无出站公网路由；沙盒容器与业务网（postgres/redis）物理隔离
+  sandbox-network:
+    driver: bridge
+    internal: true

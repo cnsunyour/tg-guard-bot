@@ -118,21 +118,21 @@ test-watch:
 # ============================================================================
 lint:
 	@echo "🔍 运行 Ruff..."
-	ruff check src tests
+	ruff check src sandbox tests
 	@echo "🔍 运行 mypy..."
-	-mypy src || echo "⚠️  Mypy found type errors (non-blocking)"
+	-mypy src sandbox || echo "⚠️  Mypy found type errors (non-blocking)"
 
 format:
 	@echo "✨ 运行 isort..."
-	isort src tests
+	isort src sandbox tests
 	@echo "✨ 运行 Black..."
-	black src tests
+	black src sandbox tests
 
 format-check:
 	@echo "🔍 检查 isort..."
-	isort --check-only src tests
+	isort --check-only src sandbox tests
 	@echo "🔍 检查 Black..."
-	black --check src tests
+	black --check src sandbox tests
 
 check: format-check lint test
 	@echo "✅ 所有检查通过"

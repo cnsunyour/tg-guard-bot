@@ -39,6 +39,8 @@ RUN pip install --upgrade pip "setuptools>=78.1.1" wheel && \
 
 # 复制项目代码
 COPY src/ ./src/
+# sandbox/ 仅取协议定义（sandbox.protocol 单一来源）；沙盒镜像另有完整副本
+COPY sandbox/ ./sandbox/
 COPY alembic.ini ./
 COPY docker-entrypoint.sh ./
 COPY scripts/ ./scripts/
