@@ -124,6 +124,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
         antispam,
         cleanup,
         curfew,
+        custom_verify,
         events,
         lang,
         moderation,
@@ -135,6 +136,7 @@ async def setup_bot() -> tuple[Bot, Dispatcher]:
     dp.include_router(events.router)  # 系统事件（最高优先级）
     dp.include_router(start.router)  # 启动命令
     dp.include_router(admin.router)  # 管理命令
+    dp.include_router(custom_verify.router)  # 自定义验证脚本管理
     dp.include_router(cleanup.router)  # 清理命令
     dp.include_router(moderation.router)  # 群管理命令
     dp.include_router(spam_vote.router)  # 群成员集体投票

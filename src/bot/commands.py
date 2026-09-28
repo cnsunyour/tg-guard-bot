@@ -57,6 +57,7 @@ GROUP_MEMBER_COMMANDS = _specs("help", "spam", "report", "notspam", "nospam", "u
 # 群组管理员命令（完整管理功能；lang 供管理员切换群语言）
 GROUP_ADMIN_COMMANDS = _specs(
     "groupset",
+    "customverify",
     "setverify",
     "settimeout",
     "verifyconfig",

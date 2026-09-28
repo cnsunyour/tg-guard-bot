@@ -89,6 +89,11 @@ REDIS_PASSWORD=your_redis_password     # ⚠️ 强烈建议设置
 
 # 模型签名密钥（必填，防止模型文件被篡改）
 MODEL_SIGNATURE_KEY=<使用 openssl rand -hex 32 生成>  # ⚠️ 必填
+
+# 自定义验证脚本（可选功能，默认关闭；启用需部署沙盒服务）
+#CUSTOM_VERIFICATION_ENABLED=false
+#SANDBOX_API_URL=http://sandbox:8080
+#SANDBOX_API_KEY=<使用 openssl rand -hex 32 生成>  # 启用功能时必填，≥32 字符，需与 compose 中 sandbox 服务一致
 ```
 
 **获取你的 Telegram User ID**:
@@ -191,6 +196,17 @@ make train-model
 docker-compose exec bot python scripts/train_model.py --add-samples
 docker-compose exec bot python scripts/train_model.py --train
 ```
+
+### 4. 自定义验证脚本（可选）
+
+启用管理员自定义入群验证题（脚本在独立沙盒容器执行，与主服务隔离）：
+
+1. `.env` 配置（见步骤 2）：`CUSTOM_VERIFICATION_ENABLED=true`、`SANDBOX_API_KEY`（≥32 字符）
+2. `docker-compose.yml` 中 `sandbox` 服务的环境变量 `SANDBOX_API_KEY` 设为同一值（建议用 `.env` 变量引用）
+3. 重建启动：`make prod-build && make prod-up`
+4. 群内管理员 `/customverify upload` → 私聊发送 `.py` / `.js` 脚本 → 三重审查（静态 → AI → 沙盒试跑）通过后 `/customverify enable <id>`
+
+脚本编写规范（ask/verify 两入口、限制与示例）见 `sandbox/README.md` 与 `docs/custom-verify-script-guide.md`。停用：`/customverify disable`（回落群组原验证方式）或 groupset 菜单开关。
 
 ---
 

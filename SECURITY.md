@@ -121,6 +121,15 @@
 - ✅ PR 依赖审查（`dependency-review-action`，`fail-on-severity: moderate`，拒绝 GPL-3.0/AGPL-3.0）
 - ⚠️ 注：Bandit/Safety/pip-audit/Semgrep/Trivy 当前为 `continue-on-error`（监测告警，非强制门禁）；Gitleaks 与 dependency-review 为门禁
 
+### 自定义验证脚本沙盒（独立容器）
+- ✅ **执行边界**：脚本在独立 `sandbox` 容器运行（read_only rootfs + internal 网络 + `cap_drop: ALL` + `no-new-privileges` + 非 root uid 65534 + tmpfs noexec + mem/pids 限额），与 bot 主进程、Postgres、Redis 物理隔离；bot 侧**无本地执行回退路径**
+- ✅ **控制面不执行代码**：沙盒 HTTP 控制服务（Bearer 认证 + 协议版本协商）只编排任务，脚本一律在一次性子进程运行（独立 0700 tmpfs 目录、start_new_session、wall-clock killpg、rlimit：FSIZE=0/AS=128MB/CPU 跟随请求超时）
+- ✅ **纵深防御**：上传前置三重审查（AST 静态风险审查 allowlist 制 → AI 代码审查 fail-closed → 沙盒 dry-run）；运行时 import 白名单与静态审查同源
+- ✅ **结果信任**：沙盒返回经 bot 侧与沙盒侧双重 pydantic 严格校验（strict + extra=forbid + 深度/类型白名单 + 响应体限量读取）；脚本判定只输出 pass/retry，处罚决定权完全在 bot
+- ⚠️ **已知边界**：同一沙盒容器内的并发任务（默认并发 2）以同一非特权 UID 运行，0700 任务目录对同 UID 理论互见（低并发 + 短生命周期 + 无 ptrace 能力缓解）；internal 网络上宿主网关绑定的服务理论可达；**执行容器整体失守的爆炸半径 = uid 65534 容器内权限**
+- ⚠️ **非目标**：静态审查与 dry-run 是可用性/审计辅助，不构成安全认证；语言层限制（import 白名单等）可被动态构造绕过，安全边界始终是容器
+- 🔧 **后续强化路径**：gVisor / 独立执行 VM 节点（隔离执行容器整体失守场景）
+
 ---
 
 ## ⚠️ 已知限制与已接受风险

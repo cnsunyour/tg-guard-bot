@@ -48,6 +48,7 @@ _GROUPSET_MENU_TYPES = frozenset(
         "activity",
         "activityskip",
         "spamvote",
+        "customverify",
     }
 )
 
@@ -201,6 +202,12 @@ def _render_groupset_main_menu(
                 InlineKeyboardButton(
                     text=localizer.t("admin.groupset.menu.spamvote.button"),
                     callback_data=f"groupset_menu:{chat_id}:spamvote",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=localizer.t("admin.groupset.menu.customverify.button"),
+                    callback_data=f"groupset_menu:{chat_id}:customverify",
                 )
             ],
         ]
@@ -538,6 +545,38 @@ async def on_groupset_menu(callback: CallbackQuery, bot: Bot, localizer: BoundLo
                     "admin.groupset.menu.spamvote.message",
                     status=_groupset_status_label(localizer, group.spam_vote_enabled),
                     threshold=settings.spam_vote_threshold,
+                ),
+                reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard),
+            )
+
+        elif menu_type == "customverify":
+            summary_key = (
+                "admin.groupset.customverify.summary.active"
+                if group.active_revision_id is not None
+                else "admin.groupset.customverify.summary.none"
+            )
+            summary = localizer.t(summary_key, revision_id=group.active_revision_id or 0)
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=localizer.t("admin.groupset.menu.customverify.enable.button"),
+                            callback_data=f"groupset_customverify_toggle:{chat_id}:on",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=localizer.t("admin.groupset.menu.customverify.disable.button"),
+                            callback_data=f"groupset_customverify_toggle:{chat_id}:off",
+                        )
+                    ],
+                ]
+            )
+            await message.edit_text(
+                localizer.t(
+                    "admin.groupset.menu.customverify.message",
+                    status=_groupset_status_label(localizer, group.custom_verify_enabled),
+                    summary=summary,
                 ),
                 reply_markup=_with_groupset_back_button(localizer, chat_id, keyboard),
             )

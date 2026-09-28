@@ -199,6 +199,15 @@ class RedisKeys:
         return f"verification_deadline:{chat_id}:{user_id}"
 
     @staticmethod
+    def custom_verify_upload(admin_id: int) -> str:
+        """自定义脚本上传等待状态键名
+
+        存储 ""目标群 chat_id""（管理员在群里发 /customverify upload 后进入等待，
+        私聊发文档触发处理），TTL 300 秒。
+        """
+        return f"custom_verify_upload:{admin_id}"
+
+    @staticmethod
     def verification_script_state(chat_id: int, user_id: int) -> str:
         """自定义脚本验证的会话绑定负载键名（JSON）
 
