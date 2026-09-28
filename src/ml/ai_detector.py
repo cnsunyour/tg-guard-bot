@@ -26,7 +26,7 @@ from loguru import logger
 from src.core.config import settings
 from src.core.http_errors import format_httpx_error
 from src.core.utils import utcnow
-from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA
+from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA, JSONSchema
 from src.ml.ai_protocols import (
     ProtocolResponse,
     ResponseTerminatedError,
@@ -590,15 +590,24 @@ class AIServiceProvider(ABC):
         text: str,
         use_context_prompt: bool = False,
         locale: str | None = None,
+        *,
+        system_prompt: str | None = None,
+        result_schema: JSONSchema | None = None,
     ) -> dict[str, Any]:
         """调用当前 provider 配置的 AI 协议，返回结构化检测结果。
 
         协议差异（端点/认证/请求体/响应结构）由 ``self.adapter`` 处理；本方法只
         负责 HTTP 传输、超时、客户端生命周期和结果解包。终止类响应（refusal /
         token 截断等）经 ``_unwrap_protocol_response`` 抛 ``ResponseTerminatedError``。
+
+        ``system_prompt`` / ``result_schema`` 供非反垃圾用途（如脚本 AI 审查）
+        覆盖默认契约；不传则行为与原版完全一致。
         """
-        base_prompt = SYSTEM_PROMPT_WITH_CONTEXT if use_context_prompt else SYSTEM_PROMPT
-        system_prompt = _build_system_prompt(base_prompt, locale)
+        if system_prompt is None:
+            base_prompt = SYSTEM_PROMPT_WITH_CONTEXT if use_context_prompt else SYSTEM_PROMPT
+            system_prompt = _build_system_prompt(base_prompt, locale)
+        if result_schema is None:
+            result_schema = TEXT_RESULT_SCHEMA
 
         url = self.adapter.build_url(self.config.api_base)
         headers = self.adapter.build_headers(self.config.api_key)
@@ -606,7 +615,7 @@ class AIServiceProvider(ABC):
             self.config.model,
             system_prompt,
             text,
-            TEXT_RESULT_SCHEMA,
+            result_schema,
             self.config.max_output_tokens,
         )
 
@@ -1275,6 +1284,31 @@ class HybridAIDetector:
             return 0.0
         return stats.success_count / total
 
+    async def review_code(
+        self, text: str, *, system_prompt: str, result_schema: JSONSchema
+    ) -> dict[str, Any]:
+        """通用代码审查调用（自定义验证脚本上传的 AI 审查，fail-closed）。
+
+        与反垃圾检测共享主 provider 的传输层与客户端生命周期；刻意**不走
+        检测熔断统计**——审查是低频管理操作，混入检测熔断会互相干扰。
+        任何失败（未启用/网络/协议/终止）都向上抛，由调用方按 fail-closed
+        语义阻断激活，绝不降级为「通过」。
+
+        Args:
+            text: 待审查脚本源码
+            system_prompt: 审查 system prompt
+            result_schema: 结构化输出契约（CODE_REVIEW_RESULT_SCHEMA）
+
+        Returns:
+            审查结果字典（risk/reasons）
+        """
+        primary = self.primary
+        if not primary.is_available:
+            raise AIServiceError(provider=primary.name, message="AI 服务商未启用")
+        return await primary._call_api(
+            text, system_prompt=system_prompt, result_schema=result_schema
+        )
+
     async def detect(self, text: str, locale: str | None = None) -> dict[str, Any]:
         """检测文本是否为垃圾信息（尝试所有服务商）
 
@@ -1779,6 +1813,14 @@ class AISpamDetector:
         """Vision 是否启用且至少有一家可用 provider（图片/贴纸检测的总开关）"""
         return (
             self._detector.vision_primary.is_available or self._detector.vision_backup.is_available
+        )
+
+    async def review_code(
+        self, text: str, *, system_prompt: str, result_schema: JSONSchema
+    ) -> dict[str, Any]:
+        """通用代码审查调用（转发 HybridAIDetector；fail-closed 语义见其 docstring）"""
+        return await self._detector.review_code(
+            text, system_prompt=system_prompt, result_schema=result_schema
         )
 
     @property

@@ -93,3 +93,19 @@ SYSTEMONE_TEXT_QUESTIONS: Final[dict[str, dict[str, Any]]] = {
         },
     },
 }
+
+
+# 自定义验证脚本 AI 代码审查结果 schema（与反垃圾 schema 同一三协议公共子集）
+CODE_REVIEW_RESULT_SCHEMA: Final[JSONSchema] = {
+    "type": "object",
+    "properties": {
+        "risk": {"type": "string", "enum": ["safe", "risky"], "description": "脚本风险判定"},
+        "reasons": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "判定理由列表（risky 时必须给出具体依据）",
+        },
+    },
+    "required": ["risk", "reasons"],
+    "additionalProperties": False,
+}

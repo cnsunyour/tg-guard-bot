@@ -75,6 +75,19 @@ class Group(Base):
         comment="活跃度跳过垃圾检测阈值（0=禁用，>0=启用并使用此阈值）",
     )
 
+    # 自定义验证脚本配置（沙盒执行；脚本本体在 custom_verification_revisions 表）
+    custom_verify_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="是否启用自定义验证脚本（启用时覆盖 verification_type，沙盒不可用时回落原类型）",
+    )
+    active_revision_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="当前生效的自定义脚本 revision id（NULL=未启用脚本验证）",
+    )
+
     # 宵禁模式配置
     curfew_enabled: Mapped[bool] = mapped_column(
         Boolean,
