@@ -342,27 +342,31 @@ def mask_user_name(name: str | None) -> str:
 
 
 def format_user_mention(user) -> str:
-    """安全地格式化用户提及，防止 HTML 注入与用户名广告投递
+    """格式化普通用户的脱敏 HTML mention（可点击 + 完整 @username）
 
-    显示名与 @username 均经 :func:`mask_user_name` 脱敏，避免 spammer 通过
-    用户名展示广告。HTML 特殊字符在脱敏后再转义。
+    显示名经 :func:`mask_user_name` 脱敏后生成可点击的 ``tg://user`` HTML
+    mention（链接基于可信的数字 user_id，管理员点击仍能精确定位用户）；
+    有 @username 时在 mention 后完整附加（仅 HTML 转义、不再脱敏），无
+    username 时不附加任何标识。
 
     Args:
         user: Telegram User 对象
 
     Returns:
-        安全的用户提及字符串，形如 ``脱敏名 (@脱敏username)``
-        或 ``脱敏名 (ID:用户ID)``
+        HTML mention 字符串，形如
+        ``<a href="tg://user?id=123">脱敏名</a> (@username)``（有 username）
+        或 ``<a href="tg://user?id=123">脱敏名</a>``（无 username）
+
+    Note:
+        返回值是 HTML 片段，只能插入 ``parse_mode="HTML"`` 的消息，调用方
+        不得再次 :func:`escape_html`。username 展示策略（2026-09 调整）：不再
+        脱敏，spammer 塞入用户名的广告将可见，防投递改由显示名脱敏与
+        mention 链接的定位能力承担。
     """
-    # 先脱敏再转义（顺序不可颠倒，否则会破坏 HTML 实体）
-    name = escape_html(mask_user_name(user.full_name or user.first_name or "Unknown"))
-
-    # @username 同样可能携带广告，一并脱敏；无 username 时回退到数字 ID（无需脱敏）
-    identifier = (
-        f"@{escape_html(mask_user_name(user.username))}" if user.username else f"ID:{user.id}"
-    )
-
-    return f"{name} ({identifier})"
+    mention = masked_mention_html(user)
+    if not user.username:
+        return mention
+    return f"{mention} (@{escape_html(user.username)})"
 
 
 def format_trusted_user_mention(user) -> str:
@@ -391,9 +395,9 @@ def format_trusted_user_mention(user) -> str:
 def masked_mention_html(user) -> str:
     """生成显示名脱敏的可点击 HTML 用户提及
 
-    与 :func:`format_user_mention` 不同，本函数生成可点击的 ``<a>`` 链接
-    （基于可信的数字 user_id），管理员点击仍能精确定位用户，而链接文本
-    只展示脱敏后的显示名，不暴露 spammer 塞入用户名的广告内容。
+    链接基于可信的数字 user_id，管理员点击仍能精确定位用户；链接文本只展示
+    脱敏后的显示名，不附加 username 与 ID。与 :func:`format_user_mention`
+    的区别仅在于后者会在有 username 时追加 `` (@username)`` 后缀。
 
     Args:
         user: Telegram User 对象
@@ -403,7 +407,7 @@ def masked_mention_html(user) -> str:
 
     Note:
         点击跳转后，Telegram 资料页仍会展示真实名称，属于平台行为，
-        Bot 端无法屏蔽。
+        Bot 端无法屏蔽。返回值是 HTML 片段，调用方不得再次转义。
     """
     name = escape_html(mask_user_name(user.full_name or user.first_name or "Unknown"))
     return f'<a href="tg://user?id={user.id}">{name}</a>'

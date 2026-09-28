@@ -57,6 +57,7 @@ def _message(*, answer_side_effect=None):
         ),
         message_id=ORIG_MSG_ID,
         text="spam text",
+        html_text="spam text",
         caption=None,
         reply_markup="review-keyboard",
         answer=AsyncMock(side_effect=answer_side_effect),
@@ -154,6 +155,8 @@ async def test_review_producer_creates_nx_state_and_sends_prompt(mocker, localiz
     assert reply_parameters.allow_sending_without_reply is True
     # 检测原因可能含可疑域名，关闭网页预览
     assert message.answer.await_args.kwargs["disable_web_page_preview"] is True
+    # 正文含 HTML mention（脱敏 offender + 管理员 header），必须声明 HTML 解析
+    assert message.answer.await_args.kwargs["parse_mode"] == "HTML"
     # prompt 发出后安排与 state TTL 一致的自动删除（兜底未处理残留）
     auto_delete.assert_awaited_once_with(message.answer.return_value, delay=review_ttl)
     # 管理员 header 与正文单换行相接，不留空行；投票进度重建用的 prompt_base
@@ -271,6 +274,9 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     mocker, localizer
 ) -> None:
     message = _message()
+    # Telegram 返回的 text 是纯文本、mention 链接存于 entities；html_text 才是
+    # 可按 HTML 重发的重建正文——编辑必须取 html_text 而非 text
+    message.html_text = '🔔 <a href="tg://user?id=7">👤</a>\nJ******e mention prompt'
     callback = _callback(f"spam_review:ban:{ORIG_MSG_ID}:{REVIEW_ID}", message)
     bot = MagicMock()
     bot.delete_message = AsyncMock()
@@ -314,6 +320,11 @@ async def test_review_callback_ban_success_consumes_state_and_allows_left(
     assert message.edit_text.await_args.kwargs["reply_markup"] is None
     # 编辑同样关闭网页预览（否则原因中的可疑域名会在此刻渲染出卡片）
     assert message.edit_text.await_args.kwargs["disable_web_page_preview"] is True
+    # 编辑保留原 prompt 正文（含 HTML mention），必须重新声明 HTML 解析
+    assert message.edit_text.await_args.kwargs["parse_mode"] == "HTML"
+    # 编辑正文以 entities 重建的 HTML 开头（mention 链接保留），而非纯文本 text
+    edited_text = message.edit_text.await_args.args[0]
+    assert edited_text.startswith(message.html_text + "\n")
     auto_delete.assert_awaited_once_with(message, delay=30)
 
 
@@ -614,7 +625,9 @@ async def test_apply_immediate_punishment_selects_action_and_records_feedback(
         message_id=ORIG_MSG_ID,
     )
     keyboard.assert_called_once_with(localizer, OFFENDER_ID, ORIG_MSG_ID)
-    message.answer.assert_awaited_once_with("🔔 @admins\nprocessed", reply_markup="keyboard")
+    message.answer.assert_awaited_once_with(
+        "🔔 @admins\nprocessed", reply_markup="keyboard", parse_mode="HTML"
+    )
     auto_delete.assert_awaited_once_with(message.answer.return_value)
     detector.add_feedback.assert_awaited_once_with(
         text="recognized text", is_spam=True, labeled_by=999, confidence=confidence

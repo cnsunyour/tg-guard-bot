@@ -256,6 +256,8 @@ async def test_callback_threshold_triggers_ban(mocker, localizer) -> None:
     edit_kwargs = bot.edit_message_text.await_args.kwargs
     assert edit_kwargs["text"] == "base\nspam_vote.spam.completed.message"
     assert edit_kwargs["reply_markup"] is None
+    # prompt_base 含 HTML mention（管理员 header / 脱敏 offender），编辑须重新声明
+    assert edit_kwargs["parse_mode"] == "HTML"
     auto_delete.assert_awaited_once_with(callback.message, delay=30)
 
 
@@ -276,6 +278,7 @@ async def test_edit_vote_progress_appends_progress_with_single_newline(mocker, l
         text="base\nspam_vote.progress.message",
         reply_markup="keyboard",
         disable_web_page_preview=True,
+        parse_mode="HTML",
     )
 
 

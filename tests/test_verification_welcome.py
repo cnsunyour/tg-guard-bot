@@ -36,7 +36,7 @@ def _user() -> MagicMock:
 
 
 async def test_plain_mention_default_style(mocker) -> None:
-    """默认 plain 样式：format_user_mention 纯文本脱敏（无 <a> 标签），parse_mode=HTML。"""
+    """默认 plain 样式：脱敏 mention 可点击 + 完整 @username，parse_mode=HTML。"""
     _patch_i18n(mocker)
     bot = AsyncMock()
 
@@ -45,7 +45,7 @@ async def test_plain_mention_default_style(mocker) -> None:
     bot.send_message.assert_awaited_once()
     kwargs = bot.send_message.await_args.kwargs
     assert kwargs["parse_mode"] == "HTML"
-    assert "<a href=" not in kwargs["text"]
+    assert '<a href="tg://user?id=42">A***e</a> (@alice)' in kwargs["text"]
 
 
 async def test_linked_mention_masked_clickable(mocker) -> None:

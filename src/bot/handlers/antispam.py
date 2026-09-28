@@ -833,6 +833,7 @@ async def _handle_spam_with_review(
                 localizer, message.message_id, state.review_id, vote_row=vote_row
             ),
             disable_web_page_preview=True,
+            parse_mode="HTML",
         )
         if vote_session is not None:
             # 提示定位存入会话（消息 ID + 基础文案）：投票进度更新据此重建正文；
@@ -943,6 +944,7 @@ async def _apply_immediate_punishment(
             reply_markup=build_immediate_keyboard(
                 localizer, message.from_user.id, message.message_id
             ),
+            parse_mode="HTML",
         )
         await auto_delete_message(alert_msg)
 
@@ -2909,10 +2911,13 @@ async def on_spam_review_callback(callback: CallbackQuery, bot: Bot) -> None:
                 with contextlib.suppress(Exception):
                     # 与发送时一致关闭网页预览：编辑会按新正文重新生成预览，
                     # 不显式关闭则原因中的可疑域名会在此刻渲染出卡片。
+                    # 正文用 html_text 而非 text：Telegram 返回的 text 是纯文本
+                    # （mention 链接存于 entities），按 HTML 重发须由 entities 重建。
                     await message.edit_text(
-                        f"{message.text or ''}\n{completed_text}",
+                        f"{message.html_text}\n{completed_text}",
                         reply_markup=None,
                         disable_web_page_preview=True,
+                        parse_mode="HTML",
                     )
             with contextlib.suppress(Exception):
                 await auto_delete_message(message, delay=30)
@@ -3047,9 +3052,12 @@ async def on_spam_feedback(callback: CallbackQuery) -> None:
         localizer = get_translator().for_locale(group_locale)
         operator_mention = format_trusted_user_mention(callback.from_user)
         feedback_result = build_feedback_result(localizer, is_spam, operator_mention)
+        # 正文用 html_text 而非 text：Telegram 返回的 text 是纯文本（mention
+        # 链接存于 entities），按 HTML 重发须由 entities 重建。
         await message.edit_text(
-            f"{message.text or ''}\n{feedback_result}",
+            f"{message.html_text}\n{feedback_result}",
             reply_markup=None,
+            parse_mode="HTML",
         )
 
         # 自动删除提示消息

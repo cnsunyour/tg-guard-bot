@@ -168,6 +168,7 @@ async def edit_vote_progress(
             text=f"{prompt_base}\n{build_vote_progress(localizer, up, down, threshold)}",
             reply_markup=await _rebuild_prompt_keyboard(localizer, chat_id, orig_msg_id, session),
             disable_web_page_preview=True,
+            parse_mode="HTML",
         )
     except Exception as e:
         # 并发进度编辑可能交错（Telegram 按到达序应用），下一次投票自愈
@@ -361,6 +362,7 @@ async def finalize_vote_if_ready(
                 text=f"{prompt_base}\n{result_text}",
                 reply_markup=None,
                 disable_web_page_preview=True,
+                parse_mode="HTML",
             )
     if prompt_message is not None:
         with contextlib.suppress(Exception):

@@ -1514,6 +1514,7 @@ async def cmd_spam(message: Message, bot: Bot, localizer: BoundLocalizer) -> Non
                 ),
                 reply_markup=keyboard,
                 disable_web_page_preview=True,
+                parse_mode="HTML",
             )
             if vote_session is not None:
                 # 提示定位存入会话：投票进度更新据此重建正文；会话已过期则拒绝写入

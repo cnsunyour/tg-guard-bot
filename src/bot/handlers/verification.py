@@ -383,9 +383,9 @@ async def send_group_welcome(
 ) -> Message:
     """在群内发送欢迎消息（按群 locale 渲染），返回消息供调用方延迟删除。
 
-    mention_style 控制用户提及格式（均经脱敏，普通用户不暴露真实名称）：
-    - plain: format_user_mention 纯文本（脱敏名 + @脱敏username 或数字 ID）
-    - linked: masked_mention_html 可点击 <a> 链接（仅脱敏名，管理员可点击定位）
+    mention_style 控制用户提及格式（显示名均脱敏，普通用户不暴露真实名称）：
+    - plain: format_user_mention HTML mention（脱敏名可点击 + 完整 @username）
+    - linked: masked_mention_html 可点击 <a> 链接（仅脱敏名，不带 username 后缀）
     """
     group_locale = await get_resolver().for_group(chat_id)
     mention = masked_mention_html(user) if mention_style == "linked" else format_user_mention(user)
@@ -1019,7 +1019,9 @@ async def _process_user_join(
                 "verification.join.group.invited_by.message",
                 inviter=format_trusted_user_mention(event.from_user),
             )
-            welcome_msg = await bot.send_message(chat_id=chat_id, text=welcome_text)
+            welcome_msg = await bot.send_message(
+                chat_id=chat_id, text=welcome_text, parse_mode="HTML"
+            )
 
             # 5秒后删除欢迎消息
             await asyncio.sleep(5)
@@ -1106,6 +1108,7 @@ async def _process_user_join(
                         "verification.join.cas_ban.notify",
                         user=format_user_mention(user),
                     ),
+                    parse_mode="HTML",
                 )
                 await auto_delete_message(notify_msg, delay=30)
             except Exception as e:
@@ -1161,6 +1164,7 @@ async def _process_user_join(
                         user=format_user_mention(user),
                         status=status_text,
                     ),
+                    parse_mode="HTML",
                 )
                 await auto_delete_message(notify_msg, delay=30)
             except Exception as e:
