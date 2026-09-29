@@ -42,8 +42,9 @@ AI_REVIEW_SYSTEM_PROMPT = (
     "普通验证逻辑（算术题、选择题、文本匹配）即使写法笨拙也不是风险。\n"
     "只输出一个 JSON 对象，字段严格为以下两个（不要增删字段、不要输出 "
     "JSON 之外的任何文字）：\n"
-    '{"risk": "safe" 或 "risky", "reasons": ["判定理由1", "判定理由2"]}\n'
-    "risk 为 risky 时 reasons 必须给出具体依据；为 safe 时 reasons 可给简短说明。"
+    '{"risk": "safe", "reasons": ["判定理由1"]}\n'
+    'risk 取值只能是 "safe" 或 "risky"；为 "risky" 时 reasons 必须给出'
+    "具体依据，为 safe 时可给简短说明。"
 )
 
 # dry-run 使用的假用户上下文（不触碰任何真实成员）
@@ -165,10 +166,11 @@ class CustomVerificationService:
         return {"risk": result["risk"], "reasons": reasons}
 
     async def _dry_run(self, sandbox_language: SandboxLanguage, source: str) -> dict[str, Any]:
-        """沙盒试跑：ask 必须产出合法题目，verify 必须给出合法判定。
+        """沙盒试跑：ask 产出合法题目；verify 按模式检查。
 
-        只验证协议可用性（answer 传什么值都能过协议校验即算通过），
-        不要求判对——判对与否是管理员业务，激活前由管理员 test 自查。
+        按钮模式逐选项各跑一次，要求至少一个选项返回 pass——全部 retry
+        即无解题（任何答案都无法通过，必挂新人），拒绝入库。文本模式无法
+        枚举正确答案，只要求协议合法；判对与否由管理员 test 自查。
         """
         errors: list[str] = []
         challenge_id = f"dryrun-{uuid.uuid4().hex[:12]}"

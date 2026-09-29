@@ -694,10 +694,14 @@ class Settings(BaseSettings):
             # Jev 时审查自动经 Vision 通道（Vision 协议必非 Jev）——此时要求
             # Vision 主或备至少一路可用，否则启动期拦截
             if self.ai_spam_protocol == _TEXT_ONLY_AI_PROTOCOL:
+                # ⚠️ 用原始字段判定而非 *_effective：key/base 留空会继承主 Jev
+                # 的 api.typesafe.ai 与 Jev key，Vision 通道却按 openai/anthropic
+                # 文本协议发请求——端点不兼容，审查将全部 fail-closed
                 vision_primary_ready = (
                     self.ai_spam_vision_enabled
                     and self.vision_protocol_effective != _TEXT_ONLY_AI_PROTOCOL
-                    and bool(self.vision_api_key_effective.strip())
+                    and bool(self.ai_spam_vision_api_key.strip())
+                    and bool(self.ai_spam_vision_api_base.strip())
                     and bool(self.ai_spam_vision_model.strip())
                 )
                 vision_backup_ready = (
@@ -705,17 +709,20 @@ class Settings(BaseSettings):
                     self.ai_spam_vision_enabled
                     and self.ai_spam_vision_backup_enabled
                     and self.vision_backup_protocol_effective != _TEXT_ONLY_AI_PROTOCOL
-                    and bool(self.vision_backup_api_key_effective.strip())
+                    and bool(self.ai_spam_vision_backup_api_key.strip())
+                    and bool(self.ai_spam_vision_backup_api_base.strip())
                     and bool(self.ai_spam_vision_backup_model.strip())
                 )
                 if not (vision_primary_ready or vision_backup_ready):
                     raise ValueError(
                         "🔒 主 AI 协议为 Jev 时，脚本 AI 审查需经 Vision 通道执行，"
-                        "但未检测到可用的 Vision 配置\n"
+                        "但未检测到可用的 Vision 配置（API key / base / model 必须"
+                        "显式配置，不能留空继承 Jev 凭据）\n"
                         "请配置 AI_SPAM_VISION_ENABLED=true 与 AI_SPAM_VISION_API_KEY"
-                        " / AI_SPAM_VISION_MODEL / AI_SPAM_VISION_PROTOCOL（协议不能为"
-                        " Jev），或将 AI_SPAM_PROTOCOL 切换为 openai_chat / "
-                        "openai_responses / anthropic_messages"
+                        " / AI_SPAM_VISION_API_BASE / AI_SPAM_VISION_MODEL / "
+                        "AI_SPAM_VISION_PROTOCOL（协议不能为 Jev），或将 "
+                        "AI_SPAM_PROTOCOL 切换为 openai_chat / openai_responses / "
+                        "anthropic_messages"
                     )
 
         # Vision 协议留空时继承文本协议；Jev 仅支持纯文本，继承到它会在首次图片

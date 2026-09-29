@@ -32,8 +32,8 @@ sudo apt update && sudo apt upgrade -y
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
 
-# 安装 Docker Compose
-sudo apt install -y docker compose
+# Docker Compose V2 插件（get.docker.com 脚本通常已附带；缺失时补装）
+sudo apt-get install -y docker-compose-plugin
 
 # 安装 Make（可选，简化命令）
 sudo apt install -y make
