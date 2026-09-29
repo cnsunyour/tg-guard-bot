@@ -10,6 +10,7 @@ services:
     # 开发环境：挂载源代码与运行时数据（修改后需 make dev-restart 生效）
     volumes:
       - ./src:/app/src:ro           # 只读挂载源代码
+      - ./sandbox:/app/sandbox:ro   # 只读挂载沙盒协议（protocol 单一来源，两侧须同步）
       - ./scripts:/app/scripts:ro   # 只读挂载脚本
       - ./migrations:/app/migrations  # 挂载迁移脚本（生成新迁移时需可写）
       - ./locales:/app/locales:ro   # 只读挂载 i18n catalog（修改后需重启 bot）
@@ -28,6 +29,11 @@ services:
 
     # 开发环境：允许失败时不重启（方便调试）
     restart: "no"
+
+  sandbox:
+    # 开发环境：挂载沙盒源码（修改后需 make dev-restart 生效，与 bot 挂 src 同理）
+    volumes:
+      - ./sandbox:/app/sandbox:ro
 
   # 开发环境：暴露数据库和 Redis 端口用于本地调试
   postgres:

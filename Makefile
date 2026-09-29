@@ -190,8 +190,8 @@ dev-down:
 	@echo "✅ 开发环境已停止"
 
 dev-restart:
-	docker-compose restart bot
-	@echo "✅ Bot 已重启"
+	docker-compose restart bot sandbox
+	@echo "✅ Bot 与沙盒已重启"
 
 dev-logs:
 	docker-compose logs -f bot sandbox
@@ -212,8 +212,8 @@ prod-down:
 	@echo "✅ 生产环境已停止"
 
 prod-restart:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml restart bot
-	@echo "✅ Bot 已重启"
+	docker-compose -f docker-compose.yml -f docker-compose.prod.yml restart bot sandbox
+	@echo "✅ Bot 与沙盒已重启"
 
 prod-logs:
 	docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f bot sandbox
