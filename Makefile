@@ -41,7 +41,7 @@ help:
 	@echo "🐳 开发环境:"
 	@echo "  make dev-up          - 启动开发环境（修改代码后需 make dev-restart 生效）"
 	@echo "  make dev-down        - 停止开发环境"
-	@echo "  make dev-logs        - 查看开发环境日志"
+	@echo "  make dev-logs        - 查看开发环境日志（bot + sandbox）"
 	@echo "  make dev-restart     - 重启开发环境"
 	@echo ""
 	@echo "🚀 生产环境:"
@@ -49,7 +49,7 @@ help:
 	@echo "  make prod-up         - 启动生产环境"
 	@echo "  make prod-down       - 停止生产环境"
 	@echo "  make prod-restart    - 重启生产环境"
-	@echo "  make prod-logs       - 查看生产环境日志"
+	@echo "  make prod-logs       - 查看生产环境日志（bot + sandbox）"
 	@echo ""
 	@echo "🗄️  数据库:"
 	@echo "  make db-migrate      - 运行数据库迁移（alembic upgrade head）"
@@ -194,7 +194,7 @@ dev-restart:
 	@echo "✅ Bot 已重启"
 
 dev-logs:
-	docker-compose logs -f bot
+	docker-compose logs -f bot sandbox
 
 # 生产环境
 prod-build:
@@ -216,7 +216,7 @@ prod-restart:
 	@echo "✅ Bot 已重启"
 
 prod-logs:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f bot
+	docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f bot sandbox
 
 # 数据库操作
 db-migrate:
