@@ -179,59 +179,59 @@ ci: format-check lint security test
 
 # 开发环境
 dev-up:
-	docker-compose up -d
+	docker compose up -d
 	@echo "✅ 开发环境已启动"
 	@echo "🔍 查看日志: make dev-logs"
 	@echo "🔗 数据库: localhost:5432 (postgres/postgres)"
 	@echo "🔗 Redis:   localhost:6379"
 
 dev-down:
-	docker-compose down
+	docker compose down
 	@echo "✅ 开发环境已停止"
 
 dev-restart:
-	docker-compose restart bot sandbox
+	docker compose restart bot sandbox
 	@echo "✅ Bot 与沙盒已重启"
 
 dev-logs:
-	docker-compose logs -f bot sandbox
+	docker compose logs -f bot sandbox
 
 # 生产环境
 prod-build:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+	docker compose -f docker compose.yml -f docker compose.prod.yml build
 	@echo "✅ 生产环境镜像构建完成"
 
 prod-up:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+	docker compose -f docker compose.yml -f docker compose.prod.yml up -d
 	@echo "✅ 生产环境已启动"
 	@echo "查看日志: make prod-logs"
 	@echo "查看状态: make status"
 
 prod-down:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml down
+	docker compose -f docker compose.yml -f docker compose.prod.yml down
 	@echo "✅ 生产环境已停止"
 
 prod-restart:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml restart bot sandbox
+	docker compose -f docker compose.yml -f docker compose.prod.yml restart bot sandbox
 	@echo "✅ Bot 与沙盒已重启"
 
 prod-logs:
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f bot sandbox
+	docker compose -f docker compose.yml -f docker compose.prod.yml logs -f bot sandbox
 
 # 数据库操作
 db-migrate:
-	docker-compose run --rm bot alembic upgrade head
+	docker compose run --rm bot alembic upgrade head
 	@echo "✅ 数据库迁移完成"
 
 db-revision:
 	@if [ -z "$(M)" ]; then echo "用法: make db-revision M=\"描述\""; exit 1; fi
-	docker-compose run --rm bot alembic revision --autogenerate -m "$(M)"
+	docker compose run --rm bot alembic revision --autogenerate -m "$(M)"
 
 db-down:
-	docker-compose run --rm bot alembic downgrade -1
+	docker compose run --rm bot alembic downgrade -1
 
 db-shell:
-	docker-compose exec postgres psql -U postgres -d tg_guard
+	docker compose exec postgres psql -U postgres -d tg_guard
 
 # 自动备份（PostgreSQL + Redis + GFS 轮转）
 backup:
@@ -267,9 +267,9 @@ backup-restore-redis:
 		exit 1; \
 	fi
 	@echo "⚠️  警告: Redis 恢复需要重启容器"
-	docker-compose stop redis
+	docker compose stop redis
 	python scripts/backup.py --restore-redis $(FILE)
-	docker-compose start redis
+	docker compose start redis
 	@echo "✅ Redis 已恢复并重启"
 
 backup-setup-cron:
@@ -277,11 +277,11 @@ backup-setup-cron:
 
 # 模型训练
 train-samples:
-	docker-compose exec bot python scripts/train_model.py --add-samples
+	docker compose exec bot python scripts/train_model.py --add-samples
 	@echo "✅ 示例数据已添加"
 
 train-model:
-	docker-compose exec bot python scripts/train_model.py --train
+	docker compose exec bot python scripts/train_model.py --train
 	@echo "✅ 模型训练完成"
 
 # 维护
@@ -299,7 +299,7 @@ clean:
 clean-all: clean
 	@read -p "⚠️  确定要删除所有数据（包括数据库）吗？(yes/no): " confirm; \
 	if [ "$$confirm" = "yes" ]; then \
-		docker-compose down -v; \
+		docker compose down -v; \
 		rm -rf data/models/*; \
 		rm -rf logs/*; \
 		echo "✅ 所有数据已清理"; \
@@ -309,7 +309,7 @@ clean-all: clean
 
 status:
 	@echo "=== Docker 容器状态 ==="
-	docker-compose ps
+	docker compose ps
 	@echo ""
 	@echo "=== Docker 资源使用 ==="
 	docker stats --no-stream tg-guard-bot tg-guard-postgres tg-guard-redis || true

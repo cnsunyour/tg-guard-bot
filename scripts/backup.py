@@ -670,7 +670,7 @@ class BackupManager:
 
             if result.returncode == 0:
                 logger.info("✅ Redis 备份文件已复制，请重启 tg-guard-redis 容器")
-                logger.info("命令: docker-compose restart redis")
+                logger.info("命令: docker compose restart redis")
                 return True
             else:
                 logger.error(f"❌ Redis 恢复失败: {result.stderr}")

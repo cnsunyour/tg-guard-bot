@@ -33,7 +33,7 @@ curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
 
 # 安装 Docker Compose
-sudo apt install -y docker-compose
+sudo apt install -y docker compose
 
 # 安装 Make（可选，简化命令）
 sudo apt install -y make
@@ -109,8 +109,8 @@ make prod-build       # 构建镜像
 make prod-up          # 启动服务
 
 # 方式 2: 使用 Docker Compose
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker compose.yml -f docker compose.prod.yml build
+docker compose -f docker compose.yml -f docker compose.prod.yml up -d
 ```
 
 ### 步骤 4: 初始化数据库
@@ -134,12 +134,12 @@ make db-migrate
 # 查看服务状态
 make status
 # 或
-docker-compose ps
+docker compose ps
 
 # 查看日志
 make prod-logs
 # 或
-docker-compose logs -f bot
+docker compose logs -f bot
 
 # 健康检查（在 Telegram 中发送给 Bot）
 /health
@@ -193,8 +193,8 @@ make train-samples
 make train-model
 
 # 或者使用 Docker Compose
-docker-compose exec bot python scripts/train_model.py --add-samples
-docker-compose exec bot python scripts/train_model.py --train
+docker compose exec bot python scripts/train_model.py --add-samples
+docker compose exec bot python scripts/train_model.py --train
 ```
 
 ### 4. 自定义验证脚本（可选）
@@ -202,7 +202,7 @@ docker-compose exec bot python scripts/train_model.py --train
 启用管理员自定义入群验证题（脚本在独立沙盒容器执行，与主服务隔离）：
 
 1. `.env` 配置（见步骤 2）：`CUSTOM_VERIFICATION_ENABLED=true`、`SANDBOX_API_KEY`（≥32 字符）
-2. `docker-compose.yml` 中 `sandbox` 服务的环境变量 `SANDBOX_API_KEY` 设为同一值（建议用 `.env` 变量引用）
+2. `docker compose.yml` 中 `sandbox` 服务的环境变量 `SANDBOX_API_KEY` 设为同一值（建议用 `.env` 变量引用）
 3. 重建启动：`make prod-build && make prod-up`
 4. 群内管理员 `/customverify upload` → 私聊发送 `.py` / `.js` 脚本 → 三重审查（静态 → AI → 沙盒试跑）通过后 `/customverify enable <id>`
 
@@ -236,7 +236,7 @@ sudo ufw status
 
 默认配置中，PostgreSQL 和 Redis 端口仅在本地暴露。**生产环境建议移除端口映射**：
 
-编辑 `docker-compose.yml`，注释掉以下行：
+编辑 `docker compose.yml`，注释掉以下行：
 
 ```yaml
 postgres:
@@ -274,10 +274,10 @@ sudo systemctl restart sshd
 make prod-logs
 
 # 查看最近 100 行
-docker-compose logs --tail=100 bot
+docker compose logs --tail=100 bot
 
 # 查看错误日志
-docker-compose exec bot cat logs/error_$(date +%Y-%m-%d).log
+docker compose exec bot cat logs/error_$(date +%Y-%m-%d).log
 ```
 
 ### 2. 数据库备份
@@ -367,13 +367,13 @@ make prod-restart
 
 ```bash
 # 1. 检查容器状态
-docker-compose ps
+docker compose ps
 
 # 2. 查看 Bot 日志
-docker-compose logs --tail=50 bot
+docker compose logs --tail=50 bot
 
 # 3. 检查网络连接
-docker-compose exec bot ping -c 3 api.telegram.org
+docker compose exec bot ping -c 3 api.telegram.org
 
 # 4. 重启 Bot
 make prod-restart
@@ -387,16 +387,16 @@ make prod-restart
 
 ```bash
 # 1. 检查 PostgreSQL 状态
-docker-compose exec postgres pg_isready -U postgres
+docker compose exec postgres pg_isready -U postgres
 
 # 2. 检查环境变量
-docker-compose exec bot env | grep DB_
+docker compose exec bot env | grep DB_
 
 # 3. 手动连接测试
-docker-compose exec postgres psql -U postgres -d tg_guard -c "SELECT 1"
+docker compose exec postgres psql -U postgres -d tg_guard -c "SELECT 1"
 
 # 4. 重启数据库
-docker-compose restart postgres
+docker compose restart postgres
 ```
 
 ### 问题 3: 内存不足
@@ -455,7 +455,7 @@ ANALYZE audit_logs;
 
 ### 2. Redis 优化
 
-Redis 配置已在 `docker-compose.prod.yml` 中优化：
+Redis 配置已在 `docker compose.prod.yml` 中优化：
 - 最大内存: 256MB
 - 淘汰策略: `allkeys-lru`
 - 持久化: RDB + AOF
@@ -489,7 +489,7 @@ await dp.start_polling(
 
 ### 每月检查
 - [ ] 系统更新: `sudo apt update && sudo apt upgrade`
-- [ ] Docker 镜像更新: `docker-compose pull`
+- [ ] Docker 镜像更新: `docker compose pull`
 - [ ] 重新训练反垃圾模型: `make train-model`
 - [ ] 检查安全公告
 
