@@ -67,9 +67,9 @@ backup/
 backups/
 
 # AI 模型
-data/models/*.pkl
-data/models/*.bin
-data/models/*.onnx
+# data/ 全部运行时产物不入库（模型/会话/取证图等；data 仅保留 .gitkeep 占位）
+data/*
+!data/.gitkeep
 
 # Telethon Session 文件（包含认证信息，不应提交）
 *.session
