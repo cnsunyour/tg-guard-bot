@@ -20,10 +20,11 @@ services:
       - ./config:/app/config
     networks:
       # 双网络：bot 是唯一能同时触达业务网与沙盒网的组件。
-      # gw_priority 保证默认路由（Telegram 出站）确定性走业务网
-      tg-guard-network:
-        gw_priority: 1
-      sandbox-network:
+      # ⚠️ tg-guard-network 必须列在首位：默认路由（Telegram 出站）走首个
+      # 连接的网络。不用 gw_priority（较新 compose 才支持，服务器旧版
+      # docker-compose 会因未知属性直接校验失败）
+      - tg-guard-network
+      - sandbox-network
 
   # 沙盒执行服务：运行管理员自定义验证脚本，与 bot 主进程完全隔离
   # （独立镜像、独立 internal 网络、只读 rootfs、无能力、非 root）。
