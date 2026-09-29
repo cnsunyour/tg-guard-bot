@@ -25,7 +25,7 @@ from src.core.cache import PermissionCache
 from src.core.config import settings
 from src.core.i18n import BoundLocalizer, get_resolver, get_translator
 from src.core.redis import RedisKeys, get_redis
-from src.core.utils import check_admin_permission, check_admin_permission_by_id
+from src.core.utils import auto_delete_message, check_admin_permission, check_admin_permission_by_id
 from src.repositories.audit_repo import AuditRepository
 from src.repositories.custom_verification_repo import CustomVerificationRepository
 from src.repositories.group_repo import GroupRepository
@@ -136,7 +136,9 @@ async def _handle_upload_request(
         str(chat_id),
         ex=_UPLOAD_WAIT_SECONDS,
     )
-    await message.answer(localizer.t("customverify.upload.prompt.message"))
+    # 群内引导是一次性指引（私聊已主动推送续传入口），30s 自动删除避免扰群
+    prompt = await message.answer(localizer.t("customverify.upload.prompt.message"))
+    await auto_delete_message(prompt, delay=30)
 
     # 主动私聊推送：管理员不必自己找 Bot 开启会话；文案与群内提示分开
     # （私聊里「发到这里」比「去私聊」更直观）。未启动 Bot 时发不出——
