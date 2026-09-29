@@ -133,3 +133,60 @@ def verify(ctx):
 > **常见错误**：不要把 decision（pass/retry）当作按钮 value——value 的职责是
 > 「标识用户选了哪个选项」，判定恒由 `verify` 的返回值表达。dry-run 会对
 > 每个按钮选项逐一试跑，所有选项都返回 retry 的脚本（无解题）会被拒绝入库。
+
+## 完整示例：问答题（JavaScript）
+
+与上面的 Python 示例同构（随机抽题 + 按钮乱序 + 正确答案存 state），供两种语言对照：
+
+```javascript
+// 每题：{ text, options: [{ text, value, correct }] }
+// ⚠️ value 是回传给 verify 的语义 token（仅字母/数字/下划线/连字符），
+//    不是判定结果——判定恒由 verify 的返回值表达
+const QUESTION_BANK = [
+  {
+    text: "这个群主要讨论什么？",
+    options: [
+      { text: "技术交流", value: "tech", correct: true },
+      { text: "发广告", value: "ad", correct: false },
+    ],
+  },
+  {
+    text: "群规允许刷屏吗？",
+    options: [
+      { text: "不允许", value: "no-spam", correct: true },
+      { text: "允许", value: "spam", correct: false },
+    ],
+  },
+];
+
+function ask(ctx) {
+  const question = QUESTION_BANK[Math.floor(Math.random() * QUESTION_BANK.length)];
+  const options = [...question.options];
+  // Fisher–Yates 乱序：按钮顺序随机化（JS 无内置 shuffle）
+  for (let i = options.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [options[i], options[j]] = [options[j], options[i]];
+  }
+  return {
+    text: question.text,
+    options: options.map(({ text, value }) => ({ text, value })),
+    state: { correct: options.find((option) => option.correct).value },
+  };
+}
+
+function verify(ctx) {
+  // ctx.input = 用户点击按钮的 value（语义 token）
+  return { decision: ctx.input === ctx.state.correct ? "pass" : "retry" };
+}
+
+module.exports = { ask, verify };
+```
+
+> **JS 特有注意**：
+> - 结果里的数字必须是有限数——返回值含 `NaN` / `Infinity` 或 `BigInt` 时，
+>   沙盒会拒绝序列化并按执行失败（crash）处理。文本判定优先用字符串比较；
+>   确需数字解析时注意 `Number("abc")` 得 `NaN`、与任何值比较恒为 false
+>   （一律判 retry）
+> - 沙盒无 `require` / `import`，示例中的数组展开、解构、`Math.random` 都是
+>   语言内置能力，静态审查全部放行
+> - `console.log` 可用于调试，输出进容器日志（stderr），不影响协议结果
