@@ -46,6 +46,12 @@ def _sandbox_ready() -> tuple[bool, bool]:
     return settings.custom_verification_enabled, get_sandbox_client().configured
 
 
+async def _answer_ephemeral(message: Message, text: str) -> None:
+    """群内提示统一 30s 自动删除（管理操作提示不留群；失败静默）。"""
+    sent = await message.answer(text)
+    await auto_delete_message(sent, delay=30)
+
+
 async def _audit(chat_id: int, operator_id: int, action: str, details: dict) -> None:
     # 审计失败不影响主业务流（项目纪律：contextlib.suppress 包裹）
     with contextlib.suppress(Exception):
@@ -86,12 +92,12 @@ async def cmd_customverify(
 
     # message 版权限检查：可识别匿名管理员（sender_chat 场景 by_id 会误拒）
     if not await check_admin_permission(message, bot):
-        await message.answer(localizer.t("customverify.permission_denied.message"))
+        await _answer_ephemeral(message, localizer.t("customverify.permission_denied.message"))
         return
 
     enabled, sandbox_ready = _sandbox_ready()
     if not enabled:
-        await message.answer(localizer.t("customverify.globally_disabled.message"))
+        await _answer_ephemeral(message, localizer.t("customverify.globally_disabled.message"))
         return
 
     args = (command.args or "").split()
@@ -100,7 +106,7 @@ async def cmd_customverify(
     # 子命令统一入口（upload 之外的读写操作都要求沙盒已配置）
     if subcommand == "upload":
         if not sandbox_ready:
-            await message.answer(localizer.t("customverify.sandbox_missing.message"))
+            await _answer_ephemeral(message, localizer.t("customverify.sandbox_missing.message"))
             return
         await _handle_upload_request(message, bot, localizer, chat_id, operator_id)
         return
@@ -113,7 +119,7 @@ async def cmd_customverify(
         return
     if subcommand in ("enable", "rollback"):
         if not sandbox_ready:
-            await message.answer(localizer.t("customverify.sandbox_missing.message"))
+            await _answer_ephemeral(message, localizer.t("customverify.sandbox_missing.message"))
             return
         await _handle_activate(
             message, localizer, chat_id, operator_id, args, rollback=(subcommand == "rollback")
@@ -159,7 +165,7 @@ async def _handle_upload_request(
 async def _show_status(message: Message, localizer: BoundLocalizer, chat_id: int) -> None:
     group = await GroupRepository.get_or_create(chat_id)
     if group is None:
-        await message.answer(localizer.t("customverify.disable.nothing.message"))
+        await _answer_ephemeral(message, localizer.t("customverify.disable.nothing.message"))
         return
 
     lines: list[str] = []
@@ -183,7 +189,7 @@ async def _show_status(message: Message, localizer: BoundLocalizer, chat_id: int
         lines.append(localizer.t("customverify.status.enabled.header", status=status))
         lines.append(localizer.t("customverify.status.none.line"))
     lines.append(localizer.t("customverify.status.usage.line"))
-    await message.answer("\n".join(lines))
+    await _answer_ephemeral(message, "\n".join(lines))
 
 
 async def _show_history(message: Message, localizer: BoundLocalizer, chat_id: int) -> None:
@@ -191,7 +197,7 @@ async def _show_history(message: Message, localizer: BoundLocalizer, chat_id: in
         chat_id, limit=_HISTORY_LIMIT
     )
     if not revisions:
-        await message.answer(localizer.t("customverify.history.empty.message"))
+        await _answer_ephemeral(message, localizer.t("customverify.history.empty.message"))
         return
     lines = [localizer.t("customverify.history.header")]
     for revision in revisions:
@@ -204,7 +210,7 @@ async def _show_history(message: Message, localizer: BoundLocalizer, chat_id: in
                 date=revision.created_at.strftime("%Y-%m-%d") if revision.created_at else "-",
             )
         )
-    await message.answer("\n".join(lines))
+    await _answer_ephemeral(message, "\n".join(lines))
 
 
 async def _handle_activate(
@@ -218,7 +224,7 @@ async def _handle_activate(
 ) -> None:
     """enable/rollback 共用：校验数字参数 → service 激活 → 反馈 + 审计。"""
     if len(args) < 2 or not args[1].isdigit():
-        await message.answer(localizer.t("customverify.status.usage.line"))
+        await _answer_ephemeral(message, localizer.t("customverify.status.usage.line"))
         return
     revision_id = int(args[1])
     service = get_custom_verification_service()
@@ -233,7 +239,7 @@ async def _handle_activate(
         )
     else:
         key = "customverify.enable.failed.message"
-    await message.answer(localizer.t(key, revision_id=revision_id))
+    await _answer_ephemeral(message, localizer.t(key, revision_id=revision_id))
 
 
 async def _handle_disable(
@@ -243,18 +249,18 @@ async def _handle_disable(
     group = await GroupRepository.get_or_create(chat_id)
     current = group.active_revision_id if group else None
     if group is None or current is None or not group.custom_verify_enabled:
-        await message.answer(localizer.t("customverify.disable.nothing.message"))
+        await _answer_ephemeral(message, localizer.t("customverify.disable.nothing.message"))
         return
     ok = await service.disable(chat_id)
     await _audit(
         chat_id, operator_id, "custom_verify_revision_disable", {"revision_id": current, "ok": ok}
     )
     if ok:
-        await message.answer(
-            localizer.t("customverify.disable.success.message", revision_id=current)
+        await _answer_ephemeral(
+            message, localizer.t("customverify.disable.success.message", revision_id=current)
         )
     else:
-        await message.answer(localizer.t("customverify.disable.nothing.message"))
+        await _answer_ephemeral(message, localizer.t("customverify.disable.nothing.message"))
 
 
 @router.message(F.chat.type == "private", F.document)
