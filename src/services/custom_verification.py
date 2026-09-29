@@ -193,21 +193,33 @@ class CustomVerificationService:
         if not isinstance(ask_result, AskResult) or not ask_result.text.strip():
             return {"passed": False, "errors": ["ask 未返回有效题面"]}
 
-        # 用第一个按钮 value（无按钮则固定样本文本）回灌 verify，只要求协议合法
+        # verify 试跑只要求协议合法 + 按钮模式至少一个选项可通过：
+        # - 「无解题」检测（所有选项都 retry = 必挂新人）是 dry-run 的核心目标之一；
+        #   单次试跑只能证明协议合法，拦不住 value/decision 键位写反的脚本
+        # - 文本模式无法枚举正确答案，只能验协议合法性（判对与否靠管理员 test 自查）
         if ask_result.options:
-            answer: str = ask_result.options[0].value
+            decisions: list[str] = []
+            for option in ask_result.options:
+                verify_ctx = dict(ask_ctx, state=ask_result.state, input=option.value)
+                try:
+                    verify_result = await self._get_sandbox().execute_verify(
+                        sandbox_language, source, verify_ctx, timeout_ms=2000
+                    )
+                except (SandboxUnavailableError, SandboxProtocolError) as exc:
+                    return {"passed": False, "errors": [f"verify 试跑失败: {exc}"]}
+                decisions.append(verify_result.decision)
+            if not any(decision == "pass" for decision in decisions):
+                errors.append("所有按钮选项的 verify 判定均为 retry（无解题：任何答案都无法通过）")
         else:
-            answer = "dry-run 样本答案"
-        verify_ctx = dict(ask_ctx, state=ask_result.state, input=answer)
-        try:
-            verify_result = await self._get_sandbox().execute_verify(
-                sandbox_language, source, verify_ctx, timeout_ms=2000
-            )
-        except (SandboxUnavailableError, SandboxProtocolError) as exc:
-            return {"passed": False, "errors": [f"verify 试跑失败: {exc}"]}
+            verify_ctx = dict(ask_ctx, state=ask_result.state, input="dry-run 样本答案")
+            try:
+                verify_result = await self._get_sandbox().execute_verify(
+                    sandbox_language, source, verify_ctx, timeout_ms=2000
+                )
+            except (SandboxUnavailableError, SandboxProtocolError) as exc:
+                return {"passed": False, "errors": [f"verify 试跑失败: {exc}"]}
+            _ = verify_result  # 文本模式：协议合法即通过（合法值由类型层保证）
 
-        if verify_result.decision not in ("pass", "retry"):  # pragma: no cover - 类型层已约束
-            errors.append(f"verify 返回非法判定: {verify_result.decision}")
         return {
             "passed": not errors,
             "errors": errors,

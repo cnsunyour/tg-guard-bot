@@ -7,8 +7,11 @@ import pytest
 from aiogram.types import Message
 from pydantic import ValidationError
 
+from sandbox.protocol import AskResult, OptionButton
 from src.bot.handlers import custom_verify as handler
 from src.core.config import settings
+from src.services.custom_verification import get_custom_verification_service
+from src.services.sandbox_client import VerifyResult
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -67,7 +70,9 @@ class TestGlobalSwitch:
 
 class TestUploadFlow:
     async def test_upload_writes_waiting_key(self, admin_user, feature_on, monkeypatch):
-        redis = SimpleNamespace(set=AsyncMock(return_value=True), get=AsyncMock(return_value=None))
+        redis = SimpleNamespace(
+            set=AsyncMock(return_value=True), getdel=AsyncMock(return_value=None)
+        )
         monkeypatch.setattr(handler, "get_redis", lambda: redis)
         monkeypatch.setattr(handler, "check_admin_permission_by_id", AsyncMock(return_value=True))
         message = _message()
@@ -79,7 +84,9 @@ class TestUploadFlow:
         args = redis.set.await_args
         assert args.args[0] == f"custom_verify_upload:{ADMIN}"
         assert args.args[1] == str(CHAT)
-        message.answer.assert_awaited_once()
+        # 群内提示 + 主动私聊推送（各一条）
+        assert message.answer.await_count == 1
+        assert message.answer.await_args.args[0] == "customverify.upload.prompt.message"
 
     async def test_private_document_without_waiting_key_ignored(
         self, admin_user, feature_on, monkeypatch
@@ -96,7 +103,7 @@ class TestUploadFlow:
 
 
 class TestJevAIReviewGuard:
-    """Jev 协议不支持脚本 AI 审查：启动期拦截 + 运行时防御双保险。"""
+    """Jev 协议不支持脚本 AI 审查：经 Vision 通道执行，双保险（启动期 + 运行时）。"""
 
     def _base_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BOT_TOKEN", "123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
@@ -210,3 +217,46 @@ class TestJevAIReviewGuard:
                 result_schema=CODE_REVIEW_RESULT_SCHEMA,
             )
         detector.primary._call_api.assert_not_awaited()
+
+
+class TestDryRunUnsolvableDetection:
+    """dry-run 的无解题检测：按钮模式逐选项试跑，全部 retry 拒绝入库。"""
+
+    def _service_with_sandbox(self, monkeypatch: pytest.MonkeyPatch, verify_by_input):
+        """构造 mock 沙盒并种入 service 单例（返回 service 供断言）。"""
+        ask_result = AskResult(
+            text="这个群主要讨论什么？",
+            options=[
+                OptionButton(text="技术交流", value="tech"),
+                OptionButton(text="发广告", value="ad"),
+            ],
+            state={"correct": "tech"},
+        )
+        client = SimpleNamespace(
+            execute_ask=AsyncMock(return_value=ask_result),
+            execute_verify=AsyncMock(
+                side_effect=lambda _lang, _src, ctx, timeout_ms=2000: VerifyResult(
+                    decision=verify_by_input(ctx["input"])
+                )
+            ),
+        )
+        # 直接种单例的 _sandbox：custom_verification.py 顶部已绑定
+        # get_sandbox_client 名字，patch 模块属性对已建单例无效
+        service = get_custom_verification_service()
+        monkeypatch.setattr(service, "_sandbox", client)
+        return service
+
+    async def test_all_options_retry_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        """value/decision 键位写反的脚本：所有选项都 retry → dry-run 拒绝。"""
+        service = self._service_with_sandbox(monkeypatch, lambda _input: "retry")
+        dry_run = await service._dry_run("python", "SRC")
+        assert dry_run["passed"] is False
+        assert any("无解题" in str(e) for e in dry_run["errors"])
+
+    async def test_solvable_script_passes(self, monkeypatch: pytest.MonkeyPatch):
+        """正常脚本：至少一个选项能 pass → dry-run 通过。"""
+        service = self._service_with_sandbox(
+            monkeypatch, lambda inp: "pass" if inp == "tech" else "retry"
+        )
+        dry_run = await service._dry_run("python", "SRC")
+        assert dry_run["passed"] is True

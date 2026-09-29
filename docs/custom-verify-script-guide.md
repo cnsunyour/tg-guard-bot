@@ -98,24 +98,38 @@ Vision 端点的既有数据流一致，但数据类别不同，部署时应知�
 ```python
 import random
 
+# 每题：(题面, [(按钮文本, 语义token, 是否正确答案), ...])
+# ⚠️ value 是回传给 verify 的语义 token（仅字母/数字/下划线/连字符），
+#    不是判定结果——判定恒由 verify 的返回值表达
 _QUESTION_BANK = [
-    ("这个群主要讨论什么？", {"技术交流": "pass", "发广告": "retry"}),
-    ("群规允许刷屏吗？", {"不允许": "pass", "允许": "retry"}),
+    (
+        "这个群主要讨论什么？",
+        [("技术交流", "tech", True), ("发广告", "ad", False)],
+    ),
+    (
+        "群规允许刷屏吗？",
+        [("不允许", "no-spam", True), ("允许", "spam", False)],
+    ),
 ]
 
 
 def ask(ctx):
-    question, mapping = random.choice(_QUESTION_BANK)
-    options = list(mapping.items())
-    random.shuffle(options)
+    question, options = random.choice(_QUESTION_BANK)
+    shuffled = list(options)
+    random.shuffle(shuffled)
+    correct = next(value for _text, value, ok in shuffled if ok)
     return {
         "text": question,
-        "options": [{"text": text, "value": value} for text, value in options],
-        "state": {"mapping": mapping},
+        "options": [{"text": text, "value": value} for text, value, _ok in shuffled],
+        "state": {"correct": correct},
     }
 
 
 def verify(ctx):
-    decision = ctx["state"]["mapping"].get(ctx["input"], "retry")
-    return {"decision": decision}
+    # ctx["input"] = 用户点击按钮的 value（语义 token）
+    return {"decision": "pass" if ctx["input"] == ctx["state"]["correct"] else "retry"}
 ```
+
+> **常见错误**：不要把 decision（pass/retry）当作按钮 value——value 的职责是
+> 「标识用户选了哪个选项」，判定恒由 `verify` 的返回值表达。dry-run 会对
+> 每个按钮选项逐一试跑，所有选项都返回 retry 的脚本（无解题）会被拒绝入库。
