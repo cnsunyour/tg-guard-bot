@@ -312,4 +312,4 @@ status:
 	docker compose ps
 	@echo ""
 	@echo "=== Docker 资源使用 ==="
-	docker stats --no-stream tg-guard-bot tg-guard-postgres tg-guard-redis || true
+	docker stats --no-stream tg-guard-bot tg-guard-sandbox tg-guard-postgres tg-guard-redis || true
