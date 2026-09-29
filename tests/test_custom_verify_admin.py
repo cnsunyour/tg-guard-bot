@@ -73,7 +73,7 @@ class TestUploadFlow:
         message = _message()
         localizer = SimpleNamespace(t=lambda key, **kw: key)
 
-        await handler._handle_upload_request(message, localizer, CHAT, ADMIN)
+        await handler._handle_upload_request(message, AsyncMock(), localizer, CHAT, ADMIN)
 
         redis.set.assert_awaited_once()
         args = redis.set.await_args

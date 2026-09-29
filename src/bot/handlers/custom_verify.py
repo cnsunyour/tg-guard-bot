@@ -16,6 +16,7 @@ import contextlib
 import io
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 from loguru import logger
@@ -101,7 +102,7 @@ async def cmd_customverify(
         if not sandbox_ready:
             await message.answer(localizer.t("customverify.sandbox_missing.message"))
             return
-        await _handle_upload_request(message, localizer, chat_id, operator_id)
+        await _handle_upload_request(message, bot, localizer, chat_id, operator_id)
         return
 
     if subcommand in ("status", ""):
@@ -126,9 +127,9 @@ async def cmd_customverify(
 
 
 async def _handle_upload_request(
-    message: Message, localizer: BoundLocalizer, chat_id: int, operator_id: int
+    message: Message, bot: Bot, localizer: BoundLocalizer, chat_id: int, operator_id: int
 ) -> None:
-    """进入等待上传状态并引导管理员去私聊发文件。"""
+    """进入等待上传状态，群内提示 + 主动私聊推送续传入口。"""
     redis = get_redis()
     await redis.set(
         RedisKeys.custom_verify_upload(operator_id),
@@ -136,6 +137,21 @@ async def _handle_upload_request(
         ex=_UPLOAD_WAIT_SECONDS,
     )
     await message.answer(localizer.t("customverify.upload.prompt.message"))
+
+    # 主动私聊推送：管理员不必自己找 Bot 开启会话；文案与群内提示分开
+    # （私聊里「发到这里」比「去私聊」更直观）。未启动 Bot 时发不出——
+    # 群内提示已含指引，静默降级即可
+    try:
+        private_locale = await get_resolver().for_user(operator_id)
+        private_localizer = get_translator().for_locale(private_locale)
+        await bot.send_message(
+            operator_id,
+            private_localizer.t("customverify.upload.private_prompt.message"),
+        )
+    except TelegramForbiddenError:
+        logger.info(f"上传引导私聊推送失败（管理员未启动 Bot）[管理员:{operator_id}]")
+    except Exception as exc:
+        logger.warning(f"上传引导私聊推送失败 [管理员:{operator_id}]: {exc}")
 
 
 async def _show_status(message: Message, localizer: BoundLocalizer, chat_id: int) -> None:
