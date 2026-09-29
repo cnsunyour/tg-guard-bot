@@ -39,7 +39,7 @@ help:
 	@echo "  make security-report - 生成安全扫描报告到 reports/"
 	@echo ""
 	@echo "🐳 开发环境:"
-	@echo "  make dev-up          - 启动开发环境（自动监控文件变化）"
+	@echo "  make dev-up          - 启动开发环境（修改代码后需 make dev-restart 生效）"
 	@echo "  make dev-down        - 停止开发环境"
 	@echo "  make dev-logs        - 查看开发环境日志"
 	@echo "  make dev-restart     - 重启开发环境"

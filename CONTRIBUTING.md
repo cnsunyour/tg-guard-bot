@@ -68,42 +68,30 @@ pip install -e ".[dev]"
 pip install -e ".[all]"
 ```
 
-### 🔥 热更新开发
+### 🛠 开发环境
 
-开发环境默认启用热更新功能，修改代码后会自动重启 bot，无需手动重启。
+开发环境通过 Docker Compose 启动（`docker-compose.override.yml` 自动生效）。修改代码后需手动重启 bot 容器才能生效。
 
-**启动开发环境**：
+**常用命令**：
 
 ```bash
-# 启动（自动启用热更新）
+# 启动
 make dev-up
 
-# 查看日志（实时监控）
-make dev-logs
-```
-
-**工作原理**：
-
-1. ✅ `docker-compose.override.yml` 自动挂载 `src/` 目录
-2. ✅ `watchfiles` 监控 Python 文件变化
-3. ✅ 检测到变化后自动重启 bot 进程
-4. ✅ 数据库和 Redis 端口映射到本地（调试方便）
-
-**热更新范围**：
-
-- ✅ 监控目录：`src/`（所有 Python 文件）
-- ✅ 自动重启：修改后 1-2 秒生效
-- ❌ 不监控：`data/`, `logs/`, `tests/`
-
-**手动重启**（如需要）：
-
-```bash
-# 重启 bot 容器
+# 修改代码后重启 bot 使改动生效
 make dev-restart
+
+# 查看日志（实时输出）
+make dev-logs
 
 # 完全重启开发环境
 make dev-down && make dev-up
 ```
+
+**开发环境特性**：
+
+1. ✅ `docker-compose.override.yml` 自动挂载 `src/` 等源码目录
+2. ✅ 数据库和 Redis 端口映射到本地（调试方便）
 
 **本地调试连接**：
 
