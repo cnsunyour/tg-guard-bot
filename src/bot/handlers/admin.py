@@ -259,6 +259,7 @@ _HELP_COMMANDS = frozenset(
         "ban",
         "cleanup",
         "clearwarnings",
+        "customverify",
         "curfew",
         "delafter",
         "delbefore",

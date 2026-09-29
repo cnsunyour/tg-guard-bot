@@ -920,5 +920,6 @@
   "customverify.review.pending.label": "未審查",
   "customverify.review.passed.label": "審查通過",
   "customverify.review.failed.label": "審查未過",
-  "customverify.upload.download_failed.message": "❌ 檔案下載失敗，請稍後重試"
+  "customverify.upload.download_failed.message": "❌ 檔案下載失敗，請稍後重試",
+  "admin.help.detail.customverify.message": "🧩 <b>/customverify - 自訂驗證腳本</b>\n\n<b>功能說明：</b>\n用自己編寫的腳本（Python / JavaScript）定製入群驗證題：腳本決定「出什麼題」和「怎麼判答案」，在獨立沙盒容器中執行，無法接觸群數據與伺服器。啟用後新成員入群將回答你的腳本題，替代內建驗證方式。\n\n<b>前提條件：</b>\n• 伺服器已部署沙盒服務（docker-compose 的 sandbox 容器）\n• .env 已設定 CUSTOM_VERIFICATION_ENABLED=true 與 SANDBOX_API_KEY\n• 已設定 AI 偵測（AI_SPAM_ENABLED=true）——腳本入庫需經 AI 程式碼審查\n\n<b>使用方法：</b>\n• /customverify - 查看目前狀態\n• /customverify upload - 開始上傳腳本（之後到私聊傳送 .py / .js 檔案）\n• /customverify enable &lt;編號&gt; - 啟用指定版本\n• /customverify disable - 停用（回落群組原驗證方式）\n• /customverify rollback &lt;編號&gt; - 回滾到歷史版本\n• /customverify history - 查看版本記錄\n\n<b>腳本要點：</b>\n• 定義兩個函式：ask(ctx) 出題、verify(ctx) 判答案\n• ask 回傳題面文字 + 可選按鈕 + 私有答案狀態（不對用戶展示）\n• verify 對 ctx.input 判定後回傳 decision：\"pass\"（通過）或 \"retry\"（答錯）\n• 禁止檔案 / 網路 / 程序操作，靜態審查會拒絕並指出行號\n• 完整契約與可執行範例見專案 docs/custom-verify-script-guide.md\n\n<b>行為須知：</b>\n• 上傳即三重審查：靜態檢查 → AI 程式碼審查 → 沙盒試跑，任一不過不入庫；AI 審查不可用時不降級通過\n• 答錯處罰與內建題型一致：答錯一次封禁 1 小時\n• 沙盒故障不計答錯：成員會收到重試提示\n• 上傳新版本不影響在途驗證；enable 只對新入群生效\n• 腳本故障自動回落到群組原驗證方式，不會把新人卡在驗證外\n\n<b>常見問題：</b>\n• enable 失敗：版本號不存在 / 該版本審查未通過 / 已被其他管理員搶先切換\n• 上傳被拒：回饋含違規項與行號，修正後重新 upload 即可\n• 想臨時換回內建驗證：disable（版本保留，之後 enable 原編號即可恢復）\n\n<b>權限要求：</b>群組管理員（腳本檔案在私聊傳送）"
 }
