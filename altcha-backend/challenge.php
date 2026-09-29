@@ -10,9 +10,10 @@
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/config.php';
 
+use AltchaOrg\Altcha\Algorithm\Pbkdf2;
 use AltchaOrg\Altcha\Altcha;
-use AltchaOrg\Altcha\ChallengeOptions;
-use AltchaOrg\Altcha\Hasher\Algorithm;
+use AltchaOrg\Altcha\CreateChallengeOptions;
+use AltchaOrg\Altcha\HmacAlgorithm;
 
 // 设置响应头
 header('Content-Type: application/json; charset=utf-8');
@@ -34,25 +35,29 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
 }
 
 try {
-    // 创建 ALTCHA 实例
-    $altcha = new Altcha(ALTCHA_HMAC_KEY);
+    // 挑战成本：兼容未更新 config.php 的存量部署（缺省 5000，与 config.php.example 一致）
+    $powCost = defined('POW_COST') ? POW_COST : 5000;
 
-    // 创建挑战选项
-    $options = new ChallengeOptions(
-        algorithm: Algorithm::SHA256,
-        maxNumber: POW_MAX_NUMBER,
-        expires: (new \DateTimeImmutable())->setTimestamp(time() + POW_EXPIRES)
+    // 创建 ALTCHA 实例（PoW v2，PBKDF2 概率模式：客户端解题贵、服务端一次重派生即验证）
+    $altcha = new Altcha(hmacSignatureSecret: ALTCHA_HMAC_KEY);
+    $pbkdf2 = new Pbkdf2(HmacAlgorithm::SHA256);
+
+    // 创建挑战选项（expiresAt 进入签名覆盖范围，客户端不可篡改）
+    $options = new CreateChallengeOptions(
+        algorithm: $pbkdf2,
+        cost: $powCost,
+        expiresAt: time() + POW_EXPIRES
     );
 
     // 生成挑战
     $challenge = $altcha->createChallenge($options);
 
-    // 返回挑战
-    echo json_encode($challenge);
+    // 返回挑战（toJson 输出 {"parameters": {...}, "signature": "..."}，widget v3 直接消费）
+    echo $challenge->toJson();
 
     // 调试日志
     if (defined('DEBUG_MODE') && DEBUG_MODE) {
-        error_log('[ALTCHA] 生成挑战: ' . json_encode($challenge));
+        error_log('[ALTCHA] 生成挑战: ' . $challenge->toJson());
     }
 
 } catch (Exception $e) {

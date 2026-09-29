@@ -23,7 +23,10 @@
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/config.php';
 
+use AltchaOrg\Altcha\Algorithm\Pbkdf2;
 use AltchaOrg\Altcha\Altcha;
+use AltchaOrg\Altcha\HmacAlgorithm;
+use AltchaOrg\Altcha\VerifySolutionOptions;
 
 // 设置响应头
 header('Content-Type: application/json; charset=utf-8');
@@ -60,6 +63,11 @@ try {
         }
     }
 
+    // payload 必须是 base64 字符串（widget v3 恒发字符串；非字符串会让库抛 TypeError 绕过 catch (Exception)）
+    if (!is_string($input['payload'])) {
+        throw new Exception('Invalid payload type');
+    }
+
     // 调试日志
     if (defined('DEBUG_MODE') && DEBUG_MODE) {
         error_log('[ALTCHA] 收到验证请求: ' . json_encode([
@@ -69,11 +77,16 @@ try {
         ]));
     }
 
-    // 创建 ALTCHA 实例并验证解答
-    $altcha = new Altcha(ALTCHA_HMAC_KEY);
-    $verified = $altcha->verifySolution($input['payload'], true);
+    // 创建 ALTCHA 实例并验证解答（PoW v2：先验挑战签名防伪造，再重派生密钥核对解答；
+    // 垃圾 payload 会抛 InvalidArgumentException，由下方 catch (Exception) 统一返回 400）
+    $altcha = new Altcha(hmacSignatureSecret: ALTCHA_HMAC_KEY);
+    $pbkdf2 = new Pbkdf2(HmacAlgorithm::SHA256);
+    $result = $altcha->verifySolution(new VerifySolutionOptions(
+        payload: $input['payload'],
+        algorithm: $pbkdf2,
+    ));
 
-    if (!$verified) {
+    if (!$result->verified || $result->expired) {
         echo json_encode([
             'success' => false,
             'error' => 'Invalid solution or challenge expired',

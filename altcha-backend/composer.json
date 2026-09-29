@@ -4,7 +4,7 @@
     "type": "project",
     "require": {
         "php": ">=8.2",
-        "altcha-org/altcha": "^1.0"
+        "altcha-org/altcha": "^2.1"
     },
     "config": {
         "optimize-autoloader": true

@@ -68,7 +68,7 @@ define('BOT_SIGNATURE_KEY', '<64字符hex密钥>');
 define('ALLOWED_ORIGIN', 'https://captcha.your-domain.pages.dev');
 
 // 挑战难度（可选调整）
-define('POW_MAX_NUMBER', 100000);  // 工作量
+define('POW_COST', 5000);          // PBKDF2 迭代次数（PoW v2）
 define('POW_EXPIRES', 300);        // 有效期（秒）
 ```
 
@@ -122,16 +122,19 @@ Serv00 自动处理，无需额外配置
 https://your-domain.serv00.net/altcha/challenge.php
 ```
 
-预期响应：
+预期响应（PoW v2：`{"parameters", "signature"}`，widget v3 直接消费）：
 ```json
 {
-  "success": true,
-  "challenge": {
-    "algorithm": "SHA-256",
-    "challenge": "...",
-    "salt": "...",
-    "signature": "..."
-  }
+  "parameters": {
+    "algorithm": "PBKDF2/SHA-256",
+    "cost": 5000,
+    "expiresAt": 1790000000,
+    "keyLength": 32,
+    "keyPrefix": "00",
+    "nonce": "975199091b3c1c2fa30b6f30d2b7ff60",
+    "salt": "194e3b14869d9badde99bd577f19f175"
+  },
+  "signature": "f676275efff6f06ff976cb0eb58800d9330aa407e249e726e36c44f2bb275647"
 }
 ```
 
@@ -149,6 +152,8 @@ curl -X POST https://your-domain.serv00.net/altcha/verify.php \
   "error": "Invalid solution or challenge expired"
 }
 ```
+
+（垃圾格式 payload 会由参数校验或异常兜底返回 `success: false` 与具体错误信息）
 
 ## 配置 Bot 端
 
@@ -172,18 +177,21 @@ CAPTCHA_SIGNATURE_KEY=<64字符hex密钥>
 
 ### GET /challenge.php
 
-生成 Proof-of-Work 挑战
+生成 Proof-of-Work 挑战（PoW v2）
 
 **响应**：
 ```json
 {
-  "success": true,
-  "challenge": {
-    "algorithm": "SHA-256",
-    "challenge": "abcd1234",
-    "salt": "xyz789",
-    "signature": "hmac..."
-  }
+  "parameters": {
+    "algorithm": "PBKDF2/SHA-256",
+    "cost": 5000,
+    "expiresAt": 1790000000,
+    "keyLength": 32,
+    "keyPrefix": "00",
+    "nonce": "abcd1234...",
+    "salt": "xyz789..."
+  },
+  "signature": "hmac..."
 }
 ```
 
@@ -305,10 +313,25 @@ composer dump-autoload --optimize --classmap-authoritative
 
 ### 3. 调整难度
 
-如果用户设备性能较差，降低 `POW_MAX_NUMBER`：
+如果用户设备性能较差，降低 `POW_COST`：
 ```php
-define('POW_MAX_NUMBER', 50000);  // 降低难度
+define('POW_COST', 2000);  // 降低 PBKDF2 迭代次数（默认 5000）
 ```
+
+## 从 v1 升级到 v2（PoW v2）
+
+上游 ALTCHA 于 2026-04 发布平台 v2（widget v3 + PHP lib v2 + PoW v2/KDF 机制），PHP v1 线已停止维护。本目录代码已升级到 v2，存量部署按以下步骤迁移：
+
+1. 上传更新后的 `composer.json`、`challenge.php`、`verify.php`、`config.php.example`
+2. 编辑 `config.php`：把 `POW_MAX_NUMBER` 一行替换为 `define('POW_COST', 5000);`（漏改不会报错，挑战成本回落默认 5000）
+3. 重新安装依赖（PHP lib v2 为破坏性升级；`composer.lock` 不入库，存量部署的旧 v1 锁文件必须一并删除，否则 `composer install` 仍按锁装回 v1）：
+   ```bash
+   rm -rf vendor composer.lock
+   composer install --no-dev --optimize-autoloader
+   ```
+4. `captcha-webapp/altcha.html` 随 Pages 部署自动更新（widget v3 属性契约已在页面内适配），无需手动操作
+5. Bot 端零改动：HMAC 签名契约（`chat_id:user_id:verify_token:timestamp`）不变
+6. 在 Telegram 内实测一次 ALTCHA 验证流程（旧挑战在升级窗口期的 5 分钟 TTL 内自然过期，无残留状态）
 
 ## 监控和维护
 

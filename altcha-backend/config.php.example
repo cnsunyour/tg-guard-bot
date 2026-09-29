@@ -23,9 +23,9 @@ define('BOT_SIGNATURE_KEY', '<请使用上面的命令生成64字符随机密钥
 define('ALLOWED_ORIGIN', 'https://captcha.your-domain.pages.dev');
 
 // 挑战难度设置
-// maxnumber: 工作证明的最大数字（越大越难）
+// cost: PBKDF2 迭代次数（PoW v2，越大客户端解题越慢，服务端验证同量级耗时；默认 5000）
 // expires: 挑战有效期（秒）
-define('POW_MAX_NUMBER', 100000);
+define('POW_COST', 5000);
 define('POW_EXPIRES', 300);
 
 // 调试模式（生产环境请设置为 false）

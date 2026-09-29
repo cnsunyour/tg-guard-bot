@@ -6,7 +6,9 @@
     <title data-i18n="title.altcha">ALTCHA 验证</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="/i18n.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/altcha/dist/altcha.min.js" type="module"></script>
+    <!-- ALTCHA widget v3（PoW v2）：锁定版本 + v3 入口的官方 min 产物（113KB，源版 253KB）；
+         注意 v3 的 min 路径是 dist/main/altcha.min.js，旧 dist/altcha.min.js 已不存在 -->
+    <script src="https://cdn.jsdelivr.net/npm/altcha@3.2.3/dist/main/altcha.min.js" type="module"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -68,9 +70,11 @@
 
                 const container = document.getElementById('captcha-widget');
                 const widget = document.createElement('altcha-widget');
-                widget.setAttribute('challengeurl', config.challenge_url);
-                widget.setAttribute('hidefooter', '');
-                widget.setAttribute('locale', providerLocales[getCurrentLocale()]);
+                // v3 属性契约：challenge（原 challengeurl）、language（原 locale）；
+                // hideFooter 不在 HTML 属性白名单，经 configuration JSON 配置
+                widget.setAttribute('challenge', config.challenge_url);
+                widget.setAttribute('configuration', JSON.stringify({ hideFooter: true }));
+                widget.setAttribute('language', providerLocales[getCurrentLocale()]);
                 container.appendChild(widget);
 
                 widget.addEventListener('statechange', async (event) => {
