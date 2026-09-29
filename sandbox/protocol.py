@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -44,6 +44,24 @@ MIN_TIMEOUT_MS = 100
 MAX_TIMEOUT_MS = 5000
 # 脚本结果 JSON 的最大嵌套深度（防恶意深嵌套放大下游递归开销）
 MAX_JSON_DEPTH = 8
+
+# 执行失败详情的协议上限（字符）。runner 侧 stderr 采集上限（16KB）可以更大，
+# 但协议出口必须截断到此上限——否则 pydantic 校验异常会让 /execute 冒泡为 500
+MAX_DETAIL_CHARS = 4096
+
+# 执行失败的机器可读分类（ExecuteResponse.error 的合法值）
+ExecutionError = Literal[
+    "timeout",
+    "memory",
+    "crash",
+    "bad_output",
+    "busy",
+    "bad_input",
+    "unsupported",
+]
+
+# 合法失败分类集合（服务端出口归一化用）；由 Literal 派生，保持单一来源
+EXECUTION_ERROR_VALUES: frozenset[str] = frozenset(get_args(ExecutionError))
 
 
 def validate_json_value(value: Any, *, max_depth: int = MAX_JSON_DEPTH) -> None:
@@ -211,11 +229,8 @@ class ExecuteResponse(BaseModel):
 
     ok: bool
     result: AskResult | VerifyResult | None = None
-    error: (
-        Literal["timeout", "memory", "crash", "bad_output", "busy", "bad_input", "unsupported"]
-        | None
-    ) = None
-    detail: str = Field(default="", max_length=4096)
+    error: ExecutionError | None = None
+    detail: str = Field(default="", max_length=MAX_DETAIL_CHARS)
 
     @field_validator("detail")
     @classmethod

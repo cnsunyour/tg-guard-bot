@@ -77,7 +77,6 @@ from src.services.verification_hint import (
 from src.services.verification_recovery import (
     VerificationClearToken,
     claim_timeout,
-    commit_recovery,
     new_revision_id,
     new_session_id,
     parse_deadline_value,
@@ -3187,11 +3186,16 @@ async def _recover_verification_challenge(
             prepared = await verification_service.prepare_challenge(
                 challenge_type, chat_id, user_id, locale=private_locale
             )
-        committed = await commit_recovery(
-            reservation,
-            state_value=prepared.state_value,
-            auxiliary_state=prepared.auxiliary_state,
-            flow=flow,
+        # 统一经 commit_challenge 提交：脚本题的 script_state 键只在它内部写入，
+        # 直接调 commit_recovery 会绕开该写入，恢复后旧负载与新主键 token 断链
+        committed = await verification_service.commit_challenge(
+            chat_id,
+            user_id,
+            prepared,
+            reservation.session_id,
+            reservation.deadline_ms,
+            flow,
+            reservation=reservation,
         )
         if not committed:
             # 保留 undelivered 让初始 timeout 兜底（preserve=False 会删 main/deadline，导致

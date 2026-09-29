@@ -68,11 +68,12 @@ def _patch_recovery(
     """mock verification_recovery 函数 + VerificationService + send_verification_message。"""
     mocker.patch.object(handler, "new_revision_id", return_value="rev-1")
     mocker.patch.object(handler, "reserve_recovery", new=AsyncMock(return_value=reserve_return))
-    mocker.patch.object(handler, "commit_recovery", new=AsyncMock(return_value=True))
     mocker.patch.object(handler, "promote_recovery", new=AsyncMock(return_value=True))
     mocker.patch.object(handler, "release_recovery", new=AsyncMock(return_value=True))
 
     service = AsyncMock()
+    # 恢复提交统一走 commit_challenge（script_state 写入在其内部，绕开即断链）
+    service.commit_challenge = AsyncMock(return_value=True)
     service.prepare_challenge.return_value = MagicMock(state_value="math:4", auxiliary_state=None)
     mocker.patch.object(handler, "VerificationService", return_value=service)
 
@@ -135,6 +136,56 @@ async def test_join_member_undelivered_recovers(mocker) -> None:
     handler.reserve_recovery.assert_awaited_once_with(CHAT_ID, USER_ID, "rev-1")
     service.prepare_challenge.assert_awaited_once_with("math", CHAT_ID, USER_ID, locale="zh-Hans")
     handler.promote_recovery.assert_awaited_once()
+    handler.send_verification_message.assert_awaited_once()
+
+
+async def test_script_recovery_commits_through_service(mocker) -> None:
+    """script 题 undelivered 恢复必须经 commit_challenge（script_state 写入在其内部）。
+
+    回归 F1：恢复路径曾直接调 commit_recovery，绕开 script_state 键写入，导致
+    重新出题后旧负载与新主键 token 断链、验证必 expired。
+    """
+    from src.core.redis import RedisKeys
+
+    message = _mock_message()
+    bot = _mock_bot(_mock_member("member"))
+    redis_map = {
+        RedisKeys.verification_recovery(CHAT_ID, USER_ID): "undelivered:session-a",
+        RedisKeys.verification_type(CHAT_ID, USER_ID): "join",
+        RedisKeys.verification(CHAT_ID, USER_ID): "script:oldtoken",
+    }
+    _patch_i18n(mocker, redis_map)
+    reservation = MagicMock(
+        chat_id=CHAT_ID,
+        user_id=USER_ID,
+        session_id="session-a",
+        deadline_ms=int(time.time() * 1000) + 120_000,
+        expected_state_value="script:oldtoken",
+    )
+    service = _patch_recovery(mocker, reserve_return=reservation)
+    group = MagicMock(verification_timeout=120)
+    prepared = MagicMock(
+        state_value="script:newtoken", auxiliary_state=None, script_state='{"revision_id":7}'
+    )
+    mocker.patch.object(handler.GroupRepository, "get", new=AsyncMock(return_value=group))
+    prepare_script = mocker.patch.object(
+        handler, "prepare_verification_challenge", new=AsyncMock(return_value=prepared)
+    )
+
+    await handler.handle_verification_start(message, bot, CHAT_ID, "join")
+
+    prepare_script.assert_awaited_once_with(
+        group, CHAT_ID, USER_ID, session_id="session-a", locale="zh-Hans"
+    )
+    service.commit_challenge.assert_awaited_once_with(
+        CHAT_ID,
+        USER_ID,
+        prepared,
+        "session-a",
+        reservation.deadline_ms,
+        "join",
+        reservation=reservation,
+    )
     handler.send_verification_message.assert_awaited_once()
 
 

@@ -2,6 +2,7 @@
 
 import json
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +16,10 @@ from src.services.verification import (
     ScriptVerifyUnavailable,
     VerificationService,
 )
+
+if TYPE_CHECKING:
+    from src.services.verification import PreparedChallenge
+    from src.services.verification_recovery import RecoveryReservation
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
@@ -282,6 +287,73 @@ class TestPrepareScriptChallenge:
         # session 纳入哈希：不同会话即使题目内容完全相同也必得不同 token
         assert token_a != VerificationService._script_state_token("s2", 7, {"a": 1}, ["x"])
         assert token_a != VerificationService._script_state_token("s1", 8, {"a": 1}, ["x"])
+
+
+class TestCommitChallengeScriptState:
+    """commit_challenge 提交成功后必须写脚本状态键（恢复链路依赖此行为，F1 回归）。"""
+
+    def _env(self, monkeypatch: pytest.MonkeyPatch, *, committed: bool, script_state: str | None):
+        # 只覆盖 commit_challenge 实际访问的字段；cast 满足静态类型收窄
+        reservation = cast(
+            "RecoveryReservation",
+            SimpleNamespace(chat_id=CHAT, user_id=USER, session_id=SESSION, deadline_ms=2000),
+        )
+        commit_recovery = AsyncMock(return_value=committed)
+        redis = SimpleNamespace(set=AsyncMock())
+        monkeypatch.setattr(service, "commit_recovery", commit_recovery)
+        monkeypatch.setattr(service, "get_redis", lambda: redis)
+        prepared = cast(
+            "PreparedChallenge",
+            SimpleNamespace(
+                state_value="script:tok", auxiliary_state=None, script_state=script_state
+            ),
+        )
+        return redis, reservation, prepared
+
+    async def test_commit_writes_script_state_with_pxat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """脚本题提交成功 → script_state 键按 deadline+grace 的 PXAT 写入。"""
+        redis, reservation, prepared = self._env(
+            monkeypatch, committed=True, script_state='{"r":1}'
+        )
+
+        ok = await VerificationService.commit_challenge(
+            CHAT, USER, prepared, SESSION, 2000, "join", reservation=reservation
+        )
+
+        assert ok is True
+        redis.set.assert_awaited_once_with(
+            RedisKeys.verification_script_state(CHAT, USER),
+            '{"r":1}',
+            pxat=2000 + service.VERIFICATION_GRACE_MS,
+        )
+
+    async def test_commit_failure_skips_script_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """主键 CAS 失败 → 绝不写脚本状态键（避免为未提交的主键留残键）。"""
+        redis, reservation, prepared = self._env(
+            monkeypatch, committed=False, script_state='{"r":1}'
+        )
+
+        ok = await VerificationService.commit_challenge(
+            CHAT, USER, prepared, SESSION, 2000, "join", reservation=reservation
+        )
+
+        assert ok is False
+        redis.set.assert_not_awaited()
+
+    async def test_non_script_challenge_never_writes_script_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """非脚本题（script_state=None）→ 不写脚本状态键，行为与旧 commit_recovery 等价。"""
+        redis, reservation, prepared = self._env(monkeypatch, committed=True, script_state=None)
+
+        ok = await VerificationService.commit_challenge(
+            CHAT, USER, prepared, SESSION, 2000, "join", reservation=reservation
+        )
+
+        assert ok is True
+        redis.set.assert_not_awaited()
 
 
 class TestScriptStateKey:

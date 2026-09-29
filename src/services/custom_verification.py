@@ -12,7 +12,7 @@ dry-run 语义如实定位：可用性检查，非安全认证——能挡语法
 from __future__ import annotations
 
 import hashlib
-import uuid
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,11 +49,33 @@ AI_REVIEW_SYSTEM_PROMPT = (
 
 # dry-run 使用的假用户上下文（不触碰任何真实成员）
 _DRY_RUN_USER: dict[str, Any] = {
-    "id": 0,
+    "id": "0",
     "first_name": "DryRun",
     "username": None,
     "language_code": "zh-Hans",
 }
+
+
+def dry_run_context(now_ms: int) -> dict[str, Any]:
+    """构造 dry-run 用的脚本 ctx，字段形状与真实 ctx（VerificationService.
+    _build_script_ctx）完全一致：str ID、epoch 毫秒时间戳、三段冒号分隔的
+    challenge_id。
+
+    形状一致是审查有效性的前提：脚本可凭类型/单位差异区分 dry-run 与真实执行，
+    就能在试跑时出好题、生产时全员 retry，定向绕过无解题检测。测试锁定两处
+    形状同步（tests/test_custom_verify_admin.py）。
+    """
+    return {
+        "api_version": 1,
+        "challenge_id": "0:0:0",
+        "group_id": "0",
+        "user": dict(_DRY_RUN_USER),
+        "locale": "zh-Hans",
+        "issued_at": now_ms,
+        "expires_at": now_ms + 120_000,
+        "attempt_no": 1,
+        "state": None,
+    }
 
 
 @dataclass(slots=True)
@@ -173,18 +195,7 @@ class CustomVerificationService:
         枚举正确答案，只要求协议合法；判对与否由管理员 test 自查。
         """
         errors: list[str] = []
-        challenge_id = f"dryrun-{uuid.uuid4().hex[:12]}"
-        ask_ctx: dict[str, Any] = {
-            "api_version": 1,
-            "challenge_id": challenge_id,
-            "group_id": 0,
-            "user": dict(_DRY_RUN_USER),
-            "locale": "zh-Hans",
-            "issued_at": 0,
-            "expires_at": 120,
-            "attempt_no": 1,
-            "state": None,
-        }
+        ask_ctx: dict[str, Any] = dry_run_context(int(time.time() * 1000))
         try:
             ask_result = await self._get_sandbox().execute_ask(
                 sandbox_language, source, ask_ctx, timeout_ms=2000

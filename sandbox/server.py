@@ -19,7 +19,7 @@ import contextlib
 import json
 import os
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -27,11 +27,14 @@ if TYPE_CHECKING:
 from aiohttp import web
 
 from sandbox.protocol import (
+    EXECUTION_ERROR_VALUES,
+    MAX_DETAIL_CHARS,
     MAX_REQUEST_BODY_BYTES,
     PROTOCOL_VERSION,
     AskResult,
     ExecuteRequest,
     ExecuteResponse,
+    ExecutionError,
     VerifyResult,
     validate_json_value,
 )
@@ -52,8 +55,14 @@ def _log(message: str) -> None:
 
 
 def _protocol_error(message: str, *, status: int = 400) -> web.HTTPException:
-    """构造带协议化 JSON 体的 HTTP 错误响应。"""
-    body = ExecuteResponse(ok=False, error="bad_input", detail=message).model_dump_json()
+    """构造带协议化 JSON 体的 HTTP 错误响应。
+
+    message 可能含 pydantic 校验错误全文（超长字段名/值由请求方控制），截断到
+    协议上限——否则这里的 ExecuteResponse 构造本身会抛校验异常冒泡为 500。
+    """
+    body = ExecuteResponse(
+        ok=False, error="bad_input", detail=message[:MAX_DETAIL_CHARS]
+    ).model_dump_json()
     exc_class = {
         401: web.HTTPUnauthorized,
         503: web.HTTPServiceUnavailable,
@@ -109,13 +118,21 @@ async def _execute(request: web.Request) -> web.Response:
 
 
 def _build_response(req: ExecuteRequest, outcome: dict[str, Any]) -> ExecuteResponse:
-    """把 runner 的原始结果升级为强类型响应；脚本返回不合规结构按 bad_output 拒绝。"""
+    """把 runner 的原始结果升级为强类型响应；脚本返回不合规结构按 bad_output 拒绝。
+
+    失败分支出口完全防御化：error/detail 的来源包括脚本经 harness stdout 间接
+    控制的内容（stderr 片段可达 runner 采集上限 16KB，error 理论可为任意字符串），
+    超出协议枚举/长度的一律归一化，绝不让 pydantic 校验异常冒泡为 HTTP 500。
+    """
     if not outcome.get("ok"):
-        return ExecuteResponse(
-            ok=False,
-            error=outcome.get("error") or "crash",
-            detail=str(outcome.get("detail", "")),
-        )
+        raw_error = outcome.get("error")
+        raw_detail = outcome.get("detail")
+        error: ExecutionError = "bad_output"
+        if isinstance(raw_error, str) and raw_error in EXECUTION_ERROR_VALUES:
+            # frozenset 成员检查不会窄化 Literal 类型，协议枚举已验证故显式收窄
+            error = cast("ExecutionError", raw_error)
+        detail = raw_detail[:MAX_DETAIL_CHARS] if isinstance(raw_detail, str) else ""
+        return ExecuteResponse(ok=False, error=error, detail=detail)
     try:
         result: AskResult | VerifyResult
         if req.entry == "ask":
@@ -126,7 +143,12 @@ def _build_response(req: ExecuteRequest, outcome: dict[str, Any]) -> ExecuteResp
         validate_json_value(outcome["result"])
     except ValueError as exc:
         _log(f"任务结果不合规: {exc}")
-        return ExecuteResponse(ok=False, error="bad_output", detail=f"脚本返回结构不合规: {exc}")
+        # pydantic 校验错误全文可被脚本间接放大（超限字段名/值逐行累积），同样截断
+        return ExecuteResponse(
+            ok=False,
+            error="bad_output",
+            detail=f"脚本返回结构不合规: {exc}"[:MAX_DETAIL_CHARS],
+        )
     return ExecuteResponse(ok=True, result=result)
 
 

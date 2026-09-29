@@ -260,3 +260,46 @@ class TestDryRunUnsolvableDetection:
         )
         dry_run = await service._dry_run("python", "SRC")
         assert dry_run["passed"] is True
+
+
+def test_dry_run_context_matches_runtime_script_context_shape() -> None:
+    """dry-run ctx 与真实脚本 ctx 保持字段集合、类型与 challenge_id 形状一致。
+
+    形状不一致 = 脚本可区分 dry-run 与真实执行（类型分支/时间单位/ID 格式），
+    就能定向绕过无解题检测（试跑出好题、生产全员 retry）。
+    """
+    from src.services.custom_verification import dry_run_context
+    from src.services.verification import VerificationService
+
+    now_ms = 1_700_000_000_000
+    dry_ctx = dry_run_context(now_ms)
+    runtime_ctx = VerificationService._build_script_ctx(
+        chat_id=0,
+        user_id=0,
+        revision=SimpleNamespace(id=0),
+        locale="zh-Hans",
+        username="DryRun",
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 120_000,
+        state=None,
+    )
+
+    # 字段集合一致（新增字段只加一侧会立刻在此暴露）
+    assert set(dry_ctx) == set(runtime_ctx)
+    assert set(dry_ctx["user"]) == set(runtime_ctx["user"])
+    # 各字段类型标称一致（int/str 的 ID 与时间单位差异是历史审查发现的绕过面）
+    for key in (
+        "api_version",
+        "challenge_id",
+        "group_id",
+        "locale",
+        "issued_at",
+        "expires_at",
+        "attempt_no",
+        "state",
+    ):
+        assert type(dry_ctx[key]) is type(runtime_ctx[key]), key
+    for key in ("id", "first_name", "username", "language_code"):
+        assert type(dry_ctx["user"][key]) is type(runtime_ctx["user"][key]), key
+    # challenge_id 形状：三段冒号分隔（真实为 chat:user:revision）
+    assert dry_ctx["challenge_id"] == runtime_ctx["challenge_id"] == "0:0:0"

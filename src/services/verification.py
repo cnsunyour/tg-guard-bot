@@ -803,6 +803,10 @@ class VerificationService:
     ) -> bool:
         """按 reservation owner/旧主键 CAS 提交 challenge 状态。
 
+        初始发送（_start_initial_verification）与 /start 恢复（_recover_
+        verification_challenge）都必须经此方法提交——脚本题的会话绑定负载
+        （script_state）只在主键提交成功后由这里写入，恢复路径绕开它会导致
+        旧负载与新主键 token 断链，验证必 expired。
         reservation 不能省略：session/deadline 本身不足以区分同一 session 下并发的
         恢复 revision/owner。校验 reservation 与显式参数一致后委托 commit_recovery。
         """
