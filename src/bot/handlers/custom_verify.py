@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+from typing import TYPE_CHECKING
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramForbiddenError
@@ -32,6 +33,9 @@ from src.repositories.group_repo import GroupRepository
 from src.services.custom_verification import get_custom_verification_service
 from src.services.sandbox_client import get_sandbox_client
 
+if TYPE_CHECKING:
+    from collections.abc import Buffer
+
 router = Router(name="custom_verify")
 
 # 与 sandbox/protocol.MAX_SOURCE_BYTES 对齐（单处改动需同步）
@@ -39,6 +43,32 @@ _MAX_SOURCE_BYTES = 64 * 1024
 _ALLOWED_EXTENSIONS = (".py", ".js")
 _UPLOAD_WAIT_SECONDS = 300
 _HISTORY_LIMIT = 10
+
+
+class _DownloadTooLarge(Exception):
+    """脚本文件下载内容超过字节上限（流式中止）。"""
+
+
+class _CappedBytesIO(io.BytesIO):
+    """累计写入超限即抛的内存缓冲：让 aiogram 的流式下载立即中止。
+
+    aiogram 的 BinaryIO 目标逐 chunk 调 write 并向上传播异常，故 file_size
+    元数据缺失或不符时也不会把整个文件读进内存——这是硬上限，元数据
+    预检只是快速路径。
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self._limit = limit
+        self._written = 0
+
+    def write(self, data: Buffer, /) -> int:
+        size = memoryview(data).nbytes
+        if self._written + size > self._limit:
+            raise _DownloadTooLarge
+        super().write(data)
+        self._written += size
+        return size
 
 
 def _sandbox_ready() -> tuple[bool, bool]:
@@ -137,11 +167,17 @@ async def _handle_upload_request(
 ) -> None:
     """进入等待上传状态，群内提示 + 主动私聊推送续传入口。"""
     redis = get_redis()
-    await redis.set(
+    # SET NX 原子占位：一个管理员同一时刻只保留一个进行中的上传流程——
+    # 后发群不再静默覆盖先发群的目标绑定（跨群误绑定的根源）
+    created = await redis.set(
         RedisKeys.custom_verify_upload(operator_id),
         str(chat_id),
         ex=_UPLOAD_WAIT_SECONDS,
+        nx=True,
     )
+    if not created:
+        await _answer_ephemeral(message, localizer.t("customverify.upload.pending.message"))
+        return
     # 群内引导是一次性指引（私聊已主动推送续传入口），30s 自动删除避免扰群
     prompt = await message.answer(localizer.t("customverify.upload.prompt.message"))
     await auto_delete_message(prompt, delay=30)
@@ -302,17 +338,16 @@ async def on_custom_verify_document(message: Message, bot: Bot) -> None:
 
     await message.answer(localizer.t("customverify.upload.received.message", filename=file_name))
 
-    # 下载到内存（脚本 ≤64KB，无落盘必要）
-    buffer = io.BytesIO()
+    # 下载到内存；缓冲区累计写入超限即在下载中途抛出中止（无全量入内存窗口）
+    buffer = _CappedBytesIO(_MAX_SOURCE_BYTES)
     try:
         await bot.download(document, destination=buffer)
+    except _DownloadTooLarge:
+        await message.answer(localizer.t("customverify.upload.too_large.message"))
+        return
     except Exception as exc:
         logger.warning(f"脚本文件下载失败 [群组:{chat_id}] [管理员:{operator_id}]: {exc}")
         await message.answer(localizer.t("customverify.upload.download_failed.message"))
-        return
-    # file_size 是客户端声明可伪造，以下载后的实际字节数复验
-    if len(buffer.getvalue()) > _MAX_SOURCE_BYTES:
-        await message.answer(localizer.t("customverify.upload.too_large.message"))
         return
     try:
         source = buffer.getvalue().decode("utf-8")

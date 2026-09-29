@@ -84,9 +84,80 @@ class TestUploadFlow:
         args = redis.set.await_args
         assert args.args[0] == f"custom_verify_upload:{ADMIN}"
         assert args.args[1] == str(CHAT)
+        # NX 占位：已有进行中的上传流程时不覆盖原目标群
+        assert args.kwargs["ex"] == handler._UPLOAD_WAIT_SECONDS
+        assert args.kwargs["nx"] is True
         # 群内提示 + 主动私聊推送（各一条）
         assert message.answer.await_count == 1
         assert message.answer.await_args.args[0] == "customverify.upload.prompt.message"
+
+    async def test_upload_pending_key_does_not_overwrite_or_dm(self, monkeypatch):
+        """NX 失败（已有进行中流程）→ pending 提示，不覆盖键、不私聊推送。"""
+        redis = SimpleNamespace(set=AsyncMock(return_value=None))
+        monkeypatch.setattr(handler, "get_redis", lambda: redis)
+        monkeypatch.setattr(handler, "auto_delete_message", AsyncMock())
+        message = _message()
+        bot = AsyncMock()
+        localizer = SimpleNamespace(t=lambda key, **kw: key)
+
+        await handler._handle_upload_request(message, bot, localizer, CHAT, ADMIN)
+
+        message.answer.assert_awaited_once_with("customverify.upload.pending.message")
+        bot.send_message.assert_not_awaited()
+        # pending 提示走 _answer_ephemeral 的 30s 自删（不留群）
+        assert handler.auto_delete_message.await_args.kwargs["delay"] == 30
+
+    def test_capped_bytes_io_allows_writes_within_limit(self):
+        buffer = handler._CappedBytesIO(4)
+
+        assert buffer.write(b"ab") == 2
+        assert buffer.write(memoryview(b"cd")) == 2
+        assert buffer.getvalue() == b"abcd"
+
+    def test_capped_bytes_io_rejects_write_over_limit(self):
+        """超限写入抛 _DownloadTooLarge 且不落缓冲（下载在该 chunk 中止）。"""
+        buffer = handler._CappedBytesIO(4)
+        buffer.write(b"abc")
+
+        with pytest.raises(handler._DownloadTooLarge):
+            buffer.write(b"de")
+
+        assert buffer.getvalue() == b"abc"
+
+    async def test_download_too_large_stream_is_rejected(self, monkeypatch):
+        """下载中途超限（CappedBytesIO 抛出）→ too_large 提示，不进入审查。"""
+        redis = SimpleNamespace(getdel=AsyncMock(return_value=str(CHAT)))
+        monkeypatch.setattr(handler, "get_redis", lambda: redis)
+        monkeypatch.setattr(handler, "check_admin_permission_by_id", AsyncMock(return_value=True))
+        monkeypatch.setattr(handler, "_sandbox_ready", lambda: (True, True))
+        localizer = SimpleNamespace(t=lambda key, **kw: key)
+        monkeypatch.setattr(
+            handler,
+            "get_resolver",
+            lambda: SimpleNamespace(for_private_from_group=AsyncMock(return_value="en")),
+        )
+        monkeypatch.setattr(
+            handler,
+            "get_translator",
+            lambda: SimpleNamespace(for_locale=lambda _locale: localizer),
+        )
+        message = _message(chat_type="private")
+        message.document = SimpleNamespace(file_name="x.py", file_size=1)
+        bot = AsyncMock()
+
+        # 真实走 _CappedBytesIO.write 路径：一次写入超限即抛，下载在中途中止
+        async def _oversized_download(_document, destination=None):
+            destination.write(b"x" * (handler._MAX_SOURCE_BYTES + 1))
+
+        bot.download.side_effect = _oversized_download
+
+        await handler.on_custom_verify_document(message, bot)
+
+        bot.download.assert_awaited_once()
+        assert [call.args[0] for call in message.answer.await_args_list] == [
+            "customverify.upload.received.message",
+            "customverify.upload.too_large.message",
+        ]
 
     async def test_private_document_without_waiting_key_ignored(
         self, admin_user, feature_on, monkeypatch

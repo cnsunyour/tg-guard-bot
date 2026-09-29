@@ -67,7 +67,7 @@ class Env:
             execute_verify=AsyncMock(return_value=SimpleNamespace(decision="pass")),
             execute_ask=AsyncMock(),
         )
-        self.get_revision = AsyncMock(return_value=self.revision)
+        self.get_group_revision = AsyncMock(return_value=self.revision)
         self.claim_success = AsyncMock(return_value="join")
         self.claim_failure = AsyncMock(return_value="join")
         monkeypatch.setattr(service, "get_redis", lambda: self.redis)
@@ -75,8 +75,8 @@ class Env:
         monkeypatch.setattr(service, "claim_failure", self.claim_failure)
         monkeypatch.setattr(service, "RedisKeys", service.RedisKeys)  # 真实键生成（无需 mock）
         monkeypatch.setattr(
-            "src.repositories.custom_verification_repo.CustomVerificationRepository.get_revision",
-            self.get_revision,
+            "src.repositories.custom_verification_repo.CustomVerificationRepository.get_group_revision",
+            self.get_group_revision,
         )
         monkeypatch.setattr("src.services.sandbox_client.get_sandbox_client", lambda: self.client)
 
@@ -101,6 +101,8 @@ class TestVerifyScriptAnswer:
         result = await _verify(env)
         assert result.status == "correct"
         assert result.flow == "join"
+        # 群绑定读取：revision 查询必须带当前群（拒绝跨群注入）
+        env.get_group_revision.assert_awaited_once_with(CHAT, 7)
         env.claim_success.assert_awaited_once_with(CHAT, USER, env.main, DEADLINE)
         env.claim_failure.assert_not_awaited()
         # ctx 组装：state 回传 + input 注入
@@ -176,7 +178,7 @@ class TestVerifyScriptAnswer:
         assert (await _verify(env)).status == "expired"
 
     async def test_missing_revision_raises_unavailable(self, env: Env):
-        env.get_revision.return_value = None
+        env.get_group_revision.return_value = None
         with pytest.raises(ScriptVerifyUnavailable):
             await _verify(env)
         env.client.execute_verify.assert_not_awaited()

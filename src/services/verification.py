@@ -1148,7 +1148,11 @@ class VerificationService:
             return VerifyResult(status="expired")
         stored_value, deadline_value, payload = snapshot
 
-        revision = await CustomVerificationRepository.get_revision(payload["revision_id"])
+        # 群绑定读取：revision 必须属于当前群。正常流程 revision_id 来自本群会话
+        # 快照且 token 重算已覆盖，此处纵深防御——Redis 状态被篡改时拒绝跨群注入
+        revision = await CustomVerificationRepository.get_group_revision(
+            chat_id, payload["revision_id"]
+        )
         if revision is None:
             raise ScriptVerifyUnavailable("会话绑定的脚本版本不存在")
         if (
