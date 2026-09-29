@@ -198,25 +198,25 @@ dev-logs:
 
 # 生产环境
 prod-build:
-	docker compose -f docker compose.yml -f docker compose.prod.yml build
+	docker compose -f docker-compose.yml -f docker-compose.prod.yml build
 	@echo "✅ 生产环境镜像构建完成"
 
 prod-up:
-	docker compose -f docker compose.yml -f docker compose.prod.yml up -d
+	docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 	@echo "✅ 生产环境已启动"
 	@echo "查看日志: make prod-logs"
 	@echo "查看状态: make status"
 
 prod-down:
-	docker compose -f docker compose.yml -f docker compose.prod.yml down
+	docker compose -f docker-compose.yml -f docker-compose.prod.yml down
 	@echo "✅ 生产环境已停止"
 
 prod-restart:
-	docker compose -f docker compose.yml -f docker compose.prod.yml restart bot sandbox
+	docker compose -f docker-compose.yml -f docker-compose.prod.yml restart bot sandbox
 	@echo "✅ Bot 与沙盒已重启"
 
 prod-logs:
-	docker compose -f docker compose.yml -f docker compose.prod.yml logs -f bot sandbox
+	docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f bot sandbox
 
 # 数据库操作
 db-migrate:

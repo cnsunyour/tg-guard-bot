@@ -109,8 +109,8 @@ make prod-build       # 构建镜像
 make prod-up          # 启动服务
 
 # 方式 2: 使用 Docker Compose
-docker compose -f docker compose.yml -f docker compose.prod.yml build
-docker compose -f docker compose.yml -f docker compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 ### 步骤 4: 初始化数据库
@@ -202,7 +202,7 @@ docker compose exec bot python scripts/train_model.py --train
 启用管理员自定义入群验证题（脚本在独立沙盒容器执行，与主服务隔离）：
 
 1. `.env` 配置（见步骤 2）：`CUSTOM_VERIFICATION_ENABLED=true`、`SANDBOX_API_KEY`（≥32 字符）
-2. `docker compose.yml` 中 `sandbox` 服务的环境变量 `SANDBOX_API_KEY` 设为同一值（建议用 `.env` 变量引用）
+2. `docker-compose.yml` 中 `sandbox` 服务的环境变量 `SANDBOX_API_KEY` 设为同一值（建议用 `.env` 变量引用）
 3. 重建启动：`make prod-build && make prod-up`
 4. 群内管理员 `/customverify upload` → 私聊发送 `.py` / `.js` 脚本 → 三重审查（静态 → AI → 沙盒试跑）通过后 `/customverify enable <id>`
 
@@ -236,7 +236,7 @@ sudo ufw status
 
 默认配置中，PostgreSQL 和 Redis 端口仅在本地暴露。**生产环境建议移除端口映射**：
 
-编辑 `docker compose.yml`，注释掉以下行：
+编辑 `docker-compose.yml`，注释掉以下行：
 
 ```yaml
 postgres:
@@ -455,7 +455,7 @@ ANALYZE audit_logs;
 
 ### 2. Redis 优化
 
-Redis 配置已在 `docker compose.prod.yml` 中优化：
+Redis 配置已在 `docker-compose.prod.yml` 中优化：
 - 最大内存: 256MB
 - 淘汰策略: `allkeys-lru`
 - 持久化: RDB + AOF
