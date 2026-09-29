@@ -65,6 +65,16 @@ module.exports.verify = function (ctx) {
 - Python：`allowlist` 之外的导入（仅允许 `math, random, re, json, string, hashlib, hmac, base64, unicodedata, datetime, calendar, itertools, functools, collections, heapq, bisect, textwrap, difflib, statistics, decimal, fractions, copy, operator`）；`eval/exec/compile/open/__import__/getattr` 等调用；双下划线属性访问；任何文件/网络/进程操作
 - JavaScript：一切 `require` / `import`；`eval`、动态 `Function`、`process`、`globalThis`、`fetch`、定时器
 
+## AI 审查通道说明
+
+脚本入库的 AI 审查固定走**主 AI provider**（`AI_SPAM_PROTOCOL`）。主协议为
+`typesafe_systemone`（Jev）时，其固定 questions 不接受自定义审查指令，审查会
+自动改经 **Vision 通道**执行（要求 Vision 主或备已配置且协议非 Jev，启动期校验；
+运行日志会记录「脚本 AI 审查经 vision_* 通道执行」）。两者都不可用时上传被阻断
+（fail-closed，不会跳过审查）。注意：审查请求会把**脚本源码全文**发送到对应
+provider 配置的第三方端点（主协议端点或 Vision 端点）——与群图片检测发送至
+Vision 端点的既有数据流一致，但数据类别不同，部署时应知悉。
+
 ## 上传与启用
 
 ```

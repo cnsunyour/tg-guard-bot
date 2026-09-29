@@ -28,6 +28,7 @@ from src.core.http_errors import format_httpx_error
 from src.core.utils import utcnow
 from src.ml.ai_contracts import TEXT_RESULT_SCHEMA, VISION_RESULT_SCHEMA, JSONSchema
 from src.ml.ai_protocols import (
+    AIProtocol,
     ProtocolResponse,
     ResponseTerminatedError,
     ResponseTermination,
@@ -637,8 +638,12 @@ class AIServiceProvider(ABC):
         if not isinstance(data, dict):
             raise ValueError(f"API 响应不是 JSON object: {type(data).__name__}")
         result = self._unwrap_protocol_response(self.adapter.parse_response(data))
-        if "is_spam" not in result or "confidence" not in result:
-            raise ValueError(f"AI 响应缺少必需字段: {result}")
+        # 必需字段由传入 schema 驱动（反垃圾 is_spam/confidence/reason、代码审查
+        # risk/reasons 各自一致），不再硬编码单一用途的字段名
+        required_fields = result_schema.get("required", [])
+        missing = [field for field in required_fields if field not in result]
+        if missing:
+            raise ValueError(f"AI 响应缺少必需字段 {missing}: {result}")
         return result
 
     def _process_result(
@@ -1303,6 +1308,29 @@ class HybridAIDetector:
             审查结果字典（risk/reasons）
         """
         primary = self.primary
+        # Jev 分流先于可用性检查：通道由协议类型决定——Jev 的固定 questions
+        # 无法承载审查指令（system prompt / schema 被静默忽略），改经 Vision
+        # 通道（协议由启动校验保证非 Jev，其基类 _call_api 发的就是自定义
+        # prompt + schema 的文本请求；Vision 模型本身具备纯文本能力）。通道
+        # 声明记入日志便于审计溯源
+        if primary.config.protocol == AIProtocol.TYPESAFE_SYSTEMONE:
+            for candidate_name, candidate in (
+                ("vision_primary", self.vision_primary),
+                ("vision_backup", self.vision_backup),
+            ):
+                if candidate.is_available:
+                    logger.warning(f"主 AI 协议为 Jev：脚本 AI 审查经 {candidate_name} 通道执行")
+                    return await candidate._call_api(
+                        text, system_prompt=system_prompt, result_schema=result_schema
+                    )
+            raise AIServiceError(
+                provider=primary.name,
+                message=(
+                    "主 AI 协议为 Jev（固定 questions 不接受自定义 prompt/schema）"
+                    "且未配置可用的 Vision 通道；请配置 AI_SPAM_VISION_* 或将主协议"
+                    "切换为 openai_chat / openai_responses / anthropic_messages"
+                ),
+            )
         if not primary.is_available:
             raise AIServiceError(provider=primary.name, message="AI 服务商未启用")
         return await primary._call_api(

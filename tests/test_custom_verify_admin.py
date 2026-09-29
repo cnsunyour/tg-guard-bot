@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.types import Message
+from pydantic import ValidationError
 
 from src.bot.handlers import custom_verify as handler
 from src.core.config import settings
@@ -92,3 +93,120 @@ class TestUploadFlow:
         await handler.on_custom_verify_document(message, AsyncMock())
 
         message.answer.assert_not_awaited()
+
+
+class TestJevAIReviewGuard:
+    """Jev 协议不支持脚本 AI 审查：启动期拦截 + 运行时防御双保险。"""
+
+    def _base_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BOT_TOKEN", "123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+        monkeypatch.setenv("ADMIN_IDS", "[123456789]")
+        monkeypatch.setenv("DB_PASSWORD", "test_password")
+        monkeypatch.setenv("REDIS_PASSWORD", "redis_password")
+        monkeypatch.setenv("MODEL_SIGNATURE_KEY", "a" * 64)
+
+    def test_config_jev_primary_without_vision_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        """Jev 主协议 + 无可用 Vision 通道 → 启动期 ValueError（审查无处可去）。"""
+        self._base_env(monkeypatch)
+        monkeypatch.setenv("CUSTOM_VERIFICATION_ENABLED", "true")
+        monkeypatch.setenv("SANDBOX_API_URL", "http://sandbox:8080")
+        monkeypatch.setenv("SANDBOX_API_KEY", "k" * 32)
+        monkeypatch.setenv("AI_SPAM_PROTOCOL", "typesafe_systemone")
+        # 显式关 Vision（测试进程会读本地 .env 的 Vision 配置，须隔离）
+        monkeypatch.setenv("AI_SPAM_VISION_ENABLED", "false")
+        monkeypatch.setenv("AI_SPAM_VISION_BACKUP_ENABLED", "false")
+
+        from src.core.config import Settings
+
+        with pytest.raises(ValidationError, match="Vision"):
+            Settings()
+
+    def test_config_jev_primary_with_vision_passes(self, monkeypatch: pytest.MonkeyPatch):
+        """Jev 主协议 + Vision 通道配齐 → 启动通过（审查自动经 Vision 通道）。"""
+        self._base_env(monkeypatch)
+        monkeypatch.setenv("CUSTOM_VERIFICATION_ENABLED", "true")
+        monkeypatch.setenv("SANDBOX_API_URL", "http://sandbox:8080")
+        monkeypatch.setenv("SANDBOX_API_KEY", "k" * 32)
+        monkeypatch.setenv("AI_SPAM_PROTOCOL", "typesafe_systemone")
+        monkeypatch.setenv("AI_SPAM_VISION_ENABLED", "true")
+        monkeypatch.setenv("AI_SPAM_VISION_PROTOCOL", "openai_chat")
+        monkeypatch.setenv("AI_SPAM_VISION_API_KEY", "vk")
+        monkeypatch.setenv("AI_SPAM_VISION_API_BASE", "https://vision.example/v1")
+        monkeypatch.setenv("AI_SPAM_VISION_MODEL", "gpt-4o-mini")
+
+        from src.core.config import Settings
+
+        settings = Settings()  # 不抛即通过
+        assert settings.custom_verification_enabled is True
+
+    def test_config_jev_backup_protocol_allowed(self, monkeypatch: pytest.MonkeyPatch):
+        """Jev 作 backup 协议不拦（审查固定走主 provider，反垃圾主备不受限）。"""
+        self._base_env(monkeypatch)
+        monkeypatch.setenv("CUSTOM_VERIFICATION_ENABLED", "true")
+        monkeypatch.setenv("SANDBOX_API_URL", "http://sandbox:8080")
+        monkeypatch.setenv("SANDBOX_API_KEY", "k" * 32)
+        monkeypatch.setenv("AI_SPAM_PROTOCOL", "openai_chat")
+        monkeypatch.setenv("AI_SPAM_BACKUP_PROTOCOL", "typesafe_systemone")
+        monkeypatch.setenv("AI_SPAM_BACKUP_API_KEY", "bk")
+        monkeypatch.setenv("AI_SPAM_BACKUP_MODEL", "jev-latest")
+
+        from src.core.config import Settings
+
+        settings = Settings()  # 不抛即通过
+        assert settings.ai_spam_backup_protocol == "typesafe_systemone"
+
+    async def test_review_code_routes_to_vision_channel(self, monkeypatch: pytest.MonkeyPatch):
+        """Jev 主协议：审查自动经 Vision 通道（primary 的语义无关请求不发出）。"""
+        from src.ml.ai_contracts import CODE_REVIEW_RESULT_SCHEMA
+        from src.ml.ai_detector import HybridAIDetector
+        from src.ml.ai_protocols import AIProtocol
+
+        detector = HybridAIDetector()
+        detector.primary = SimpleNamespace(
+            is_available=True,
+            name="primary",
+            config=SimpleNamespace(protocol=AIProtocol.TYPESAFE_SYSTEMONE),
+            _call_api=AsyncMock(),
+        )
+        vision_call = AsyncMock(return_value={"risk": "safe", "reasons": []})
+        detector.vision_primary = SimpleNamespace(
+            is_available=True, name="vision_primary", _call_api=vision_call
+        )
+        detector.vision_backup = SimpleNamespace(is_available=False)
+
+        result = await detector.review_code(
+            "def ask(ctx): ...",
+            system_prompt="review",
+            result_schema=CODE_REVIEW_RESULT_SCHEMA,
+        )
+        assert result == {"risk": "safe", "reasons": []}
+        detector.primary._call_api.assert_not_awaited()
+        vision_call.assert_awaited_once_with(
+            "def ask(ctx): ...",
+            system_prompt="review",
+            result_schema=CODE_REVIEW_RESULT_SCHEMA,
+        )
+
+    async def test_review_code_jev_without_vision_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """Jev 主协议 + Vision 主备都不可用 → AIServiceError（fail-closed）。"""
+        from src.ml.ai_contracts import CODE_REVIEW_RESULT_SCHEMA
+        from src.ml.ai_detector import AIServiceError, HybridAIDetector
+        from src.ml.ai_protocols import AIProtocol
+
+        detector = HybridAIDetector()
+        detector.primary = SimpleNamespace(
+            is_available=True,
+            name="primary",
+            config=SimpleNamespace(protocol=AIProtocol.TYPESAFE_SYSTEMONE),
+            _call_api=AsyncMock(),
+        )
+        detector.vision_primary = SimpleNamespace(is_available=False)
+        detector.vision_backup = SimpleNamespace(is_available=False)
+
+        with pytest.raises(AIServiceError, match="Vision"):
+            await detector.review_code(
+                "def ask(ctx): ...",
+                system_prompt="review",
+                result_schema=CODE_REVIEW_RESULT_SCHEMA,
+            )
+        detector.primary._call_api.assert_not_awaited()

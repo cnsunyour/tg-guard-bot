@@ -672,6 +672,12 @@ class Settings(BaseSettings):
         # 控制，执行接口必须认证）。启用时不满足即拒绝启动，避免运行期才发现
         # 全部验证请求走 fallback
         if self.custom_verification_enabled:
+            # AI 审查第一通道是主 provider：主 AI 未启用时审查无处落地
+            if not self.ai_spam_enabled:
+                raise ValueError(
+                    "🔒 启用 CUSTOM_VERIFICATION_ENABLED 时必须配置 "
+                    "AI_SPAM_ENABLED=true（脚本入库需经 AI 代码审查）"
+                )
             if not self.sandbox_api_url.strip():
                 raise ValueError(
                     "🔒 启用 CUSTOM_VERIFICATION_ENABLED 时必须配置 SANDBOX_API_URL\n"
@@ -683,6 +689,34 @@ class Settings(BaseSettings):
                     "至少 32 个字符\n"
                     "生成方法：openssl rand -hex 32"
                 )
+            # 脚本 AI 审查固定走主 provider，需要自定义 system prompt + JSON
+            # Schema；Jev 的请求体是固定 questions，两者都被静默忽略。主协议为
+            # Jev 时审查自动经 Vision 通道（Vision 协议必非 Jev）——此时要求
+            # Vision 主或备至少一路可用，否则启动期拦截
+            if self.ai_spam_protocol == _TEXT_ONLY_AI_PROTOCOL:
+                vision_primary_ready = (
+                    self.ai_spam_vision_enabled
+                    and self.vision_protocol_effective != _TEXT_ONLY_AI_PROTOCOL
+                    and bool(self.vision_api_key_effective.strip())
+                    and bool(self.ai_spam_vision_model.strip())
+                )
+                vision_backup_ready = (
+                    # 运行时 Vision 备依赖主开关（主未启用则备构造时也被禁用）
+                    self.ai_spam_vision_enabled
+                    and self.ai_spam_vision_backup_enabled
+                    and self.vision_backup_protocol_effective != _TEXT_ONLY_AI_PROTOCOL
+                    and bool(self.vision_backup_api_key_effective.strip())
+                    and bool(self.ai_spam_vision_backup_model.strip())
+                )
+                if not (vision_primary_ready or vision_backup_ready):
+                    raise ValueError(
+                        "🔒 主 AI 协议为 Jev 时，脚本 AI 审查需经 Vision 通道执行，"
+                        "但未检测到可用的 Vision 配置\n"
+                        "请配置 AI_SPAM_VISION_ENABLED=true 与 AI_SPAM_VISION_API_KEY"
+                        " / AI_SPAM_VISION_MODEL / AI_SPAM_VISION_PROTOCOL（协议不能为"
+                        " Jev），或将 AI_SPAM_PROTOCOL 切换为 openai_chat / "
+                        "openai_responses / anthropic_messages"
+                    )
 
         # Vision 协议留空时继承文本协议；Jev 仅支持纯文本，继承到它会在首次图片
         # 检测时才失败，故只要 Vision 已启用就在启动期拒绝，要求显式配置 Vision 协议。
