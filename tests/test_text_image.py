@@ -51,6 +51,22 @@ def test_render_text_image_accepts_long_english() -> None:
         assert image.size[1] <= 1200
 
 
+def test_render_text_image_chinese_text_with_non_chinese_locale() -> None:
+    """非 zh locale（如 en 群）+ 中文题面：CJK 池被 locale 过滤清空时必须
+    放宽为全部 CJK 字形渲染，而不是回退仅拉丁的 PIL 默认字体（整行豆腐）。"""
+    from src.services.text_image import render_text_image as _r  # noqa: F401  # 确保模块已初始化
+
+    png = render_text_image("中文测试题面：请选择正确答案", locale="en")
+    raw = png.file.getvalue() if hasattr(png, "file") else png.data
+    image = Image.open(BytesIO(raw)).convert("L")
+    width, height = image.size
+    dark = sum(1 for px in image.getdata() if px < 100)
+    # 豆腐帧场景深色像素集中在极少方块；正常字形渲染占比显著更高
+    assert (
+        dark / (width * height) > 0.02
+    ), f"非 zh locale 的中文题面渲染疑似豆腐（深色像素占比 {dark / (width * height):.2%}）"
+
+
 def test_render_text_image_rejects_empty_text() -> None:
     with pytest.raises(ValueError, match="不能为空"):
         render_text_image("   ")

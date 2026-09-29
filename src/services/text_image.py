@@ -203,6 +203,11 @@ def _pick_font(
     """
     if _has_cjk(text):
         specs = [spec for spec in _font_specs() if spec.kind == "cjk" and spec.supports(locale)]
+        if not specs:
+            # 非 zh locale 的中文题面（如自定义脚本题、任意动态文本）：locale
+            # 过滤会清空 CJK 池，回退 load_default（仅拉丁字形）渲染出整行豆腐。
+            # 放宽为全部 CJK 字形——豆腐不可接受，SC/TC 字形对非中文用户也可读
+            specs = [spec for spec in _font_specs() if spec.kind == "cjk"]
     else:
         specs = [spec for spec in _font_specs() if spec.kind == "latin"]
         if not specs:
