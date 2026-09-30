@@ -5,6 +5,51 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.13.0] - 2026-09-30
+
+### 新增功能
+
+#### 群自定义验证脚本（沙盒执行）🧩
+- 管理员可上传 Python / JavaScript 脚本自定义入群验证题（脚本定义 `ask` 出题 / `verify` 判定两个接口），作为内置验证方式之外的群级自定义方案；默认关闭，`/groupset` 子菜单可开
+- 脚本在独立 `sandbox` 容器执行：internal 网络隔离（postgres/redis 物理不可达）、read_only、cap_drop ALL、非 root、tmpfs noexec、CPU/内存/文件大小 rlimit、import 白名单、并发信号量 + wall-clock 强杀；bot 侧无本地执行回退，出题阶段沙盒不可用自动回落群组原验证方式
+- 上传三重审查门槛：静态审查（模块白名单）→ AI 代码审查（不可用即阻断，fail-closed）→ 沙盒 dry-run（按钮题含无解题检测）；任一不过不入库
+- 脚本版本化：三重审查全部通过后才落不可变 revision 表，群组指针切换 + 乐观并发，支持 rollback / history；在途验证会话绑定 revision 快照
+- `/customverify` 管理命令（upload → 私聊发文件 → 自动三重审查；enable / disable / rollback / history / status），群内引导与回复 30s 自动删除，upload 后主动私聊推送续传入口；`/help customverify` 三语详细帮助
+- 答错沿用既有验证终局（ban 1h）；沙盒故障 toast 重试不计答错；callback token 纳入 session 哈希，防旧按钮消费新会话
+- 含数据库迁移（revision 表与群组配置字段，容器启动自动应用）；上传文件流式限量，防超大文件占用
+- 脚本编写指南：`docs/custom-verify-script-guide.md`（Python + JavaScript 同构示例）
+
+#### ALTCHA 升级到平台 v2 🔐
+- 上游 ALTCHA 平台 v2 发布后 PHP v1 线已停止维护，旧 CDN floating 引用存在隐性断链风险：PHP lib `^1.0` → `^2.1`（PoW v2：PBKDF2/SHA-256、概率模式、无第二密钥）
+- `challenge.php` 适配 CreateChallengeOptions + expiresAt 签名覆盖；`verify.php` 显式校验 verified/expired、payload 类型守卫堵 TypeError 绕过 catch 的裸 500；`POW_COST` 兼容守卫（存量 config.php 漏改不 fatal，回落 5000）
+- 前端 `altcha.html` CDN 锁定 altcha@3.2.3 widget v3 入口，属性迁移（challengeurl→challenge、locale→language、hidefooter 走 configuration JSON）
+- bot 侧零改动（HMAC 签名契约不变）；自部署升级注意：删除旧 composer.lock 再 install，防装回 v1
+
+#### 文字验证题题面图片化 🖼
+- math / slider / qa / emoji / honeypot 五类题面渲染为随机化 PNG，caption 只保留信封与说明，题面不再以文本暴露，对抗自动化读题；math / qa / emoji / honeypot 每题独立随机字体/字号/配色/背景噪声/行距偏移/逐行微旋转，slider 改几何方格绘制（随机配色与噪声），按钮改为位置数字 1-4
+- 字体池按 CJK / 拉丁分类，zh-Hans / zh-Hant 严格分池防简体字形泄漏；修复非中文 locale 的题面豆腐块（除号等符号方框）
+- 渲染失败自动降级为文本题面回填 caption，不阻断入群验证主流程
+
+#### 反垃圾置信度修正与跨聊天回复拦截范围调整 🎚
+- 置信度修正区间改为活跃度 1 → 豁免阈值对数爬升：原公式固定从活跃度 10 起修正，全局豁免阈值降到 ≤10 时修正区间与免检区间完全重合而失效；现修正跟随有效豁免阈值 T（未启用豁免时沿用旧公式）
+- 跨聊天回复引流防护仅拦截活跃度为 0 的新成员：技术讨论群正常的跨群回复放行、回归正常检测管线，新人命中仍删除 + 记警告
+
+#### 群消息用户 mention 可点击化 👤
+- 普通用户显示名脱敏不变，username 完整显示（仅转义），统一为可点击 mention；无 username 不再附加数字 ID
+- 补齐含 HTML 正文的发送/编辑 `parse_mode="HTML"` 共 10 处，顺带修复 header 匿名 mention 以字面标签显示的缺陷；追加式编辑改用 `message.html_text` 往返防 mention 链接丢失
+
+### Bug 修复
+
+#### 消息类型安全闸门绕过（中间件分层修复）🛡
+- aiogram 的 inner middleware 只在 handler 匹配后执行，contact / poll / dice 等无 handler 的消息类型此前连白名单、入群短窗口拦截、宵禁、CAS 一起绕过；Whitelist / VerificationGuard / Curfew 改为 outer 中间件堵住（CAS 保持 inner，新增消息 handler 覆盖用户可发送的结构化消息）
+- live_photo 并入 photo 同一 Vision 直判链路（取静态预览）；contact / poll / location / venue / checklist / story / dice 等非文本消息统一走活跃度门槛；new_chat_members / left_chat_member 放行交 my_chat_member 事件，避免重复 leave_chat 与宵禁误删入群通知
+
+### 代码质量
+
+- Makefile / DEPLOYMENT 全面切换 `docker compose`（CLI 插件，含切换过程中的文件名误替换修正）；`make status` / `dev-logs` / `prod-logs` / `dev-restart` / `prod-restart` 覆盖 sandbox 容器；dev 挂载沙盒源码
+- `data/` 改白名单制忽略，防运行时产物误入库；清理热更新残留文档与依赖
+- 自定义验证脚本全链路测试（沙盒协议 / 三重审查 / 验证集成 / 恢复链路 / 加固回归）与题面图片化、中间件分层、mention 渲染等测试补充
+
 ## [1.12.1] - 2026-09-23
 
 ### 新增功能
